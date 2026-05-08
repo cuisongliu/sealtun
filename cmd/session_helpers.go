@@ -27,7 +27,10 @@ type sessionSnapshot struct {
 func findSession(tunnelID string) (*session.TunnelSession, error) {
 	sess, err := session.Get(tunnelID)
 	if err != nil {
-		return nil, fmt.Errorf("tunnel session %q not found", tunnelID)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("tunnel session %q not found", tunnelID)
+		}
+		return nil, fmt.Errorf("load tunnel session %q: %w", tunnelID, err)
 	}
 	return sess, nil
 }

@@ -126,8 +126,10 @@ func collectRemoteDiagnosticsWithContext(ctx context.Context, sess session.Tunne
 	if err != nil {
 		return nil, err
 	}
-	return client.WithNamespace(sess.Namespace).DiagnoseTunnelWithOptions(ctx, sess.TunnelID, k8s.TunnelOptions{
+	namespacedClient := client.WithNamespace(sess.Namespace)
+	return namespacedClient.DiagnoseTunnelWithOptions(ctx, sess.TunnelID, k8s.TunnelOptions{
 		CustomDomain: sess.CustomDomain,
+		SealosHost:   sessionSealosHostForDomain(sess, namespacedClient.SealosHost(sess.TunnelID)),
 	})
 }
 

@@ -26,25 +26,26 @@ func (c *wsConn) Read(b []byte) (int, error) {
 	if c.closed.Load() {
 		return 0, io.EOF
 	}
-	if c.reader == nil {
-		_, reader, err := c.Conn.NextReader()
-		if err != nil {
-			return 0, err
-		}
-		c.reader = reader
-	}
 
-	n, err := c.reader.Read(b)
-	if err == io.EOF {
-		c.reader = nil
-		// Return the bytes read so far, actual EOF will be returned on next read empty
-		if n > 0 {
-			return n, nil
+	for {
+		if c.reader == nil {
+			_, reader, err := c.Conn.NextReader()
+			if err != nil {
+				return 0, err
+			}
+			c.reader = reader
 		}
-		// Try next message immediately
-		return c.Read(b)
+
+		n, err := c.reader.Read(b)
+		if err == io.EOF {
+			c.reader = nil
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
 	}
-	return n, err
 }
 
 func (c *wsConn) Write(b []byte) (int, error) {

@@ -111,9 +111,6 @@ and establishes a secure connection to forward traffic to your local port.`,
 			},
 		}
 		if err := session.Save(sessionRecord); err != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), tunnelCleanupTimeout)
-			defer cancel()
-			_ = k8sClient.CleanupTunnel(cleanupCtx, tunnelID)
 			return fmt.Errorf("failed to persist tunnel session: %w", err)
 		}
 

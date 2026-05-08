@@ -21,6 +21,7 @@ type regionListItem struct {
 var regionJSON bool
 var regionCurrentJSON bool
 var regionUseInsecure bool
+var regionUseProfile string
 
 var regionCmd = &cobra.Command{
 	Use:   "region",
@@ -93,7 +94,7 @@ var regionUseCmd = &cobra.Command{
 	Short: "Switch to a region by re-running login for that region",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLoginFlow(args[0], regionUseInsecure)
+		return runLoginFlowWithProfile(args[0], regionUseInsecure, regionUseProfile)
 	},
 }
 
@@ -105,6 +106,7 @@ func init() {
 	regionListCmd.Flags().BoolVar(&regionJSON, "json", false, "Output regions as JSON")
 	regionCurrentCmd.Flags().BoolVar(&regionCurrentJSON, "json", false, "Output the current region as JSON")
 	regionUseCmd.Flags().BoolVar(&regionUseInsecure, "insecure", false, "Skip TLS verification")
+	regionUseCmd.Flags().StringVar(&regionUseProfile, "profile", "", "Save and activate this login as a named profile")
 }
 
 func collectRegionListItems() ([]regionListItem, error) {

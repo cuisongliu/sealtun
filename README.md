@@ -10,8 +10,9 @@ Sealtun 是一款功能强大、设计优雅的 CLI 工具，旨在为 **Sealos 
 
 - 🔑 **无密码 OAuth2 登录**：使用设备授权流（Device Authorization Grant）通过 `sealtun login` 轻松连接。
 - 🌍 **区域切换**：支持查看已内置的 Sealos Cloud region，并通过 `sealtun region use` 重新登录切换区域。
+- 👤 **Profile 多账号管理**：可把不同 Sealos 账号、region、workspace 和 kubeconfig 保存为命名 profile，按需切换。
 - 🚀 **一键暴露服务**：执行 `sealtun expose 8080`，即可获得一个受信任的 HTTPS URL，将流量安全地路由到本地。
-- 🌐 **自定义域名**：新建隧道时可用 `--domain` 生成 CNAME 指引，DNS 验证通过后再通过 `--wait-domain` 或 `sealtun domain set` 安全绑定。
+- 🌐 **自定义域名**：新建隧道时可用 `--domain` 生成 CNAME 指引，并通过 `domain status/doctor` 检查 DNS、Ingress 与证书状态。
 - 🌐 **深度适配 Sealos**：原生使用 Sealos Cloud 的 Kubernetes、Service 与 Ingress 能力，当前稳定支持 HTTPS 入口和 WebSocket 隧道。
 - 🐳 **全能二进制文件**：客户端和服务器代理共用同一个精简的二进制文件和 Docker 镜像。
 - ☸️ **云原生设计**：完全使用标准的 Kubernetes API 管理资源，无需额外的复杂中间件。
@@ -31,6 +32,23 @@ make build
 
 `make build` 默认会把当前 Git short hash 注入到本地二进制的 version 中，用于确认本地二进制和已 push 的代码提交一致。正式 tag 发布时，GitHub Actions 会用 tag 版本构建 GitHub Release 产物和容器镜像。
 
+## 🚢 发版流程
+
+项目采用 tag 驱动发布：
+
+```bash
+# 1. 先完成测试、提交并 push 分支
+go test ./...
+make build
+git push origin master
+
+# 2. 再创建并 push 语义化版本 tag
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+推送 `v*` tag 后，GitHub Actions 会触发 GoReleaser 生成多平台二进制和 GitHub Release；Docker workflow 会同步构建并发布 `ghcr.io/gitlayzer/sealtun` 镜像。发版后建议重新执行 `make build && ./sealtun --version`，确认本地二进制显示的 Git hash 与已 push 的提交一致。
+
 ## 🚀 快速上手
 
 ### 1. 登录到 Sealos
@@ -43,8 +61,15 @@ sealtun region list
 
 # 切换到指定 region
 sealtun region use hzh
+
+# 登录并保存为命名 profile
+sealtun login gzg --profile gzg-main
+
+# 查看和切换已保存 profile
+sealtun profile list
+sealtun profile use hzh-dev
 ```
-*注：目前仅支持内置的 Sealos Cloud region。登录会获取 Kubernetes 凭据和当前 region 的 `SEALOS_DOMAIN`，并安全地存储在 `~/.sealtun` 目录中。*
+*注：目前仅支持内置的 Sealos Cloud region。登录会获取 Kubernetes 凭据和当前 region 的 `SEALOS_DOMAIN`，并安全地存储在 `~/.sealtun` 目录中。命名 profile 会保存到 `~/.sealtun/profiles/<name>`，切换 profile 时会同步切换 active `auth.json` 与 `kubeconfig`。*
 
 ### 2. 暴露本地端口
 例如，让运行在本地 `3000` 端口的 Web 服务可以被公网访问：
@@ -84,6 +109,12 @@ sealtun domain verify <tunnel-id>
 
 # 持续等待，直到 DNS 与证书就绪或超时
 sealtun domain verify <tunnel-id> --wait --timeout 5m
+
+# 汇总所有自定义域名状态
+sealtun domain status
+
+# 对单个域名做更详细诊断
+sealtun domain doctor <tunnel-id>
 ```
 
 移除自定义域名：
@@ -103,10 +134,12 @@ sealtun domain clear <tunnel-id>
 - `expose` 默认交给本地 daemon 后台维护；需要阻塞在当前终端时可使用 `--foreground`。
 - 远端隧道 Pod 等待阶段增加了默认 `90s` 超时，可通过 `--ready-timeout` 调整。
 - 配置目录统一为 `~/.sealtun`，首次运行只会迁移旧 `~/.sealos` 下的登录凭据和 kubeconfig，不会迁移旧 session 记录。
+- `profile` 支持把多账号、多 region、多 workspace 登录状态保存为命名配置；`profile use` 会切换后续 `expose/status/region current` 使用的 active kubeconfig。
 - Ingress 域名优先使用 Sealos Launchpad 返回的 `SEALOS_DOMAIN`，避免按 region 猜测公网域名。
 - 自定义域名必须先通过 CNAME 归属验证，Sealtun 不会把未验证域名提前写入 Ingress，避免在共享 Ingress 中预占任意 Host。
 - 绑定后会同时保留 Sealos 官方 host 和用户域名：daemon 始终使用 Sealos host 连接控制面，用户访问域名可通过 CNAME 指向该 Sealos host。
 - `--wait-domain` 只在同时提供 `--domain` 时等待 DNS CNAME、绑定 Ingress 与 cert-manager 证书就绪；超时不会删除隧道，可稍后用 `sealtun domain set` 或 `sealtun domain verify` 复查。
+- `domain status` 可批量查看所有自定义域名的 DNS、Ingress、证书是否就绪；`domain doctor` 会输出每个域名的详细诊断和告警。
 - 提供 `status`、`list`、`inspect`、`doctor`、`stop`、`cleanup`、`logout` 等本地控制命令。
 - `list` 默认只读取本地 session；需要探测本地端口健康时可使用 `list --check`。
 - `inspect` 默认展示本地状态；需要远端 Kubernetes 诊断时可使用 `inspect --remote`。

@@ -352,6 +352,28 @@ func TestEnsureTunnelStoresAuthSecretOutsideDeploymentArgs(t *testing.T) {
 	}
 }
 
+func TestImageTagForVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{version: "dev", want: "latest"},
+		{version: "", want: "latest"},
+		{version: "f596979", want: "sha-f596979"},
+		{version: "f596979a", want: "sha-f596979a"},
+		{version: "v0.0.9", want: "0.0.9"},
+		{version: "0.0.9", want: "0.0.9"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if got := imageTagForVersion(tt.version); got != tt.want {
+				t.Fatalf("expected %s, got %s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestEnsureTunnelUpdatesExistingManagedAuthSecret(t *testing.T) {
 	name := "sealtun-abc123"
 	clientset := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
@@ -648,6 +670,28 @@ func TestConfigureCustomDomainDoesNotTrustManagedCertificateWithDifferentSecret(
 	}
 }
 
+func TestConfigureCustomDomainDoesNotTrustUnmarkedSecretEvenWithManagedCertificate(t *testing.T) {
+	name := "sealtun-abc123"
+	cert := customDomainCertificate(name, "old.example.com")
+	cert.SetNamespace("default")
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: map[string]string{managedLabelKey: name}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: map[string]string{managedLabelKey: name}}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}},
+	)
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), cert),
+		namespace:     "default",
+		domain:        "sealosgzg.site",
+	}
+
+	_, err := client.ConfigureCustomDomain(context.Background(), "abc123", "sealtun-abc123-default.sealosgzg.site", "dev.example.com")
+	if err == nil || !strings.Contains(err.Error(), "secret sealtun-abc123 already exists but is not managed by Sealtun") {
+		t.Fatalf("expected unmanaged TLS secret rejection, got %v", err)
+	}
+}
+
 func TestConfigureCustomDomainRestoresCertificateWhenIngressUpdateFails(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -764,7 +808,11 @@ func TestClearCustomDomainKeepsOfficialIngressWhenCertificateCleanupFails(t *tes
 func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
 	name := "sealtun-abc123"
 	clientset := fake.NewSimpleClientset(
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{managedLabelKey: name},
+		}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      authSecretName(name),
 			Namespace: "default",
@@ -889,11 +937,62 @@ func TestCleanupTunnelKeepsUnmanagedSecretWhenCertificateUsesDifferentSecret(t *
 	}
 }
 
+func TestCleanupTunnelKeepsUnmarkedSecretEvenWhenManagedCertificateReferencesIt(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      name,
+		Namespace: "default",
+	}})
+	certificate := customDomainCertificate(name, "dev.example.com")
+	certificate.SetNamespace("default")
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), certificate),
+		namespace:     "default",
+		domain:        "sealosgzg.site",
+	}
+
+	if err := client.CleanupTunnel(context.Background(), "abc123"); err != nil {
+		t.Fatalf("CleanupTunnel returned error: %v", err)
+	}
+	if _, err := clientset.CoreV1().Secrets("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("unmarked TLS secret should remain: %v", err)
+	}
+	if _, err := client.dynamicClient.Resource(certificateGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected managed certificate to be deleted, got %v", err)
+	}
+}
+
+func TestCleanupTunnelDeletesCertManagerAnnotatedSecret(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:        name,
+		Namespace:   "default",
+		Annotations: map[string]string{"cert-manager.io/certificate-name": name},
+	}})
+	certificate := customDomainCertificate(name, "dev.example.com")
+	certificate.SetNamespace("default")
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), certificate),
+		namespace:     "default",
+		domain:        "sealosgzg.site",
+	}
+
+	if err := client.CleanupTunnel(context.Background(), "abc123"); err != nil {
+		t.Fatalf("CleanupTunnel returned error: %v", err)
+	}
+	if _, err := clientset.CoreV1().Secrets("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected cert-manager annotated secret to be deleted, got %v", err)
+	}
+}
+
 func TestCleanupTunnelContinuesAfterCustomResourceDeleteFailure(t *testing.T) {
 	name := "sealtun-abc123"
 	clientset := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name:      name,
 		Namespace: "default",
+		Labels:    map[string]string{managedLabelKey: name},
 	}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name:      authSecretName(name),
 		Namespace: "default",
@@ -926,6 +1025,7 @@ func TestCleanupManagedRemovesCustomDomainResources(t *testing.T) {
 	clientset := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name:      name,
 		Namespace: "default",
+		Labels:    map[string]string{managedLabelKey: name},
 	}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name:      authSecretName(name),
 		Namespace: "default",
@@ -1163,6 +1263,56 @@ func TestDiagnoseTunnelWarnsWhenCustomDomainIngressHostIsMissing(t *testing.T) {
 	}
 }
 
+func TestDiagnoseTunnelWarnsWhenSealosControlHostIsMissing(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(1)},
+			Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Protocol: corev1.ProtocolTCP, Port: 80}}},
+		},
+		&netv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: netv1.IngressSpec{
+				Rules: []netv1.IngressRule{{
+					Host:             "wrong.example.com",
+					IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{{Path: "/"}}}},
+				}},
+				TLS: []netv1.IngressTLS{{Hosts: []string{"wrong.example.com"}, SecretName: "wildcard-cert"}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}}},
+		},
+	)
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	diag, err := client.DiagnoseTunnelWithOptions(context.Background(), "abc123", TunnelOptions{
+		SealosHost: "sealtun-abc123-default.sealosgzg.site",
+	})
+	if err != nil {
+		t.Fatalf("DiagnoseTunnelWithOptions returned error: %v", err)
+	}
+	if !warningsContain(diag.Warnings, "remote ingress is missing Sealos CNAME host sealtun-abc123-default.sealosgzg.site") {
+		t.Fatalf("expected missing Sealos host warning, got %#v", diag.Warnings)
+	}
+	if !warningsContain(diag.Warnings, "remote ingress TLS is missing Sealos CNAME host sealtun-abc123-default.sealosgzg.site") {
+		t.Fatalf("expected missing Sealos TLS warning, got %#v", diag.Warnings)
+	}
+}
+
 func TestDiagnoseTunnelWarnsWhenCertificateDNSNameDoesNotMatchCustomDomain(t *testing.T) {
 	name := "sealtun-abc123"
 	cert := customDomainCertificate(name, "old.example.com")
@@ -1260,17 +1410,55 @@ func TestDiagnoseTunnelTreatsEventListFailureAsWarning(t *testing.T) {
 	}
 }
 
+func TestDiagnoseTunnelTreatsPodListFailureAsWarning(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(1)},
+			Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Protocol: corev1.ProtocolTCP, Port: 80}}},
+		},
+		&netv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: netv1.IngressSpec{Rules: []netv1.IngressRule{{
+				Host:             "abc.example.com",
+				IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{{Path: "/"}}}},
+			}}},
+		},
+	)
+	clientset.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("pods forbidden")
+	})
+	client := &Client{clientset: clientset, namespace: "default", domain: "example.com"}
+
+	diag, err := client.DiagnoseTunnel(context.Background(), "abc123")
+	if err != nil {
+		t.Fatalf("DiagnoseTunnel should not fail when pods are unavailable: %v", err)
+	}
+	if !diag.Deployment.Exists || !diag.Service.Exists || !diag.Ingress.Exists {
+		t.Fatalf("expected resource diagnostics to be preserved: %#v", diag)
+	}
+	if !warningsContain(diag.Warnings, "remote pods unavailable: pods forbidden") {
+		t.Fatalf("expected pods warning, got %#v", diag.Warnings)
+	}
+}
+
 func TestFilterEventDiagnosticsMatchesExactObjectName(t *testing.T) {
 	events := []corev1.Event{
 		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123"}, Reason: "Exact"},
+		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123-pod"}, Reason: "PodExact"},
 		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "prefix-sealtun-abc123-suffix"}, Reason: "Substring"},
 	}
 
-	result := filterEventDiagnostics(events, "sealtun-abc123", 10)
-	if len(result) != 1 {
+	result := filterEventDiagnostics(events, []string{"sealtun-abc123", "sealtun-abc123-pod"}, 10)
+	if len(result) != 2 {
 		t.Fatalf("expected only exact event match, got %#v", result)
 	}
-	if result[0].Reason != "Exact" {
+	if result[0].Reason != "PodExact" || result[1].Reason != "Exact" {
 		t.Fatalf("unexpected matched event: %#v", result[0])
 	}
 }

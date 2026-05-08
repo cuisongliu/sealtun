@@ -7,6 +7,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/labring/sealtun/pkg/k8s"
@@ -37,10 +39,38 @@ type domainVerifyPayload struct {
 	Warnings          []string `json:"warnings,omitempty"`
 }
 
+type domainStatusPayload struct {
+	TotalSessions int                `json:"totalSessions"`
+	CustomDomains int                `json:"customDomains"`
+	Ready         int                `json:"ready"`
+	NotReady      int                `json:"notReady"`
+	Items         []domainStatusItem `json:"items"`
+	Warnings      []string           `json:"warnings,omitempty"`
+}
+
+type domainStatusItem struct {
+	TunnelID          string   `json:"tunnelId"`
+	PublicHost        string   `json:"publicHost"`
+	SealosHost        string   `json:"sealosHost"`
+	CustomDomain      string   `json:"customDomain"`
+	DNSCNAME          string   `json:"dnsCname,omitempty"`
+	DNSReady          bool     `json:"dnsReady"`
+	IngressReady      bool     `json:"ingressReady"`
+	CertificateExists bool     `json:"certificateExists"`
+	CertificateReady  bool     `json:"certificateReady"`
+	CertificateSecret string   `json:"certificateSecret,omitempty"`
+	Ready             bool     `json:"ready"`
+	Warnings          []string `json:"warnings,omitempty"`
+}
+
 var domainJSON bool
 var domainVerifyWait bool
 var domainVerifyTimeout time.Duration
+var domainStatusTimeout = 15 * time.Second
+var domainDoctorTimeout = 15 * time.Second
 var lookupCNAME = net.DefaultResolver.LookupCNAME
+
+const domainStatusConcurrency = 4
 
 var domainCmd = &cobra.Command{
 	Use:   "domain",
@@ -122,14 +152,58 @@ var domainVerifyCmd = &cobra.Command{
 	},
 }
 
+var domainStatusCmd = &cobra.Command{
+	Use:          "status [tunnel-id]",
+	Short:        "Show custom domain readiness for one tunnel or all tunnels",
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tunnelID := ""
+		if len(args) > 0 {
+			tunnelID = args[0]
+		}
+		payload, err := collectDomainStatus(cmd.Context(), tunnelID, domainStatusTimeout)
+		if payload != nil {
+			if printErr := printDomainStatusPayload(cmd, payload, false); printErr != nil {
+				return printErr
+			}
+		}
+		return err
+	},
+}
+
+var domainDoctorCmd = &cobra.Command{
+	Use:          "doctor [tunnel-id]",
+	Short:        "Run custom domain DNS, Ingress, and certificate diagnostics",
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tunnelID := ""
+		if len(args) > 0 {
+			tunnelID = args[0]
+		}
+		payload, err := collectDomainStatus(cmd.Context(), tunnelID, domainDoctorTimeout)
+		if payload != nil {
+			if printErr := printDomainStatusPayload(cmd, payload, true); printErr != nil {
+				return printErr
+			}
+		}
+		return err
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(domainCmd)
 	domainCmd.AddCommand(domainSetCmd)
 	domainCmd.AddCommand(domainClearCmd)
 	domainCmd.AddCommand(domainVerifyCmd)
+	domainCmd.AddCommand(domainStatusCmd)
+	domainCmd.AddCommand(domainDoctorCmd)
 	domainCmd.PersistentFlags().BoolVar(&domainJSON, "json", false, "Output domain details as JSON")
 	domainVerifyCmd.Flags().BoolVar(&domainVerifyWait, "wait", false, "Wait until DNS, Ingress, and certificate are ready")
 	domainVerifyCmd.Flags().DurationVar(&domainVerifyTimeout, "timeout", 5*time.Minute, "Maximum time to wait for domain readiness")
+	domainStatusCmd.Flags().DurationVar(&domainStatusTimeout, "timeout", 15*time.Second, "Per-domain readiness check timeout")
+	domainDoctorCmd.Flags().DurationVar(&domainDoctorTimeout, "timeout", 15*time.Second, "Per-domain diagnostic timeout")
 }
 
 func configureSessionCustomDomain(parent context.Context, tunnelID, customDomain string) (*domainPayload, error) {
@@ -250,6 +324,229 @@ func printDomainPayload(cmd *cobra.Command, payload *domainPayload) error {
 		fmt.Fprintln(out, "  Custom domain: disabled")
 	}
 	return nil
+}
+
+type domainVerifier func(context.Context, session.TunnelSession) *domainVerifyPayload
+
+func collectDomainStatus(parent context.Context, tunnelID string, timeout time.Duration) (*domainStatusPayload, error) {
+	return collectDomainStatusWithVerifier(parent, tunnelID, timeout, verifyDomainForSession)
+}
+
+func collectDomainStatusWithVerifier(parent context.Context, tunnelID string, timeout time.Duration, verifier domainVerifier) (*domainStatusPayload, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("domain readiness timeout must be greater than 0")
+	}
+
+	var sessions []session.TunnelSession
+	if tunnelID != "" {
+		sess, err := findSession(tunnelID)
+		if err != nil {
+			return nil, err
+		}
+		if sess.CustomDomain == "" {
+			return nil, fmt.Errorf("tunnel %s has no custom domain configured", sess.TunnelID)
+		}
+		sessions = []session.TunnelSession{*sess}
+	} else {
+		list, err := session.List()
+		if err != nil {
+			return nil, fmt.Errorf("load tunnel sessions: %w", err)
+		}
+		sessions = list
+	}
+
+	payload := &domainStatusPayload{TotalSessions: len(sessions)}
+	targets := make([]session.TunnelSession, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess.CustomDomain == "" {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+
+	payload.CustomDomains = len(targets)
+	payload.Items = collectDomainStatusItems(parent, targets, timeout, verifier)
+	for _, item := range payload.Items {
+		if item.Ready {
+			payload.Ready++
+		} else {
+			payload.NotReady++
+		}
+	}
+	if payload.CustomDomains == 0 {
+		payload.Warnings = append(payload.Warnings, "no custom domains configured")
+	}
+	return payload, nil
+}
+
+type domainStatusJob struct {
+	index int
+	sess  session.TunnelSession
+}
+
+type domainStatusResult struct {
+	index int
+	item  domainStatusItem
+}
+
+func collectDomainStatusItems(parent context.Context, sessions []session.TunnelSession, timeout time.Duration, verifier domainVerifier) []domainStatusItem {
+	if len(sessions) == 0 {
+		return []domainStatusItem{}
+	}
+
+	workerCount := domainStatusConcurrency
+	if workerCount > len(sessions) {
+		workerCount = len(sessions)
+	}
+
+	jobs := make(chan domainStatusJob, len(sessions))
+	results := make(chan domainStatusResult, len(sessions))
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				results <- domainStatusResult{
+					index: job.index,
+					item:  collectDomainStatusItem(parent, job.sess, timeout, verifier),
+				}
+			}
+		}()
+	}
+
+	for i, sess := range sessions {
+		jobs <- domainStatusJob{index: i, sess: sess}
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	items := make([]domainStatusItem, len(sessions))
+	for result := range results {
+		items[result.index] = result.item
+	}
+	return items
+}
+
+func collectDomainStatusItem(parent context.Context, sess session.TunnelSession, timeout time.Duration, verifier domainVerifier) domainStatusItem {
+	checkCtx, cancel := context.WithTimeout(parent, timeout)
+	result := verifier(checkCtx, sess)
+	cancel()
+	if result == nil {
+		return domainStatusItem{
+			TunnelID:     sess.TunnelID,
+			PublicHost:   sess.Host,
+			SealosHost:   sessionSealosHostForDomain(sess, ""),
+			CustomDomain: sess.CustomDomain,
+			Warnings:     []string{"domain diagnostics returned no result"},
+		}
+	}
+
+	return domainStatusItemFromVerify(result)
+}
+
+func domainStatusItemFromVerify(payload *domainVerifyPayload) domainStatusItem {
+	return domainStatusItem{
+		TunnelID:          payload.TunnelID,
+		PublicHost:        payload.PublicHost,
+		SealosHost:        payload.SealosHost,
+		CustomDomain:      payload.CustomDomain,
+		DNSCNAME:          payload.DNSCNAME,
+		DNSReady:          payload.DNSReady,
+		IngressReady:      payload.IngressReady,
+		CertificateExists: payload.CertificateExists,
+		CertificateReady:  payload.CertificateReady,
+		CertificateSecret: payload.CertificateSecret,
+		Ready:             payload.Ready,
+		Warnings:          append([]string{}, payload.Warnings...),
+	}
+}
+
+func printDomainStatusPayload(cmd *cobra.Command, payload *domainStatusPayload, diagnostic bool) error {
+	if domainJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(payload)
+	}
+
+	out := cmd.OutOrStdout()
+	title := "Sealtun Domain Status"
+	if diagnostic {
+		title = "Sealtun Domain Doctor"
+	}
+	fmt.Fprintln(out, title)
+	fmt.Fprintf(out, "  Custom domains: %d (%d ready, %d not ready)\n", payload.CustomDomains, payload.Ready, payload.NotReady)
+	fmt.Fprintf(out, "  Sessions scanned: %d\n", payload.TotalSessions)
+
+	if len(payload.Items) == 0 {
+		printDomainStatusWarnings(cmd, payload, true)
+		return nil
+	}
+
+	if diagnostic {
+		for _, item := range payload.Items {
+			fmt.Fprintln(out, "")
+			fmt.Fprintf(out, "Tunnel %s\n", item.TunnelID)
+			fmt.Fprintf(out, "  Custom domain: %s\n", item.CustomDomain)
+			fmt.Fprintf(out, "  Public host: %s\n", valueOr(item.PublicHost, "unknown"))
+			fmt.Fprintf(out, "  Sealos CNAME target: %s\n", valueOr(item.SealosHost, "unknown"))
+			fmt.Fprintf(out, "  DNS CNAME: %s\n", valueOr(item.DNSCNAME, "unavailable"))
+			fmt.Fprintf(out, "  DNS ready: %s\n", yesNo(item.DNSReady))
+			fmt.Fprintf(out, "  Ingress ready: %s\n", yesNo(item.IngressReady))
+			fmt.Fprintf(out, "  Certificate: exists=%s ready=%s", yesNo(item.CertificateExists), yesNo(item.CertificateReady))
+			if item.CertificateSecret != "" {
+				fmt.Fprintf(out, " secret=%s", item.CertificateSecret)
+			}
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "  Ready: %s\n", yesNo(item.Ready))
+			for _, warning := range item.Warnings {
+				fmt.Fprintf(out, "  Warning: %s\n", warning)
+			}
+		}
+		printDomainStatusWarnings(cmd, payload, false)
+		return nil
+	}
+
+	fmt.Fprintln(out, "")
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "TUNNEL ID\tCUSTOM DOMAIN\tCNAME TARGET\tDNS\tINGRESS\tCERT\tREADY\tWARNINGS")
+	for _, item := range payload.Items {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+			item.TunnelID,
+			item.CustomDomain,
+			valueOr(item.SealosHost, "-"),
+			yesNo(item.DNSReady),
+			yesNo(item.IngressReady),
+			yesNo(item.CertificateReady),
+			yesNo(item.Ready),
+			len(item.Warnings),
+		)
+	}
+	_ = w.Flush()
+	printDomainStatusWarnings(cmd, payload, true)
+	return nil
+}
+
+func printDomainStatusWarnings(cmd *cobra.Command, payload *domainStatusPayload, includeItems bool) {
+	out := cmd.OutOrStdout()
+	warnings := append([]string{}, payload.Warnings...)
+	if includeItems {
+		for _, item := range payload.Items {
+			for _, warning := range item.Warnings {
+				warnings = append(warnings, fmt.Sprintf("tunnel %s: %s", item.TunnelID, warning))
+			}
+		}
+	}
+	if len(warnings) == 0 {
+		return
+	}
+
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Warnings")
+	for _, warning := range warnings {
+		fmt.Fprintf(out, "  - %s\n", warning)
+	}
 }
 
 func verifySessionDomain(parent context.Context, tunnelID string) (*domainVerifyPayload, error) {

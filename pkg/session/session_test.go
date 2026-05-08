@@ -47,6 +47,31 @@ func TestSaveListDelete(t *testing.T) {
 	}
 }
 
+func TestSessionsDirRejectsSymlinkRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create config root: %v", err)
+	}
+	outside := filepath.Join(home, "outside-sessions")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("create outside sessions dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, sessionsDirName)); err != nil {
+		t.Fatalf("create sessions symlink: %v", err)
+	}
+
+	if _, err := SessionsDir(); err == nil {
+		t.Fatal("expected sessions root symlink to be rejected")
+	}
+}
+
 func TestRejectsUnsafeTunnelIDPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -134,6 +159,63 @@ func TestListSkipsSymlinkedSessionFiles(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Fatalf("expected symlinked session to be skipped, got %d session(s)", len(sessions))
+	}
+}
+
+func TestGetRejectsSymlinkedSessionFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outside := filepath.Join(home, "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"tunnelId":"linked123"}`), 0o600); err != nil {
+		t.Fatalf("write outside session: %v", err)
+	}
+	dir, err := SessionsDir()
+	if err != nil {
+		t.Fatalf("SessionsDir returned error: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked123.json")); err != nil {
+		t.Fatalf("create session symlink: %v", err)
+	}
+
+	if _, err := Get("linked123"); err == nil {
+		t.Fatal("expected Get to reject symlinked session file")
+	}
+}
+
+func TestSaveRejectsSymlinkedSessionFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outside := filepath.Join(home, "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"tunnelId":"linked123","secret":""}`), 0o600); err != nil {
+		t.Fatalf("write outside session: %v", err)
+	}
+	dir, err := SessionsDir()
+	if err != nil {
+		t.Fatalf("SessionsDir returned error: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked123.json")); err != nil {
+		t.Fatalf("create session symlink: %v", err)
+	}
+
+	if err := Save(TunnelSession{TunnelID: "linked123", Secret: "new-secret"}); err == nil {
+		t.Fatal("expected Save to reject symlinked session file")
+	}
+	data, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read outside session: %v", err)
+	}
+	if string(data) != `{"tunnelId":"linked123","secret":""}` {
+		t.Fatalf("outside session was modified: %s", string(data))
 	}
 }
 
@@ -344,6 +426,40 @@ func TestListSkipsInvalidSessionFiles(t *testing.T) {
 	}
 	if sessions[0].TunnelID != "valid123" {
 		t.Fatalf("unexpected tunnel id: %s", sessions[0].TunnelID)
+	}
+}
+
+func TestGetReportsInvalidSessionFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := SessionsDir()
+	if err != nil {
+		t.Fatalf("SessionsDir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken123.json"), []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write invalid session: %v", err)
+	}
+
+	if _, err := Get("broken123"); err == nil {
+		t.Fatal("expected invalid session file to return an error")
+	}
+}
+
+func TestGetRejectsMismatchedSessionFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := SessionsDir()
+	if err != nil {
+		t.Fatalf("SessionsDir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "abc123.json"), []byte(`{"tunnelId":"def456"}`), 0o600); err != nil {
+		t.Fatalf("write mismatched session: %v", err)
+	}
+
+	if _, err := Get("abc123"); err == nil {
+		t.Fatal("expected mismatched session file to return an error")
 	}
 }
 

@@ -22,26 +22,34 @@ If region is not provided, it defaults to the configured default region.`,
 		if len(args) > 0 {
 			region = args[0]
 		}
-		return runLoginFlow(region, insecure)
+		return runLoginFlowWithProfile(region, insecure, loginProfile)
 	},
 }
 
 var insecure bool
+var loginProfile string
 
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification")
+	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "Save and activate this login as a named profile")
 }
 
-func runLoginFlow(regionInput string, insecure bool) error {
+func runLoginFlowWithProfile(regionInput string, insecure bool, profileName string) error {
 	region, err := auth.ResolveRegion(regionInput)
 	if err != nil {
 		return err
 	}
+	normalizedProfile := ""
+	if profileName != "" {
+		normalizedProfile, err = auth.ValidateProfileName(profileName)
+		if err != nil {
+			return err
+		}
+	}
 
 	auth.SetInsecureSkipTLSVerify(insecure)
 	defer auth.SetInsecureSkipTLSVerify(false)
-	fmt.Printf("login called (region: %s)\n", region)
 
 	deviceAuth, err := auth.RequestDeviceAuthorization(region)
 	if err != nil {
@@ -123,11 +131,26 @@ func runLoginFlow(regionInput string, insecure bool) error {
 		AuthMethod:       "oauth2_device_grant",
 		CurrentWorkspace: currentWorkspace,
 	}
-	if err := auth.SaveAuthData(authData, regionData.Data.Kubeconfig); err != nil {
-		return fmt.Errorf("failed to save auth data: %w", err)
+	if normalizedProfile != "" {
+		if _, err := auth.SaveProfile(normalizedProfile, authData, regionData.Data.Kubeconfig); err != nil {
+			return fmt.Errorf("failed to save profile %s: %w", normalizedProfile, err)
+		}
+		if err := auth.ActivateProfile(normalizedProfile); err != nil {
+			return fmt.Errorf("failed to activate profile %s: %w", normalizedProfile, err)
+		}
+	} else {
+		if err := auth.SaveAuthData(authData, regionData.Data.Kubeconfig); err != nil {
+			return fmt.Errorf("failed to save auth data: %w", err)
+		}
+		if err := auth.ClearCurrentProfileName(); err != nil {
+			return fmt.Errorf("failed to clear active profile marker: %w", err)
+		}
 	}
 
 	fmt.Println("Authentication successful!")
+	if normalizedProfile != "" {
+		fmt.Printf("Active profile: %s\n", normalizedProfile)
+	}
 	if currentWorkspace != nil {
 		fmt.Printf("Logged in to workspace: %s (%s)\n", currentWorkspace.ID, currentWorkspace.TeamName)
 	}

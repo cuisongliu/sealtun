@@ -10,8 +10,9 @@ It connects your local development machine straight to the internet by dynamical
 
 - 🔑 **Password-less OAuth2 Login**: Connect easily with `sealtun login` using the Device Authorization Grant flow.
 - 🌍 **Region Switching**: List built-in Sealos Cloud regions and switch regions by re-running login with `sealtun region use`.
+- 👤 **Named Profiles**: Save different Sealos accounts, regions, workspaces, and kubeconfigs as named profiles and switch between them.
 - 🚀 **One-Command Expose**: Execute `sealtun expose 8080`, and get a fully trusted HTTPS URL for your localhost securely routed.
-- 🌐 **Custom Domains**: Use `--domain` to print the required CNAME target while creating a tunnel, then attach the domain only after DNS ownership is verified.
+- 🌐 **Custom Domains**: Use `--domain` to print the required CNAME target and `domain status/doctor` to diagnose DNS, Ingress, and certificate readiness.
 - 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, HTTPS traffic, and WebSocket tunnels.
 - 🐳 **All-in-One Binary**: The client and the server agent live comfortably in the exact same compact binary and Docker image.
 - ☸️ **Cloud-Native by Design**: Resources on Sealos are natively managed using standard Kubernetes API constructs.
@@ -31,6 +32,23 @@ make build
 
 `make build` injects the current Git short hash into the local binary version by default, which makes it easy to verify that the local binary matches the pushed commit. Tagged releases are built by GitHub Actions using the tag version for GitHub Release assets and container images.
 
+## Release Process
+
+Releases are tag-driven:
+
+```bash
+# 1. Test, commit, and push the branch first
+go test ./...
+make build
+git push origin master
+
+# 2. Then create and push a semantic version tag
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+Pushing a `v*` tag triggers GitHub Actions: GoReleaser builds multi-platform binaries and creates the GitHub Release, while the Docker workflow builds and publishes the matching `ghcr.io/gitlayzer/sealtun` image. After release, run `make build && ./sealtun --version` again to confirm that the local binary reports the Git hash that was pushed.
+
 ## Quick Start
 
 ### 1. Login to Sealos
@@ -43,8 +61,15 @@ sealtun region list
 
 # Switch to another region
 sealtun region use hzh
+
+# Login and save credentials as a named profile
+sealtun login gzg --profile gzg-main
+
+# List and switch saved profiles
+sealtun profile list
+sealtun profile use hzh-dev
 ```
-*Note: Only built-in Sealos Cloud regions are currently supported. Login retrieves your Kubernetes credentials and the region's `SEALOS_DOMAIN`, then stores them under `~/.sealtun`.*
+*Note: Only built-in Sealos Cloud regions are currently supported. Login retrieves your Kubernetes credentials and the region's `SEALOS_DOMAIN`, then stores them under `~/.sealtun`. Named profiles are stored under `~/.sealtun/profiles/<name>`, and switching profiles replaces the active `auth.json` and `kubeconfig`.*
 
 ### 2. Expose a local port
 For instance, to make your local Web Server running on Port `3000` accessible to everyone on the Internet:
@@ -84,6 +109,12 @@ sealtun domain verify <tunnel-id>
 
 # Keep waiting until DNS and certificate are ready or the timeout expires
 sealtun domain verify <tunnel-id> --wait --timeout 5m
+
+# Summarize every configured custom domain
+sealtun domain status
+
+# Run deeper diagnostics for one custom domain
+sealtun domain doctor <tunnel-id>
 ```
 
 Remove the custom domain:
@@ -101,10 +132,12 @@ sealtun domain clear <tunnel-id>
 
 - `expose` now validates port and protocol inputs before provisioning remote resources.
 - `--protocol` currently supports only `https`. TCP, UDP, and gRPC are intentionally out of scope until there is a dedicated transport design for them.
+- `profile` supports named login bundles for multiple accounts, regions, and workspaces; `profile use` switches the active kubeconfig used by later `expose`, `status`, and `region current` commands.
 - Ingress host generation prefers the `SEALOS_DOMAIN` returned by Sealos Launchpad instead of guessing from the region host.
 - Custom domains must pass CNAME ownership verification before Sealtun writes the custom host to Ingress, preventing unverified host preemption on shared Ingress controllers.
 - After attachment, custom domains keep both hosts on the Ingress: the daemon uses the Sealos host for the control tunnel, while user traffic can use the CNAME-backed custom domain.
 - `--wait-domain` waits for DNS CNAME, Ingress attachment, and cert-manager certificate readiness only when `--domain` is also provided; timeout does not delete the tunnel, and you can retry with `sealtun domain set` or recheck with `sealtun domain verify`.
+- `domain status` summarizes DNS, Ingress, and certificate readiness for every custom domain; `domain doctor` prints detailed per-domain diagnostics and warnings.
 - `list` reads local session records by default; use `list --check` to probe local target ports and report degraded sessions.
 - `inspect` shows local session state by default; use `inspect --remote` to include best-effort Kubernetes diagnostics.
 - `doctor` summarizes daemon, login, session, local port, and remote Deployment, Service, Ingress, Pod, and Event diagnostics.

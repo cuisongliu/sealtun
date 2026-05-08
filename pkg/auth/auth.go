@@ -16,6 +16,8 @@ const (
 	DefaultRegion = "https://gzg.sealos.run"
 	// ClientID from seakills for oauth2 device flow
 	ClientID = "af993c98-d19d-4bdc-b338-79b80dc4f8bf"
+
+	maxAuthResponseBodyBytes = 64 << 10
 )
 
 type RegionOption struct {
@@ -129,7 +131,7 @@ func RequestDeviceAuthorization(region string) (*DeviceAuthResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedResponseBody(resp.Body)
 		return nil, fmt.Errorf("device authorization failed (%d): %s", resp.StatusCode, string(body))
 	}
 
@@ -172,7 +174,7 @@ func PollForToken(region, deviceCode string, interval, expiresIn int) (*TokenRes
 			continue // Network error, keep trying
 		}
 
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedResponseBody(resp.Body)
 		_ = resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
@@ -236,7 +238,7 @@ func GetRegionToken(region, accessToken string) (*RegionTokenResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedResponseBody(resp.Body)
 		return nil, fmt.Errorf("region token exchange failed: %s", string(body))
 	}
 
@@ -264,7 +266,7 @@ func ListWorkspaces(region, regionalToken string) (*NamespaceListResponse, error
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedResponseBody(resp.Body)
 		return nil, fmt.Errorf("list workspaces failed: %s", string(body))
 	}
 
@@ -302,7 +304,7 @@ func GetInitData(region string) (*InitDataResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedResponseBody(resp.Body)
 		return nil, fmt.Errorf("get init data failed (%d): %s", resp.StatusCode, string(body))
 	}
 
@@ -311,4 +313,8 @@ func GetInitData(region string) (*InitDataResponse, error) {
 		return nil, err
 	}
 	return &res, nil
+}
+
+func readLimitedResponseBody(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxAuthResponseBodyBytes))
 }

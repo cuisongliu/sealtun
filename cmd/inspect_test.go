@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,15 @@ func TestCollectInspectPayloadSkipsRemoteDiagnosticsByDefault(t *testing.T) {
 	}
 	if payload.Remote != nil {
 		t.Fatalf("expected remote diagnostics to be skipped by default, got %#v", payload.Remote)
+	}
+}
+
+func TestFindSessionPreservesInvalidSessionIDError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	_, err := findSession("../auth")
+	if err == nil || !strings.Contains(err.Error(), "invalid session tunnel id") {
+		t.Fatalf("expected invalid session id error, got %v", err)
 	}
 }

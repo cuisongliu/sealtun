@@ -48,6 +48,7 @@ type CleanupSummary struct {
 
 type TunnelOptions struct {
 	CustomDomain string
+	SealosHost   string
 }
 
 type TunnelHosts struct {
@@ -162,6 +163,7 @@ var reservedCustomDomainSuffixes = []string{
 var (
 	tunnelIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,53}[a-z0-9])?$`)
 	dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	gitHashPattern  = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 )
 
 type createdResource struct {
@@ -450,19 +452,8 @@ func (c *Client) ensureDeployment(ctx context.Context, name, protocol, localPort
 					AutomountServiceAccountToken: &f,
 					Containers: []corev1.Container{
 						{
-							Name: name,
-							Image: fmt.Sprintf("ghcr.io/gitlayzer/sealtun:%s", func() string {
-								v := version.Version
-								if v == "dev" {
-									return "latest"
-								}
-								// Detect if it is a 7-character git hash
-								if match, _ := regexp.MatchString("^[0-9a-f]{7}$", v); match {
-									return "sha-" + v
-								}
-								// Otherwise, assume it's a version tag (e.g., 0.1.0)
-								return strings.TrimPrefix(v, "v")
-							}()),
+							Name:            name,
+							Image:           fmt.Sprintf("ghcr.io/gitlayzer/sealtun:%s", imageTagForVersion(version.Version)),
 							ImagePullPolicy: corev1.PullAlways,
 							Args:            []string{"server", "--secret-env", "SEALTUN_SECRET", "--port", "8080", "--protocol", protocol, "--local-port", localPort},
 							Env: []corev1.EnvVar{
@@ -519,6 +510,17 @@ func (c *Client) ensureDeployment(ctx context.Context, name, protocol, localPort
 		_, err = deployClient.Update(ctx, deployment, metav1.UpdateOptions{})
 	}
 	return false, err
+}
+
+func imageTagForVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "dev" {
+		return "latest"
+	}
+	if gitHashPattern.MatchString(value) {
+		return "sha-" + value
+	}
+	return strings.TrimPrefix(value, "v")
 }
 
 func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {
@@ -902,7 +904,7 @@ func (c *Client) validateCustomDomainSecretSlot(ctx context.Context, name string
 	if err != nil {
 		return fmt.Errorf("check custom domain certificate %s: %w", name, err)
 	}
-	if cert != nil && managedLabelMatches(cert.GetLabels(), name) && certificateSecretNameMatches(cert, name) {
+	if secretOwnedByManagedCertificate(secret, name, cert) {
 		return nil
 	}
 	return fmt.Errorf("secret %s already exists but is not managed by Sealtun", name)
@@ -1082,7 +1084,7 @@ func (c *Client) restoreDynamicResource(ctx context.Context, gvr schema.GroupVer
 	return err
 }
 
-func (c *Client) deleteSecretIfOwned(ctx context.Context, secretName, owner string, ownedByManagedCertificate bool) (bool, error) {
+func (c *Client) deleteSecretIfOwned(ctx context.Context, secretName, owner string, cert *unstructured.Unstructured) (bool, error) {
 	secretClient := c.clientset.CoreV1().Secrets(c.namespace)
 	secret, err := secretClient.Get(ctx, secretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -1091,7 +1093,7 @@ func (c *Client) deleteSecretIfOwned(ctx context.Context, secretName, owner stri
 	if err != nil {
 		return false, err
 	}
-	if !ownedByManagedCertificate && !managedLabelMatches(secret.Labels, owner) {
+	if !managedLabelMatches(secret.Labels, owner) && !secretOwnedByManagedCertificate(secret, owner, cert) {
 		return false, nil
 	}
 	if err := secretClient.Delete(ctx, secretName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -1100,19 +1102,36 @@ func (c *Client) deleteSecretIfOwned(ctx context.Context, secretName, owner stri
 	return true, nil
 }
 
+func secretOwnedByManagedCertificate(secret *corev1.Secret, owner string, cert *unstructured.Unstructured) bool {
+	if secret == nil || cert == nil {
+		return false
+	}
+	if !managedLabelMatches(cert.GetLabels(), owner) || !certificateSecretNameMatches(cert, secret.Name) {
+		return false
+	}
+	if secret.Annotations["cert-manager.io/certificate-name"] == owner {
+		return true
+	}
+	for _, ref := range secret.OwnerReferences {
+		if ref.Name == owner && ref.Kind == "Certificate" && strings.HasPrefix(ref.APIVersion, "cert-manager.io/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) cleanupCustomDomainResources(ctx context.Context, name string) error {
 	var firstErr error
-	certificateOwnsTLSSecret := false
-	if cert, err := c.getDynamicResource(ctx, certificateGVR, name); err != nil {
+	var cert *unstructured.Unstructured
+	var err error
+	if cert, err = c.getDynamicResource(ctx, certificateGVR, name); err != nil {
 		firstErr = err
-	} else if cert != nil && managedLabelMatches(cert.GetLabels(), name) && certificateSecretNameMatches(cert, name) {
-		certificateOwnsTLSSecret = true
 	}
-	_, _, err := c.deleteManagedDynamicResourceIfExists(ctx, certificateGVR, name)
+	_, _, err = c.deleteManagedDynamicResourceIfExists(ctx, certificateGVR, name)
 	if err != nil {
 		recordFirstErr(&firstErr, err)
 	}
-	if _, err := c.deleteSecretIfOwned(ctx, name, name, certificateOwnsTLSSecret); err != nil {
+	if _, err := c.deleteSecretIfOwned(ctx, name, name, cert); err != nil {
 		recordFirstErr(&firstErr, err)
 	}
 	if _, _, err := c.deleteManagedDynamicResourceIfExists(ctx, issuerGVR, name); err != nil {
@@ -1183,7 +1202,7 @@ func recordFirstErr(firstErr *error, err error) {
 
 func (c *Client) cleanupCoreResources(ctx context.Context, name string, summary *CleanupSummary) error {
 	var firstErr error
-	if deleted, err := c.deleteSecretIfOwned(ctx, authSecretName(name), name, false); err != nil {
+	if deleted, err := c.deleteSecretIfOwned(ctx, authSecretName(name), name, nil); err != nil {
 		recordFirstErr(&firstErr, err)
 	} else if summary != nil && deleted {
 		summary.Secrets++
@@ -1248,7 +1267,7 @@ func (c *Client) cleanupCreated(ctx context.Context, resources []createdResource
 			_, _, err = c.deleteManagedDynamicResourceIfExists(ctx, certificateGVR, resource.name)
 		case resourceSecret:
 			owner := strings.TrimSuffix(resource.name, "-auth")
-			_, err = c.deleteSecretIfOwned(ctx, resource.name, owner, false)
+			_, err = c.deleteSecretIfOwned(ctx, resource.name, owner, nil)
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			return err
@@ -1260,6 +1279,7 @@ func (c *Client) cleanupCreated(ctx context.Context, resources []createdResource
 func (c *Client) CleanupManaged(ctx context.Context, tunnelIDs []string) (*CleanupSummary, error) {
 	summary := &CleanupSummary{}
 	var firstErr error
+	var err error
 
 	seen := map[string]struct{}{}
 	for _, tunnelID := range tunnelIDs {
@@ -1276,11 +1296,9 @@ func (c *Client) CleanupManaged(ctx context.Context, tunnelIDs []string) (*Clean
 		seen[tunnelID] = struct{}{}
 
 		name := fmt.Sprintf("sealtun-%s", tunnelID)
-		certificateOwnsTLSSecret := false
-		if cert, err := c.getDynamicResource(ctx, certificateGVR, name); err != nil {
+		var cert *unstructured.Unstructured
+		if cert, err = c.getDynamicResource(ctx, certificateGVR, name); err != nil {
 			recordFirstErr(&firstErr, err)
-		} else if cert != nil && managedLabelMatches(cert.GetLabels(), name) && certificateSecretNameMatches(cert, name) {
-			certificateOwnsTLSSecret = true
 		}
 		_, deleted, err := c.deleteManagedDynamicResourceIfExists(ctx, certificateGVR, name)
 		if err != nil {
@@ -1290,7 +1308,7 @@ func (c *Client) CleanupManaged(ctx context.Context, tunnelIDs []string) (*Clean
 		} else if deleted {
 			summary.Certificates++
 		}
-		if deleted, err := c.deleteSecretIfOwned(ctx, name, name, certificateOwnsTLSSecret); err != nil {
+		if deleted, err := c.deleteSecretIfOwned(ctx, name, name, cert); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -1361,6 +1379,14 @@ func (c *Client) DiagnoseTunnelWithOptions(ctx context.Context, tunnelID string,
 			diag.Warnings = append(diag.Warnings, "remote ingress has no hosts")
 		}
 	}
+	if opts.SealosHost != "" && diag.Ingress.Exists {
+		if !hostnameInList(diag.Ingress.Hosts, opts.SealosHost) {
+			diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote ingress is missing Sealos CNAME host %s", opts.SealosHost))
+		}
+		if !hostnameInList(diag.Ingress.TLSHosts, opts.SealosHost) {
+			diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote ingress TLS is missing Sealos CNAME host %s", opts.SealosHost))
+		}
+	}
 	if opts.CustomDomain != "" {
 		if diag.Ingress.Exists {
 			if !hostnameInList(diag.Ingress.Hosts, opts.CustomDomain) {
@@ -1384,20 +1410,23 @@ func (c *Client) DiagnoseTunnelWithOptions(ctx context.Context, tunnelID string,
 			}
 		}
 	}
+	eventObjectNames := []string{name}
 	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", name),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list pods for %s: %w", name, err)
-	}
-	if len(pods.Items) == 0 {
-		diag.Warnings = append(diag.Warnings, "remote tunnel pod is missing")
-	}
-	for i := range pods.Items {
-		podDiag := podDiagnostics(&pods.Items[i])
-		diag.Pods = append(diag.Pods, podDiag)
-		if !podDiag.Ready {
-			diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote pod %s is not ready", podDiag.Name))
+		diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote pods unavailable: %v", err))
+	} else {
+		if len(pods.Items) == 0 {
+			diag.Warnings = append(diag.Warnings, "remote tunnel pod is missing")
+		}
+		for i := range pods.Items {
+			podDiag := podDiagnostics(&pods.Items[i])
+			diag.Pods = append(diag.Pods, podDiag)
+			eventObjectNames = append(eventObjectNames, podDiag.Name)
+			if !podDiag.Ready {
+				diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote pod %s is not ready", podDiag.Name))
+			}
 		}
 	}
 
@@ -1406,7 +1435,7 @@ func (c *Client) DiagnoseTunnelWithOptions(ctx context.Context, tunnelID string,
 		diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote events unavailable: %v", err))
 		return diag, nil
 	}
-	diag.Events = filterEventDiagnostics(events.Items, name, 8)
+	diag.Events = filterEventDiagnostics(events.Items, eventObjectNames, 8)
 
 	return diag, nil
 }
@@ -1617,11 +1646,17 @@ func podReady(pod *corev1.Pod) bool {
 	return false
 }
 
-func filterEventDiagnostics(events []corev1.Event, name string, limit int) []EventDiagnostic {
+func filterEventDiagnostics(events []corev1.Event, names []string, limit int) []EventDiagnostic {
+	allowedNames := map[string]struct{}{}
+	for _, name := range names {
+		if name != "" {
+			allowedNames[name] = struct{}{}
+		}
+	}
 	result := []EventDiagnostic{}
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
-		if event.InvolvedObject.Name != name {
+		if _, ok := allowedNames[event.InvolvedObject.Name]; !ok {
 			continue
 		}
 		result = append(result, EventDiagnostic{

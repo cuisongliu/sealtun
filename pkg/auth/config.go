@@ -6,6 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -28,7 +31,25 @@ type AuthData struct {
 const (
 	currentConfigDir = ".sealtun"
 	legacyConfigDir  = ".sealos"
+	profilesDirName  = "profiles"
+	profileFileName  = "current_profile"
 )
+
+var profileNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+type Profile struct {
+	Name              string     `json:"name"`
+	Region            string     `json:"region,omitempty"`
+	SealosDomain      string     `json:"sealosDomain,omitempty"`
+	AuthenticatedAt   string     `json:"authenticatedAt,omitempty"`
+	WorkspaceID       string     `json:"workspaceId,omitempty"`
+	WorkspaceName     string     `json:"workspaceName,omitempty"`
+	Current           bool       `json:"current"`
+	KubeconfigPresent bool       `json:"kubeconfigPresent"`
+	Error             string     `json:"error,omitempty"`
+	AuthData          *AuthData  `json:"-"`
+	CurrentWorkspace  *Workspace `json:"-"`
+}
 
 // GetSealosDir returns the config directory, copying only Sealtun-owned legacy files when needed.
 func GetSealosDir() (string, error) {
@@ -40,16 +61,12 @@ func GetSealosDir() (string, error) {
 	dir := filepath.Join(home, currentConfigDir)
 	legacyDir := filepath.Join(home, legacyConfigDir)
 
-	_, currentErr := os.Stat(dir)
-	currentMissing := os.IsNotExist(currentErr)
-	if currentErr != nil && !currentMissing {
-		return "", currentErr
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	currentMissing, err := EnsurePrivateDir(dir, "config directory")
+	if err != nil {
 		return "", err
 	}
 	if currentMissing {
-		if info, legacyErr := os.Stat(legacyDir); legacyErr == nil && info.IsDir() {
+		if info, legacyErr := os.Lstat(legacyDir); legacyErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 			if err := copyLegacyConfigFiles(legacyDir, dir); err != nil {
 				return "", fmt.Errorf("copy legacy config files from %s to %s: %w", legacyDir, dir, err)
 			}
@@ -64,6 +81,32 @@ func GetSealosDir() (string, error) {
 	_ = os.Remove(testFile)
 
 	return dir, nil
+}
+
+// EnsurePrivateDir creates a private config subdirectory and rejects symlinks.
+func EnsurePrivateDir(dir, label string) (bool, error) {
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("%s %s must not be a symlink", label, dir)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("%s %s is not a directory", label, dir)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- directories require execute bits; 0700 keeps config private to the user.
+			return false, fmt.Errorf("restrict %s %s permissions: %w", label, dir, err)
+		}
+	}
+	return false, nil
 }
 
 func copyLegacyConfigFiles(legacyDir, dir string) error {
@@ -126,6 +169,10 @@ func SaveAuthData(authData AuthData, kubeconfig string) error {
 		return err
 	}
 
+	return saveAuthDataToDir(dir, authData, kubeconfig)
+}
+
+func saveAuthDataToDir(dir string, authData AuthData, kubeconfig string) error {
 	b, err := json.MarshalIndent(authData, "", "  ") // #nosec G117 -- auth data is intentionally persisted with 0600 permissions for CLI reuse.
 	if err != nil {
 		return err
@@ -149,6 +196,276 @@ func SaveAuthData(authData AuthData, kubeconfig string) error {
 	}
 
 	return nil
+}
+
+func ValidateProfileName(name string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return "", fmt.Errorf("profile name is required")
+	}
+	if normalized == "." || normalized == ".." || !profileNamePattern.MatchString(normalized) {
+		return "", fmt.Errorf("invalid profile name %q: use 1-64 lowercase letters, numbers, dots, underscores, or hyphens, starting with a letter or number", name)
+	}
+	return normalized, nil
+}
+
+func ProfilesDir() (string, error) {
+	root, err := GetSealosDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, profilesDirName)
+	if _, err := EnsurePrivateDir(dir, "profiles directory"); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func profileDir(name string) (string, string, error) {
+	normalized, err := ValidateProfileName(name)
+	if err != nil {
+		return "", "", err
+	}
+	root, err := ProfilesDir()
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(root, normalized), normalized, nil
+}
+
+func SaveProfile(name string, authData AuthData, kubeconfig string) (string, error) {
+	dir, normalized, err := profileDir(name)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureProfileDir(dir, normalized); err != nil {
+		return "", err
+	}
+	if err := saveAuthDataToDir(dir, authData, kubeconfig); err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+func ensureProfileDir(dir, name string) error {
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("profile %s path is a symlink", name)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("profile %s is not a directory", name)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- profile directories require execute bits; 0700 keeps saved credentials private.
+			return fmt.Errorf("restrict profile %s directory permissions: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateProfileDir(dir, name string) error {
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("profile %s does not exist", name)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("profile %s path is a symlink", name)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("profile %s is not a directory", name)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- profile directories require execute bits; 0700 keeps saved credentials private.
+			return fmt.Errorf("restrict profile %s directory permissions: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func LoadProfile(name string) (*Profile, string, error) {
+	dir, normalized, err := profileDir(name)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := validateProfileDir(dir, normalized); err != nil {
+		return nil, "", err
+	}
+	authData, err := loadAuthDataFromPath(filepath.Join(dir, "auth.json"))
+	if err != nil {
+		return nil, "", err
+	}
+	kubeconfig, err := os.ReadFile(filepath.Join(dir, "kubeconfig")) // #nosec G304 -- profile kubeconfig path is derived from a validated profile name under the user-owned config directory.
+	if err != nil {
+		return nil, "", err
+	}
+	current, _ := CurrentProfileName()
+	return profileFromAuthData(normalized, authData, current == normalized, true), string(kubeconfig), nil
+}
+
+func ActivateProfile(name string) error {
+	profile, kubeconfig, err := LoadProfile(name)
+	if err != nil {
+		return err
+	}
+	if profile.AuthData == nil {
+		return fmt.Errorf("profile %s has no auth data", profile.Name)
+	}
+	if err := SaveAuthData(*profile.AuthData, kubeconfig); err != nil {
+		return err
+	}
+	return SetCurrentProfileName(profile.Name)
+}
+
+func DeleteProfile(name string) error {
+	dir, normalized, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if err := validateProfileDir(dir, normalized); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	current, err := CurrentProfileName()
+	if err != nil {
+		return err
+	}
+	if current == normalized {
+		return ClearCurrentProfileName()
+	}
+	return nil
+}
+
+func ListProfiles() ([]Profile, error) {
+	dir, err := ProfilesDir()
+	if err != nil {
+		return nil, err
+	}
+	current, err := CurrentProfileName()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	profiles := make([]Profile, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name, err := ValidateProfileName(entry.Name())
+		if err != nil {
+			continue
+		}
+		profilePath := filepath.Join(dir, name)
+		_, kubeconfigPresent, kubeconfigErr := readExistingFile(filepath.Join(profilePath, "kubeconfig"))
+		authData, err := loadAuthDataFromPath(filepath.Join(profilePath, "auth.json"))
+		if err != nil {
+			profile := profileFromAuthData(name, nil, current == name, kubeconfigPresent)
+			profile.Error = err.Error()
+			profiles = append(profiles, *profile)
+			continue
+		}
+		profile := profileFromAuthData(name, authData, current == name, kubeconfigPresent)
+		if kubeconfigErr != nil {
+			profile.Error = kubeconfigErr.Error()
+		} else if !kubeconfigPresent {
+			profile.Error = "kubeconfig is missing"
+		}
+		profiles = append(profiles, *profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
+	return profiles, nil
+}
+
+func SetCurrentProfileName(name string) error {
+	normalized, err := ValidateProfileName(name)
+	if err != nil {
+		return err
+	}
+	root, err := GetSealosDir()
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(root, profileFileName), []byte(normalized+"\n"), 0o600)
+}
+
+func CurrentProfileName() (string, error) {
+	root, err := GetSealosDir()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(root, profileFileName)) // #nosec G304 -- current profile marker path is fixed under the user-owned config directory.
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return ValidateProfileName(string(data))
+}
+
+func ClearCurrentProfileName() error {
+	root, err := GetSealosDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, profileFileName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func ActiveKubeconfig() (string, error) {
+	dir, err := GetSealosDir()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "kubeconfig")) // #nosec G304 -- kubeconfig path is fixed under the user-owned config directory.
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func profileFromAuthData(name string, authData *AuthData, current bool, kubeconfigPresent bool) *Profile {
+	profile := &Profile{
+		Name:              name,
+		Current:           current,
+		KubeconfigPresent: kubeconfigPresent,
+		AuthData:          authData,
+	}
+	if authData == nil {
+		return profile
+	}
+	profile.Region = authData.Region
+	profile.SealosDomain = authData.SealosDomain
+	profile.AuthenticatedAt = authData.AuthenticatedAt
+	profile.CurrentWorkspace = authData.CurrentWorkspace
+	if authData.CurrentWorkspace != nil {
+		profile.WorkspaceID = authData.CurrentWorkspace.ID
+		profile.WorkspaceName = authData.CurrentWorkspace.TeamName
+	}
+	return profile
 }
 
 func readExistingFile(path string) ([]byte, bool, error) {
@@ -201,8 +518,11 @@ func LoadAuthData() (*AuthData, error) {
 	if err != nil {
 		return nil, err
 	}
-	authPath := filepath.Join(dir, "auth.json")
-	b, err := os.ReadFile(authPath) // #nosec G304 -- auth path is fixed under the user-owned Sealtun config directory.
+	return loadAuthDataFromPath(filepath.Join(dir, "auth.json"))
+}
+
+func loadAuthDataFromPath(path string) (*AuthData, error) {
+	b, err := os.ReadFile(path) // #nosec G304 -- auth path is fixed under the user-owned Sealtun config directory or a validated profile directory.
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +545,9 @@ func ClearAuthData() error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+	}
+	if err := os.Remove(filepath.Join(dir, profileFileName)); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 
 	return nil

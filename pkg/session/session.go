@@ -55,7 +55,7 @@ func SessionsDir() (string, error) {
 	}
 
 	dir := filepath.Join(root, sessionsDirName)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if _, err := auth.EnsurePrivateDir(dir, "sessions directory"); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -113,6 +113,9 @@ func saveLocked(session TunnelSession) error {
 	session.UpdatedAt = time.Now().Format(time.RFC3339)
 
 	path := filepath.Join(dir, session.TunnelID+".json")
+	if err := validateSessionFileForWrite(path, session.TunnelID); err != nil {
+		return err
+	}
 	preserveScrubbedCredentials(path, &session)
 
 	data, err := json.MarshalIndent(session, "", "  ") // #nosec G117 -- tunnel secrets are intentionally persisted with 0600 permissions for daemon reconnects.
@@ -125,6 +128,20 @@ func saveLocked(session TunnelSession) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func validateSessionFileForWrite(path, tunnelID string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("session file %s is not a regular file", tunnelID)
+	}
+	return nil
 }
 
 func acquireSessionLock() (func(), error) {
@@ -261,19 +278,41 @@ func Get(tunnelID string) (*TunnelSession, error) {
 		return nil, err
 	}
 
-	sessions, err := List()
+	release, err := acquireSessionLock()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	dir, err := SessionsDir()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, sess := range sessions {
-		if sess.TunnelID == tunnelID {
-			copy := sess
-			return &copy, nil
-		}
+	path := filepath.Join(dir, tunnelID+".json")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("session file %s is not a regular file", tunnelID)
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- path is derived from a validated tunnel ID under the session directory.
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, os.ErrNotExist
+	var sess TunnelSession
+	if err := json.Unmarshal(data, &sess); err != nil {
+		return nil, fmt.Errorf("parse session %s: %w", tunnelID, err)
+	}
+	if sess.TunnelID != tunnelID {
+		return nil, fmt.Errorf("session file %s contains tunnel id %q", tunnelID, sess.TunnelID)
+	}
+	if err := validateTunnelID(sess.TunnelID); err != nil {
+		return nil, err
+	}
+	return &sess, nil
 }
 
 func List() ([]TunnelSession, error) {

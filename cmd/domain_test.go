@@ -153,6 +153,90 @@ func TestVerifySessionDomainRequiresCustomDomain(t *testing.T) {
 	}
 }
 
+func TestCollectDomainStatusFiltersCustomDomains(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:     "abc123",
+		Host:         "app.example.com",
+		SealosHost:   "sealtun-abc123-ns.sealosgzg.site",
+		CustomDomain: "app.example.com",
+		Namespace:    "ns-demo",
+		CreatedAt:    time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save custom domain session: %v", err)
+	}
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "def456",
+		Host:      "sealtun-def456-ns.sealosgzg.site",
+		Namespace: "ns-demo",
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save plain session: %v", err)
+	}
+
+	payload, err := collectDomainStatusWithVerifier(context.Background(), "", time.Second, func(ctx context.Context, sess session.TunnelSession) *domainVerifyPayload {
+		return &domainVerifyPayload{
+			TunnelID:          sess.TunnelID,
+			PublicHost:        sess.Host,
+			SealosHost:        sess.SealosHost,
+			CustomDomain:      sess.CustomDomain,
+			DNSReady:          true,
+			IngressReady:      true,
+			CertificateExists: true,
+			CertificateReady:  true,
+			Ready:             true,
+		}
+	})
+	if err != nil {
+		t.Fatalf("collectDomainStatusWithVerifier returned error: %v", err)
+	}
+	if payload.TotalSessions != 2 || payload.CustomDomains != 1 || payload.Ready != 1 || payload.NotReady != 0 {
+		t.Fatalf("unexpected status summary: %#v", payload)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].TunnelID != "abc123" {
+		t.Fatalf("unexpected status items: %#v", payload.Items)
+	}
+}
+
+func TestCollectDomainStatusRequiresCustomDomainForExplicitTunnel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "abc123",
+		Host:      "sealtun-abc123-ns.sealosgzg.site",
+		Namespace: "ns-demo",
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	_, err := collectDomainStatusWithVerifier(context.Background(), "abc123", time.Second, verifyDomainForSession)
+	if err == nil || !strings.Contains(err.Error(), "no custom domain") {
+		t.Fatalf("expected no custom domain error, got %v", err)
+	}
+}
+
+func TestCollectDomainStatusReportsNoCustomDomains(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	payload, err := collectDomainStatusWithVerifier(context.Background(), "", time.Second, verifyDomainForSession)
+	if err != nil {
+		t.Fatalf("collectDomainStatusWithVerifier returned error: %v", err)
+	}
+	if payload.CustomDomains != 0 || len(payload.Warnings) != 1 || !strings.Contains(payload.Warnings[0], "no custom domains") {
+		t.Fatalf("unexpected no-domain payload: %#v", payload)
+	}
+}
+
+func TestCollectDomainStatusRequiresPositiveTimeout(t *testing.T) {
+	_, err := collectDomainStatusWithVerifier(context.Background(), "", 0, verifyDomainForSession)
+	if err == nil || !strings.Contains(err.Error(), "timeout must be greater than 0") {
+		t.Fatalf("expected timeout validation error, got %v", err)
+	}
+}
+
 func TestWaitForDomainReadyRequiresPositiveTimeout(t *testing.T) {
 	_, err := waitForDomainReady(context.Background(), session.TunnelSession{
 		TunnelID:     "abc123",

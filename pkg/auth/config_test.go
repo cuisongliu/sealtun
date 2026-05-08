@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,57 @@ func TestGetSealosDirDoesNotFollowLegacySymlinks(t *testing.T) {
 	}
 }
 
+func TestGetSealosDirRejectsCurrentConfigSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outside := filepath.Join(home, "outside-config")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("create outside config dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, currentConfigDir)); err != nil {
+		t.Fatalf("create current config symlink: %v", err)
+	}
+
+	if _, err := GetSealosDir(); err == nil {
+		t.Fatal("expected current config symlink to be rejected")
+	}
+}
+
+func TestEnsurePrivateDirRestrictsExistingDirectoryPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod permission bits are not portable on Windows")
+	}
+
+	dir := filepath.Join(t.TempDir(), "config")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatalf("relax config dir permissions: %v", err)
+	}
+
+	created, err := EnsurePrivateDir(dir, "config directory")
+	if err != nil {
+		t.Fatalf("EnsurePrivateDir returned error: %v", err)
+	}
+	if created {
+		t.Fatal("expected existing directory not to be reported as created")
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat config dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected permissions 0700, got %04o", got)
+	}
+}
+
 func TestSaveAuthDataDoesNotCommitAuthWhenKubeconfigWriteFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -179,6 +231,260 @@ func TestSaveAuthDataRestoresKubeconfigWhenAuthWriteFails(t *testing.T) {
 	}
 }
 
+func TestProfileLifecycleActivatesNamedCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	name, err := SaveProfile("Dev-GZG", AuthData{
+		Region:          "https://gzg.sealos.run",
+		SealosDomain:    "sealosgzg.site",
+		AuthMethod:      "oauth2_device_grant",
+		AuthenticatedAt: "2026-05-08T08:00:00Z",
+		CurrentWorkspace: &Workspace{
+			ID:       "ns-demo",
+			TeamName: "demo",
+		},
+	}, "kubeconfig-gzg")
+	if err != nil {
+		t.Fatalf("SaveProfile returned error: %v", err)
+	}
+	if name != "dev-gzg" {
+		t.Fatalf("expected normalized profile name, got %s", name)
+	}
+
+	if err := ActivateProfile("dev-gzg"); err != nil {
+		t.Fatalf("ActivateProfile returned error: %v", err)
+	}
+	current, err := CurrentProfileName()
+	if err != nil {
+		t.Fatalf("CurrentProfileName returned error: %v", err)
+	}
+	if current != "dev-gzg" {
+		t.Fatalf("expected current profile dev-gzg, got %s", current)
+	}
+	authData, err := LoadAuthData()
+	if err != nil {
+		t.Fatalf("LoadAuthData returned error: %v", err)
+	}
+	if authData.Region != "https://gzg.sealos.run" {
+		t.Fatalf("expected active auth to use profile region, got %s", authData.Region)
+	}
+	kubeconfig, err := ActiveKubeconfig()
+	if err != nil {
+		t.Fatalf("ActiveKubeconfig returned error: %v", err)
+	}
+	if kubeconfig != "kubeconfig-gzg" {
+		t.Fatalf("expected active kubeconfig to be restored, got %q", kubeconfig)
+	}
+
+	profiles, err := ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles returned error: %v", err)
+	}
+	if len(profiles) != 1 || profiles[0].Name != "dev-gzg" || !profiles[0].Current || !profiles[0].KubeconfigPresent {
+		t.Fatalf("unexpected profiles: %#v", profiles)
+	}
+
+	if err := DeleteProfile("dev-gzg"); err != nil {
+		t.Fatalf("DeleteProfile returned error: %v", err)
+	}
+	current, err = CurrentProfileName()
+	if err != nil {
+		t.Fatalf("CurrentProfileName returned error after delete: %v", err)
+	}
+	if current != "" {
+		t.Fatalf("expected current profile marker to be cleared, got %s", current)
+	}
+}
+
+func TestProfileOperationsRejectSymlinkDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	profilesDir, err := ProfilesDir()
+	if err != nil {
+		t.Fatalf("ProfilesDir returned error: %v", err)
+	}
+	outside := filepath.Join(home, "outside-profile")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("create outside profile dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(profilesDir, "linked")); err != nil {
+		t.Fatalf("create profile symlink: %v", err)
+	}
+
+	if _, err := SaveProfile("linked", AuthData{Region: "https://gzg.sealos.run"}, "kubeconfig"); err == nil {
+		t.Fatal("expected SaveProfile to reject symlink profile directory")
+	}
+	if _, _, err := LoadProfile("linked"); err == nil {
+		t.Fatal("expected LoadProfile to reject symlink profile directory")
+	}
+	if err := DeleteProfile("linked"); err == nil {
+		t.Fatal("expected DeleteProfile to reject symlink profile directory")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected outside directory not to be written through symlink, stat err=%v", err)
+	}
+}
+
+func TestProfileOperationsRestrictExistingDirectoryPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod permission bits are not portable on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	profilesDir, err := ProfilesDir()
+	if err != nil {
+		t.Fatalf("ProfilesDir returned error: %v", err)
+	}
+	profilePath := filepath.Join(profilesDir, "shared")
+	if err := os.Mkdir(profilePath, 0o700); err != nil {
+		t.Fatalf("create profile dir: %v", err)
+	}
+	if err := os.Chmod(profilePath, 0o755); err != nil {
+		t.Fatalf("relax profile dir permissions: %v", err)
+	}
+
+	if _, err := SaveProfile("shared", AuthData{Region: "https://gzg.sealos.run"}, "kubeconfig"); err != nil {
+		t.Fatalf("SaveProfile returned error: %v", err)
+	}
+	info, err := os.Stat(profilePath)
+	if err != nil {
+		t.Fatalf("stat profile dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected profile dir permissions 0700, got %04o", got)
+	}
+}
+
+func TestProfilesDirRejectsSymlinkRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root, err := GetSealosDir()
+	if err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
+	}
+	outside := filepath.Join(home, "outside-profiles")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("create outside profiles dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, profilesDirName)); err != nil {
+		t.Fatalf("create profiles symlink: %v", err)
+	}
+
+	if _, err := ProfilesDir(); err == nil {
+		t.Fatal("expected profiles root symlink to be rejected")
+	}
+}
+
+func TestValidateProfileNameRejectsUnsafeValues(t *testing.T) {
+	tests := []string{"", "../auth", ".hidden", "bad/name", "bad name", "bad:profile"}
+	for _, input := range tests {
+		if _, err := ValidateProfileName(input); err == nil {
+			t.Fatalf("expected %q to be rejected", input)
+		}
+	}
+}
+
+func TestListProfilesIncludesBrokenProfiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := ProfilesDir()
+	if err != nil {
+		t.Fatalf("ProfilesDir returned error: %v", err)
+	}
+	brokenDir := filepath.Join(dir, "broken")
+	if err := os.MkdirAll(brokenDir, 0o700); err != nil {
+		t.Fatalf("mkdir broken profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, "auth.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write broken auth: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, "kubeconfig"), []byte("kubeconfig"), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	profiles, err := ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles returned error: %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("expected one broken profile, got %#v", profiles)
+	}
+	if profiles[0].Name != "broken" || profiles[0].Error == "" || !profiles[0].KubeconfigPresent {
+		t.Fatalf("unexpected broken profile summary: %#v", profiles[0])
+	}
+}
+
+func TestListProfilesMarksMissingKubeconfigBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := ProfilesDir()
+	if err != nil {
+		t.Fatalf("ProfilesDir returned error: %v", err)
+	}
+	profileDir := filepath.Join(dir, "missing-kubeconfig")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("mkdir profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "auth.json"), []byte(`{"region":"https://gzg.sealos.run"}`), 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+
+	profiles, err := ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles returned error: %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("expected one profile, got %#v", profiles)
+	}
+	if profiles[0].Error != "kubeconfig is missing" || profiles[0].KubeconfigPresent {
+		t.Fatalf("expected missing kubeconfig to be reported as broken, got %#v", profiles[0])
+	}
+}
+
+func TestClearAuthDataClearsActiveProfileMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := SaveProfile("dev", AuthData{
+		Region:          "https://gzg.sealos.run",
+		AuthMethod:      "oauth2_device_grant",
+		AuthenticatedAt: "2026-05-08T08:00:00Z",
+	}, "kubeconfig"); err != nil {
+		t.Fatalf("SaveProfile returned error: %v", err)
+	}
+	if err := ActivateProfile("dev"); err != nil {
+		t.Fatalf("ActivateProfile returned error: %v", err)
+	}
+	if err := ClearAuthData(); err != nil {
+		t.Fatalf("ClearAuthData returned error: %v", err)
+	}
+	current, err := CurrentProfileName()
+	if err != nil {
+		t.Fatalf("CurrentProfileName returned error: %v", err)
+	}
+	if current != "" {
+		t.Fatalf("expected active profile marker to be cleared, got %s", current)
+	}
+	if _, _, err := LoadProfile("dev"); err != nil {
+		t.Fatalf("expected saved profile to remain after logout cleanup: %v", err)
+	}
+}
+
 func TestResolveRegionRejectsPlainHTTP(t *testing.T) {
 	if _, err := ResolveRegion("http://custom-region.example"); err == nil {
 		t.Fatal("expected plain http region to be rejected")
@@ -222,5 +528,16 @@ func TestPollIntervalRejectsNonPositiveValues(t *testing.T) {
 	}
 	if got := pollIntervalFromSeconds(2); got != 2*time.Second {
 		t.Fatalf("expected explicit poll interval, got %s", got)
+	}
+}
+
+func TestReadLimitedResponseBodyCapsBodySize(t *testing.T) {
+	body := strings.Repeat("x", maxAuthResponseBodyBytes+1024)
+	got, err := readLimitedResponseBody(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("readLimitedResponseBody returned error: %v", err)
+	}
+	if len(got) != maxAuthResponseBodyBytes {
+		t.Fatalf("expected body to be capped at %d bytes, got %d", maxAuthResponseBodyBytes, len(got))
 	}
 }

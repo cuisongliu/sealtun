@@ -126,6 +126,47 @@ users:
 	}
 }
 
+func TestCollectStatusIncludesActiveProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := auth.SaveProfile("gzg-main", auth.AuthData{
+		Region:          "https://gzg.sealos.run",
+		SealosDomain:    "sealosgzg.site",
+		AuthMethod:      "oauth2_device_grant",
+		AuthenticatedAt: "2026-05-08T08:00:00Z",
+	}, `
+apiVersion: v1
+kind: Config
+current-context: ctx-demo
+contexts:
+- name: ctx-demo
+  context:
+    cluster: cluster-demo
+clusters:
+- name: cluster-demo
+  cluster:
+    server: https://example.com
+users:
+- name: user-demo
+  user:
+    token: abc
+`); err != nil {
+		t.Fatalf("SaveProfile returned error: %v", err)
+	}
+	if err := auth.ActivateProfile("gzg-main"); err != nil {
+		t.Fatalf("ActivateProfile returned error: %v", err)
+	}
+
+	status, err := collectStatus()
+	if err != nil {
+		t.Fatalf("collectStatus returned error: %v", err)
+	}
+	if status.ActiveProfile != "gzg-main" {
+		t.Fatalf("expected active profile gzg-main, got %s", status.ActiveProfile)
+	}
+}
+
 func TestStatusJSONOutput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

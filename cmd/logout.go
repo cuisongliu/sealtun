@@ -48,7 +48,10 @@ var logoutCmd = &cobra.Command{
 			return fmt.Errorf("failed to clear auth data: %w", err)
 		}
 
-		fmt.Println("Logged out. Removed local Sealtun credentials and scrubbed tunnel session secrets.")
+		fmt.Println("Logged out. Removed active Sealtun credentials and scrubbed tunnel session secrets.")
+		if profiles, err := auth.ListProfiles(); err == nil && len(profiles) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "Saved profile(s) remain: %d. Use `sealtun profile delete <name>` to remove them.\n", len(profiles))
+		}
 		return nil
 	},
 }

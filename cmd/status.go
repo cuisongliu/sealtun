@@ -29,6 +29,7 @@ type kubeconfigStatus struct {
 
 type statusPayload struct {
 	LoggedIn        bool             `json:"loggedIn"`
+	ActiveProfile   string           `json:"activeProfile,omitempty"`
 	Region          string           `json:"region,omitempty"`
 	SealosDomain    string           `json:"sealosDomain,omitempty"`
 	AuthMethod      string           `json:"authMethod,omitempty"`
@@ -91,6 +92,12 @@ func collectStatus() (*statusPayload, error) {
 		},
 	}
 
+	currentProfile, err := auth.CurrentProfileName()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load active profile marker: %w", err)
+	}
+	status.ActiveProfile = currentProfile
+
 	authData, err := auth.LoadAuthData()
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -146,6 +153,7 @@ func printHumanStatus(cmd *cobra.Command, status *statusPayload) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Session")
 	if status.LoggedIn {
+		fmt.Fprintf(out, "  Active profile: %s\n", valueOr(status.ActiveProfile, "none"))
 		fmt.Fprintf(out, "  Region: %s\n", valueOr(status.Region, "unknown"))
 		fmt.Fprintf(out, "  Sealos domain: %s\n", valueOr(status.SealosDomain, "unknown"))
 		fmt.Fprintf(out, "  Auth method: %s\n", valueOr(status.AuthMethod, "unknown"))

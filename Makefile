@@ -1,13 +1,22 @@
-.PHONY: build clean fmt tidy test help
+.PHONY: build clean fmt tidy test npm-packages npm-pack npm-publish npm-publish-dry-run npm-clean help
 
 # Go binary
 GO ?= go
+NODE ?= node
+NPM ?= npm
 
 # Binary name
 BINARY_NAME=sealtun
 
 # Get version from git (Pure Git Hash mode)
 VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+NPM_VERSION ?= $(shell (git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0) | sed 's/^v//')
+NPM_RELEASE_TAG ?= v$(NPM_VERSION)
+NPM_GITHUB_REPO ?= gitlayzer/sealtun
+NPM_PACKAGE_NAME ?= sealtun
+NPM_PACKAGES_DIR ?= packages
+NPM_DIST_TAG ?= latest
+NPM_PUBLISH_FLAGS ?=
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X github.com/labring/sealtun/pkg/version.Version=$(VERSION)"
@@ -27,6 +36,51 @@ fmt:
 ## tidy: tidy the go mod
 tidy:
 	go mod tidy
+
+## test: run tests
+test:
+	$(GO) test ./...
+
+## npm-packages: generate npm packages from GitHub Release assets
+npm-packages:
+	$(NODE) scripts/build-npm-packages.mjs \
+		--repo $(NPM_GITHUB_REPO) \
+		--tag $(NPM_RELEASE_TAG) \
+		--version $(NPM_VERSION) \
+		--package-name $(NPM_PACKAGE_NAME) \
+		--out-dir $(NPM_PACKAGES_DIR)
+
+## npm-pack: generate npm packages and create local npm tarballs
+npm-pack: npm-packages
+	@set -eu; \
+	for pkg in $(NPM_PACKAGES_DIR)/*; do \
+		if [ -f "$$pkg/package.json" ]; then \
+			echo "Packing $$pkg"; \
+			(cd "$$pkg" && $(NPM) pack); \
+		fi; \
+	done; \
+	echo "Packing $(NPM_PACKAGES_DIR)"; \
+	(cd "$(NPM_PACKAGES_DIR)" && $(NPM) pack)
+
+## npm-publish: publish platform packages first, then the main npm package
+npm-publish: npm-packages
+	@set -eu; \
+	for pkg in $(NPM_PACKAGES_DIR)/*; do \
+		if [ -f "$$pkg/package.json" ]; then \
+			echo "Publishing $$pkg"; \
+			(cd "$$pkg" && $(NPM) publish --tag "$(NPM_DIST_TAG)" $(NPM_PUBLISH_FLAGS)); \
+		fi; \
+	done; \
+	echo "Publishing $(NPM_PACKAGES_DIR)"; \
+	(cd "$(NPM_PACKAGES_DIR)" && $(NPM) publish --tag "$(NPM_DIST_TAG)" $(NPM_PUBLISH_FLAGS))
+
+## npm-publish-dry-run: verify the npm publish payload without publishing
+npm-publish-dry-run: NPM_PUBLISH_FLAGS += --dry-run
+npm-publish-dry-run: npm-publish
+
+## npm-clean: remove generated npm packages
+npm-clean:
+	rm -rf $(NPM_PACKAGES_DIR)
 
 ## help: show this help
 help:

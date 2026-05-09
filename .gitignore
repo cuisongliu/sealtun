@@ -2,6 +2,7 @@
 /bin/
 /sealtun
 /sealtun.exe
+/packages/
 
 # Generated copyright application artifacts
 /docs/copyright/

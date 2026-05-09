@@ -3,6 +3,8 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,7 +32,9 @@ func TestDomainInferenceForSealosRegions(t *testing.T) {
 	}{
 		{name: "gzg run", region: "https://gzg.sealos.run", want: "sealosgzg.site"},
 		{name: "hzh run", region: "https://hzh.sealos.run", want: "sealoshzh.site"},
-		{name: "cloud io", region: "https://cloud.sealos.io", want: "cloud.sealos.app"},
+		{name: "bja run", region: "https://bja.sealos.run", want: "sealosbja.site"},
+		{name: "cloud io", region: "https://cloud.sealos.io", want: "cloud.sealos.io"},
+		{name: "usw io", region: "https://usw-1.sealos.io", want: "usw-1.sealos.app"},
 		{name: "custom", region: "https://apps.example.com", want: "apps.example.com"},
 	}
 
@@ -67,6 +71,23 @@ func TestDomainRejectsInvalidSealosDomainFromAuthData(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid Sealos ingress domain") {
 		t.Fatalf("expected invalid Sealos domain error, got %v", err)
+	}
+}
+
+func TestNewClientRejectsSymlinkedKubeconfig(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside-kubeconfig")
+	if err := os.WriteFile(outside, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(dir, "kubeconfig")
+	if err := os.Symlink(outside, linked); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := NewClient(linked, &auth.AuthData{Region: "https://gzg.sealos.run"})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected symlinked kubeconfig to be rejected, got %v", err)
 	}
 }
 
@@ -228,6 +249,18 @@ func TestEnsureTunnelUsesCompactHostAndSingleIngressWithBothPaths(t *testing.T) 
 	}
 }
 
+func TestTunnelPodLogOptionsPreservesZeroTail(t *testing.T) {
+	t.Parallel()
+
+	opts := tunnelPodLogOptions("sealtun-abc123", TunnelLogOptions{TailLines: 0})
+	if opts.TailLines == nil {
+		t.Fatal("expected TailLines pointer to be set for --tail 0")
+	}
+	if *opts.TailLines != 0 {
+		t.Fatalf("expected TailLines 0, got %d", *opts.TailLines)
+	}
+}
+
 func TestCleanupCreatedSkipsUnmanagedRaceResources(t *testing.T) {
 	name := "sealtun-abc123"
 	authName := authSecretName(name)
@@ -312,6 +345,37 @@ func TestRestoreDynamicResourceDoesNotDeleteUnmanagedReplacement(t *testing.T) {
 	}
 	if _, err := client.dynamicClient.Resource(issuerGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
 		t.Fatalf("unmanaged replacement should remain: %v", err)
+	}
+}
+
+func TestSanitizeDynamicResourceForApplyDropsServerManagedFields(t *testing.T) {
+	resource := customDomainCertificate("sealtun-abc123", "dev.example.com")
+	resource.SetUID("uid-123")
+	resource.SetResourceVersion("12345")
+	resource.SetGeneration(7)
+	resource.SetCreationTimestamp(metav1.Now())
+	resource.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: "test"}})
+	resource.Object["status"] = map[string]interface{}{"ready": true}
+
+	sanitizeDynamicResourceForApply(resource)
+
+	if resource.GetUID() != "" {
+		t.Fatalf("expected UID to be cleared, got %s", resource.GetUID())
+	}
+	if resource.GetResourceVersion() != "" {
+		t.Fatalf("expected resourceVersion to be cleared, got %s", resource.GetResourceVersion())
+	}
+	if resource.GetGeneration() != 0 {
+		t.Fatalf("expected generation to be cleared, got %d", resource.GetGeneration())
+	}
+	if !resource.GetCreationTimestamp().Time.IsZero() {
+		t.Fatalf("expected creation timestamp to be cleared, got %s", resource.GetCreationTimestamp())
+	}
+	if len(resource.GetManagedFields()) != 0 {
+		t.Fatalf("expected managed fields to be cleared, got %#v", resource.GetManagedFields())
+	}
+	if _, ok := resource.Object["status"]; ok {
+		t.Fatalf("expected status to be removed, got %#v", resource.Object["status"])
 	}
 }
 
@@ -456,6 +520,36 @@ func TestEnsureTunnelWithCustomDomainKeepsSealosHostAndCreatesCertResources(t *t
 	dnsNames, ok, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
 	if err != nil || !ok || len(dnsNames) != 1 || dnsNames[0] != "dev.example.com" {
 		t.Fatalf("unexpected certificate dnsNames ok=%v err=%v value=%#v", ok, err, dnsNames)
+	}
+}
+
+func TestEnsureTunnelWithOptionsUsesProvidedSealosHost(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicClient,
+		namespace:     "default",
+		domain:        "new-region.example.com",
+	}
+
+	hosts, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "https", "3000", TunnelOptions{
+		CustomDomain: "dev.example.com",
+		SealosHost:   "preserved-old-host.sealosold.site",
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+	if hosts.SealosHost != "preserved-old-host.sealosold.site" {
+		t.Fatalf("expected provided Sealos host to be preserved, got %s", hosts.SealosHost)
+	}
+
+	ingress, err := clientset.NetworkingV1().Ingresses("default").Get(context.Background(), "sealtun-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ingress: %v", err)
+	}
+	if len(ingress.Spec.Rules) != 2 || ingress.Spec.Rules[0].Host != "preserved-old-host.sealosold.site" || ingress.Spec.Rules[1].Host != "dev.example.com" {
+		t.Fatalf("unexpected ingress hosts: %#v", ingress.Spec.Rules)
 	}
 }
 
@@ -1113,7 +1207,7 @@ func TestDiagnoseTunnelReportsRemoteResources(t *testing.T) {
 			},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				Conditions: []corev1.PodCondition{{
@@ -1148,6 +1242,54 @@ func TestDiagnoseTunnelReportsRemoteResources(t *testing.T) {
 	}
 	if len(diag.Warnings) != 0 {
 		t.Fatalf("expected no warnings, got %#v", diag.Warnings)
+	}
+}
+
+func TestDiagnoseTunnelIgnoresPodsWithoutManagedLabel(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(1)},
+			Status:     appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1, UpdatedReplicas: 1},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Protocol: corev1.ProtocolTCP, Port: 80}}},
+		},
+		&netv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: netv1.IngressSpec{Rules: []netv1.IngressRule{{
+				Host:             "abc.example.com",
+				IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{{Path: "/"}}}},
+			}}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionFalse,
+			}}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
+			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}}},
+		},
+	)
+	client := &Client{clientset: clientset, namespace: "default", domain: "example.com"}
+
+	diag, err := client.DiagnoseTunnel(context.Background(), "abc123")
+	if err != nil {
+		t.Fatalf("DiagnoseTunnel returned error: %v", err)
+	}
+	if len(diag.Pods) != 1 || diag.Pods[0].Name != name+"-pod" {
+		t.Fatalf("expected only the managed tunnel pod, got %#v", diag.Pods)
+	}
+	if len(diag.Warnings) != 0 {
+		t.Fatalf("expected no warnings from ignored unrelated pod, got %#v", diag.Warnings)
 	}
 }
 
@@ -1186,7 +1328,7 @@ func TestDiagnoseTunnelReportsCustomDomainCertificate(t *testing.T) {
 			},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
 				Status: corev1.ConditionTrue,
@@ -1237,7 +1379,7 @@ func TestDiagnoseTunnelWarnsWhenCustomDomainIngressHostIsMissing(t *testing.T) {
 			},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
 				Status: corev1.ConditionTrue,
@@ -1286,7 +1428,7 @@ func TestDiagnoseTunnelWarnsWhenSealosControlHostIsMissing(t *testing.T) {
 			},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
 				Status: corev1.ConditionTrue,
@@ -1343,7 +1485,7 @@ func TestDiagnoseTunnelWarnsWhenCertificateDNSNameDoesNotMatchCustomDomain(t *te
 			},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
 				Status: corev1.ConditionTrue,
@@ -1386,7 +1528,7 @@ func TestDiagnoseTunnelTreatsEventListFailureAsWarning(t *testing.T) {
 			}}},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: map[string]string{"app": name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "default", Labels: managedLabels(name)},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
 				Status: corev1.ConditionTrue,

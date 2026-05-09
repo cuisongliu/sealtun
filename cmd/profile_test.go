@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -47,6 +49,22 @@ func TestCollectProfileItems(t *testing.T) {
 	}
 }
 
+func TestCollectProfileItemsDoesNotCreateConfigDirWhenLoggedOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	items, err := collectProfileItems()
+	if err != nil {
+		t.Fatalf("collectProfileItems returned error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no profile items, got %#v", items)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected profile list not to create config dir, stat error: %v", err)
+	}
+}
+
 func TestProfileCurrentCommandPrintsNoActiveProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -60,6 +78,9 @@ func TestProfileCurrentCommandPrintsNoActiveProfile(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "No active named profile") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected profile current not to create config dir, stat error: %v", err)
 	}
 }
 

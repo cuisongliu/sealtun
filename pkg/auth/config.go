@@ -53,6 +53,28 @@ type Profile struct {
 
 // GetSealosDir returns the config directory, copying only Sealtun-owned legacy files when needed.
 func GetSealosDir() (string, error) {
+	return getSealtunDir(true)
+}
+
+// CurrentSealtunDir returns the active Sealtun config directory path without
+// creating it or migrating legacy ~/.sealos data. Use this for scoped readers
+// such as the dashboard, where reading alternate config roots would be surprising.
+func CurrentSealtunDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, currentConfigDir)
+	if err := validateExistingPrivateDir(dir, "config directory"); err != nil {
+		if os.IsNotExist(err) {
+			return dir, nil
+		}
+		return dir, err
+	}
+	return dir, nil
+}
+
+func getSealtunDir(migrateLegacy bool) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -65,7 +87,7 @@ func GetSealosDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if currentMissing {
+	if currentMissing && migrateLegacy {
 		if info, legacyErr := os.Lstat(legacyDir); legacyErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 			if err := copyLegacyConfigFiles(legacyDir, dir); err != nil {
 				return "", fmt.Errorf("copy legacy config files from %s to %s: %w", legacyDir, dir, err)
@@ -75,7 +97,27 @@ func GetSealosDir() (string, error) {
 
 	// Verify directory is writable
 	testFile := filepath.Join(dir, ".write_test")
-	if err := os.WriteFile(testFile, []byte("ok"), 0600); err != nil {
+	if info, err := os.Lstat(testFile); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("config directory write-test file %s is not a regular file", testFile)
+		}
+		if err := os.Remove(testFile); err != nil {
+			return "", fmt.Errorf("remove stale config directory write-test file %s: %w", testFile, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	file, err := os.OpenFile(testFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- write-test path is fixed under the user-owned Sealtun config directory.
+	if err != nil {
+		return "", fmt.Errorf("config directory %s is not writable: %w", dir, err)
+	}
+	if _, err := file.Write([]byte("ok")); err != nil {
+		_ = file.Close()
+		_ = os.Remove(testFile)
+		return "", fmt.Errorf("config directory %s is not writable: %w", dir, err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(testFile)
 		return "", fmt.Errorf("config directory %s is not writable: %w", dir, err)
 	}
 	_ = os.Remove(testFile)
@@ -107,6 +149,23 @@ func EnsurePrivateDir(dir, label string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func validateExistingPrivateDir(dir, label string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s %s must not be a symlink", label, dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s %s is not a directory", label, dir)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s %s permissions must be 0700 or stricter", label, dir)
+	}
+	return nil
 }
 
 func copyLegacyConfigFiles(legacyDir, dir string) error {
@@ -306,7 +365,7 @@ func LoadProfile(name string) (*Profile, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	kubeconfig, err := os.ReadFile(filepath.Join(dir, "kubeconfig")) // #nosec G304 -- profile kubeconfig path is derived from a validated profile name under the user-owned config directory.
+	kubeconfig, err := readRegularFile(filepath.Join(dir, "kubeconfig"), "profile kubeconfig")
 	if err != nil {
 		return nil, "", err
 	}
@@ -350,11 +409,22 @@ func DeleteProfile(name string) error {
 }
 
 func ListProfiles() ([]Profile, error) {
-	dir, err := ProfilesDir()
+	root, err := CurrentSealtunDir()
 	if err != nil {
 		return nil, err
 	}
-	current, err := CurrentProfileName()
+	if _, err := os.Lstat(root); os.IsNotExist(err) {
+		return []Profile{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(root, profilesDirName)
+	if err := validateExistingPrivateDir(dir, "profiles directory"); os.IsNotExist(err) {
+		return []Profile{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	current, err := CurrentProfileNameFromDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +483,11 @@ func CurrentProfileName() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(root, profileFileName)) // #nosec G304 -- current profile marker path is fixed under the user-owned config directory.
+	return CurrentProfileNameFromDir(root)
+}
+
+func CurrentProfileNameFromDir(root string) (string, error) {
+	data, err := readRegularFile(filepath.Join(root, profileFileName), "current profile marker")
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -440,7 +514,7 @@ func ActiveKubeconfig() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "kubeconfig")) // #nosec G304 -- kubeconfig path is fixed under the user-owned config directory.
+	data, err := readRegularFile(filepath.Join(dir, "kubeconfig"), "active kubeconfig")
 	if err != nil {
 		return "", err
 	}
@@ -469,7 +543,7 @@ func profileFromAuthData(name string, authData *AuthData, current bool, kubeconf
 }
 
 func readExistingFile(path string) ([]byte, bool, error) {
-	data, err := os.ReadFile(path) // #nosec G304 -- path is one of the fixed Sealtun auth files under the user-owned config directory.
+	data, err := readRegularFile(path, "config file")
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}
@@ -518,11 +592,15 @@ func LoadAuthData() (*AuthData, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadAuthDataFromDir(dir)
+}
+
+func LoadAuthDataFromDir(dir string) (*AuthData, error) {
 	return loadAuthDataFromPath(filepath.Join(dir, "auth.json"))
 }
 
 func loadAuthDataFromPath(path string) (*AuthData, error) {
-	b, err := os.ReadFile(path) // #nosec G304 -- auth path is fixed under the user-owned Sealtun config directory or a validated profile directory.
+	b, err := readRegularFile(path, "auth file")
 	if err != nil {
 		return nil, err
 	}
@@ -531,6 +609,17 @@ func loadAuthDataFromPath(path string) (*AuthData, error) {
 		return nil, err
 	}
 	return &data, nil
+}
+
+func readRegularFile(path, label string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s %s is not a regular file", label, path)
+	}
+	return os.ReadFile(path) // #nosec G304 -- callers pass fixed Sealtun config paths or validated profile paths.
 }
 
 // ClearAuthData removes the persisted auth session and kubeconfig files.

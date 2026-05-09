@@ -29,7 +29,9 @@ type RegionOption struct {
 var knownRegions = []RegionOption{
 	{Name: "gzg", URL: "https://gzg.sealos.run", SealosDomain: "sealosgzg.site"},
 	{Name: "hzh", URL: "https://hzh.sealos.run", SealosDomain: "sealoshzh.site"},
+	{Name: "bja", URL: "https://bja.sealos.run", SealosDomain: "sealosbja.site"},
 	{Name: "cloud", URL: "https://cloud.sealos.io", SealosDomain: "cloud.sealos.io"},
+	{Name: "usw", URL: "https://usw-1.sealos.io", SealosDomain: "usw-1.sealos.app"},
 }
 
 func KnownRegions() []RegionOption {
@@ -61,7 +63,12 @@ func SetInsecureSkipTLSVerify(enabled bool) {
 }
 
 func httpClient() *http.Client {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	if insecureSkipTLSVerify.Load() {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- enabled only by the explicit --insecure CLI flag for TLS troubleshooting.
@@ -136,7 +143,7 @@ func RequestDeviceAuthorization(region string) (*DeviceAuthResponse, error) {
 	}
 
 	var res DeviceAuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -174,10 +181,13 @@ func PollForToken(region, deviceCode string, interval, expiresIn int) (*TokenRes
 			continue // Network error, keep trying
 		}
 
-		body, _ := readLimitedResponseBody(resp.Body)
+		body, bodyErr := readBoundedResponseBody(resp.Body)
 		_ = resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
+			if bodyErr != nil {
+				return nil, bodyErr
+			}
 			var tokenRes TokenResponse
 			if err := json.Unmarshal(body, &tokenRes); err != nil {
 				return nil, err
@@ -243,7 +253,7 @@ func GetRegionToken(region, accessToken string) (*RegionTokenResponse, error) {
 	}
 
 	var res RegionTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -271,7 +281,7 @@ func ListWorkspaces(region, regionalToken string) (*NamespaceListResponse, error
 	}
 
 	var res NamespaceListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -309,7 +319,7 @@ func GetInitData(region string) (*InitDataResponse, error) {
 	}
 
 	var res InitDataResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -317,4 +327,23 @@ func GetInitData(region string) (*InitDataResponse, error) {
 
 func readLimitedResponseBody(r io.Reader) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxAuthResponseBodyBytes))
+}
+
+func decodeLimitedJSON(r io.Reader, v interface{}) error {
+	body, err := readBoundedResponseBody(r)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, v)
+}
+
+func readBoundedResponseBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxAuthResponseBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxAuthResponseBodyBytes {
+		return body[:maxAuthResponseBodyBytes], fmt.Errorf("response body exceeds %d bytes", maxAuthResponseBodyBytes)
+	}
+	return body, nil
 }

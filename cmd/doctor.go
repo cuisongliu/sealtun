@@ -37,7 +37,7 @@ var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Run local Sealtun diagnostics",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload, err := collectDoctorPayload()
+		payload, err := collectDoctorPayloadWithContext(cmd.Context())
 		if err != nil {
 			return err
 		}
@@ -59,6 +59,10 @@ func init() {
 }
 
 func collectDoctorPayload() (*doctorPayload, error) {
+	return collectDoctorPayloadWithContext(context.Background())
+}
+
+func collectDoctorPayloadWithContext(ctx context.Context) (*doctorPayload, error) {
 	status, err := collectStatus()
 	if err != nil {
 		return nil, err
@@ -68,7 +72,10 @@ func collectDoctorPayload() (*doctorPayload, error) {
 	if err != nil {
 		return nil, err
 	}
+	return collectDoctorPayloadFromItems(ctx, status, items, collectRemoteDiagnosticsWithContext)
+}
 
+func collectDoctorPayloadFromItems(ctx context.Context, status *statusPayload, items []listItem, remoteCollector remoteDiagnosticsCollector) (*doctorPayload, error) {
 	payload := &doctorPayload{
 		DaemonRunning:     status.DaemonRunning,
 		LoggedIn:          status.LoggedIn,
@@ -94,7 +101,7 @@ func collectDoctorPayload() (*doctorPayload, error) {
 			payload.StaleSessions++
 		}
 	}
-	runDoctorRemoteDiagnostics(payload, items)
+	runDoctorRemoteDiagnostics(ctx, payload, items, remoteCollector)
 
 	if payload.TotalSessions == 0 {
 		payload.Warnings = append(payload.Warnings, "no local tunnel sessions found")
@@ -127,8 +134,11 @@ func collectDoctorPayload() (*doctorPayload, error) {
 	return payload, nil
 }
 
-func runDoctorRemoteDiagnostics(payload *doctorPayload, items []listItem) {
-	ctx, cancel := context.WithTimeout(context.Background(), doctorRemoteTimeout)
+func runDoctorRemoteDiagnostics(parent context.Context, payload *doctorPayload, items []listItem, remoteCollector remoteDiagnosticsCollector) {
+	if remoteCollector == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, doctorRemoteTimeout)
 	defer cancel()
 
 	type result struct {
@@ -163,7 +173,7 @@ func runDoctorRemoteDiagnostics(payload *doctorPayload, items []listItem) {
 					}
 					continue
 				}
-				remote, err := collectRemoteDiagnosticsWithContext(ctx, *sess)
+				remote, err := remoteCollector(ctx, *sess)
 				if err != nil {
 					if ctx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 						return

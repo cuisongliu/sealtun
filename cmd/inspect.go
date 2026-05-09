@@ -32,6 +32,8 @@ type inspectPayload struct {
 	Warnings           []string               `json:"warnings,omitempty"`
 }
 
+type remoteDiagnosticsCollector func(context.Context, session.TunnelSession) (*k8s.TunnelDiagnostics, error)
+
 var inspectJSON bool
 var inspectRemote bool
 
@@ -40,7 +42,7 @@ var inspectCmd = &cobra.Command{
 	Short: "Inspect a local Sealtun tunnel session",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload, err := collectInspectPayload(args[0])
+		payload, err := collectInspectPayloadWithContext(cmd.Context(), args[0])
 		if err != nil {
 			return err
 		}
@@ -63,6 +65,10 @@ func init() {
 }
 
 func collectInspectPayload(tunnelID string) (*inspectPayload, error) {
+	return collectInspectPayloadWithContext(context.Background(), tunnelID)
+}
+
+func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*inspectPayload, error) {
 	sess, err := findSession(tunnelID)
 	if err != nil {
 		return nil, err
@@ -104,7 +110,10 @@ func collectInspectPayload(tunnelID string) (*inspectPayload, error) {
 		payload.Warnings = append(payload.Warnings, "recorded process is no longer running")
 	}
 	if inspectRemote {
-		if remote, err := collectRemoteDiagnostics(*sess); err != nil {
+		remoteCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		remote, err := collectRemoteDiagnosticsWithContext(remoteCtx, *sess)
+		cancel()
+		if err != nil {
 			payload.Warnings = append(payload.Warnings, fmt.Sprintf("remote diagnostics unavailable: %v", err))
 		} else {
 			payload.Remote = remote
@@ -115,16 +124,17 @@ func collectInspectPayload(tunnelID string) (*inspectPayload, error) {
 	return payload, nil
 }
 
-func collectRemoteDiagnostics(sess session.TunnelSession) (*k8s.TunnelDiagnostics, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	return collectRemoteDiagnosticsWithContext(ctx, sess)
-}
-
 func collectRemoteDiagnosticsWithContext(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelDiagnostics, error) {
 	client, err := k8sClientForSession(sess)
 	if err != nil {
 		return nil, err
+	}
+	return collectRemoteDiagnosticsWithClient(ctx, sess, client)
+}
+
+func collectRemoteDiagnosticsWithClient(ctx context.Context, sess session.TunnelSession, client *k8s.Client) (*k8s.TunnelDiagnostics, error) {
+	if client == nil {
+		return nil, fmt.Errorf("kubernetes client is unavailable")
 	}
 	namespacedClient := client.WithNamespace(sess.Namespace)
 	return namespacedClient.DiagnoseTunnelWithOptions(ctx, sess.TunnelID, k8s.TunnelOptions{

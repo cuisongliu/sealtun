@@ -54,6 +54,10 @@ func SessionsDir() (string, error) {
 		return "", err
 	}
 
+	return SessionsDirFromConfigDir(root)
+}
+
+func SessionsDirFromConfigDir(root string) (string, error) {
 	dir := filepath.Join(root, sessionsDirName)
 	if _, err := auth.EnsurePrivateDir(dir, "sessions directory"); err != nil {
 		return "", err
@@ -149,7 +153,14 @@ func acquireSessionLock() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	return acquireSessionLockFromConfigDir(root)
+}
+
+func acquireSessionLockFromConfigDir(root string) (func(), error) {
 	path := filepath.Join(root, sessionLockFileName)
+	if err := validateSessionLockPath(path); err != nil {
+		return nil, err
+	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- lock path is fixed under the user-owned Sealtun config directory.
 	if err != nil {
@@ -164,6 +175,20 @@ func acquireSessionLock() (func(), error) {
 		_ = unlockSessionFile(file)
 		_ = file.Close()
 	}, nil
+}
+
+func validateSessionLockPath(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("session lock %s is not a regular file", path)
+	}
+	return nil
 }
 
 func preserveScrubbedCredentials(path string, next *TunnelSession) {
@@ -181,14 +206,12 @@ func preserveScrubbedCredentials(path string, next *TunnelSession) {
 	}
 	if existing.Secret == "" {
 		next.Secret = ""
+		next.Kubeconfig = ""
 		next.PID = 0
 		next.ConnectionState = ConnectionStateStopped
 		if next.LastError == "" {
 			next.LastError = "local credentials scrubbed"
 		}
-	}
-	if existing.Kubeconfig == "" {
-		next.Kubeconfig = ""
 	}
 }
 
@@ -278,13 +301,30 @@ func Get(tunnelID string) (*TunnelSession, error) {
 		return nil, err
 	}
 
-	release, err := acquireSessionLock()
+	root, err := auth.CurrentSealtunDir()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(root); err != nil {
+		return nil, err
+	}
+	if exists, err := sessionsDirExists(root); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, os.ErrNotExist
+	}
+
+	release, err := acquireSessionLockFromConfigDir(root)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 
-	dir, err := SessionsDir()
+	return getLockedFromConfigDir(root, tunnelID)
+}
+
+func getLockedFromConfigDir(root, tunnelID string) (*TunnelSession, error) {
+	dir, err := SessionsDirFromConfigDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +356,21 @@ func Get(tunnelID string) (*TunnelSession, error) {
 }
 
 func List() ([]TunnelSession, error) {
+	root, err := auth.CurrentSealtunDir()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(root); os.IsNotExist(err) {
+		return []TunnelSession{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if exists, err := sessionsDirExists(root); err != nil {
+		return nil, err
+	} else if !exists {
+		return []TunnelSession{}, nil
+	}
+
 	release, err := acquireSessionLock()
 	if err != nil {
 		return nil, err
@@ -325,8 +380,41 @@ func List() ([]TunnelSession, error) {
 	return listLocked()
 }
 
+func sessionsDirExists(root string) (bool, error) {
+	dir := filepath.Join(root, sessionsDirName)
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("sessions directory %s is not a directory", dir)
+	}
+	return true, nil
+}
+
+func ListFromConfigDir(root string) ([]TunnelSession, error) {
+	release, err := acquireSessionLockFromConfigDir(root)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	return listLockedFromConfigDir(root)
+}
+
 func listLocked() ([]TunnelSession, error) {
-	dir, err := SessionsDir()
+	root, err := auth.GetSealosDir()
+	if err != nil {
+		return nil, err
+	}
+	return listLockedFromConfigDir(root)
+}
+
+func listLockedFromConfigDir(root string) ([]TunnelSession, error) {
+	dir, err := SessionsDirFromConfigDir(root)
 	if err != nil {
 		return nil, err
 	}

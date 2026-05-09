@@ -46,7 +46,7 @@ func ensureDaemonRunning() error {
 	}
 
 	logPath := filepath.Join(root, "daemon.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- daemon log path is fixed under the user-owned Sealtun config directory.
+	logFile, err := openDaemonLogFile(logPath)
 	if err != nil {
 		return fmt.Errorf("open daemon log file: %w", err)
 	}
@@ -78,6 +78,17 @@ func ensureDaemonRunning() error {
 
 	_ = cmd.Process.Release()
 	return fmt.Errorf("daemon did not publish liveness within 8s")
+}
+
+func openDaemonLogFile(path string) (*os.File, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("daemon log %s is not a regular file", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- daemon log path is fixed under the user-owned Sealtun config directory and Lstat-validated before opening.
 }
 
 func waitForDaemonSession(tunnelID string, timeout time.Duration) error {

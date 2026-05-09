@@ -1,8 +1,10 @@
 package tunnel
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -28,6 +30,14 @@ type Server struct {
 	upgrader      websocket.Upgrader
 	reverseProxy  *httputil.ReverseProxy
 	connectedAt   atomic.Int64
+
+	totalRequests      atomic.Int64
+	activeRequests     atomic.Int64
+	totalResponseBytes atomic.Int64
+	total5xx           atomic.Int64
+	lastStatus         atomic.Int64
+	lastRequestAt      atomic.Int64
+	totalDurationMs    atomic.Int64
 }
 
 func NewServer(secret string, port int, protocol string, localPort string) *Server {
@@ -81,7 +91,11 @@ func (s *Server) proxyDialContext(ctx context.Context, network, addr string) (ne
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/_sealtun/healthz" {
-		s.handleHealthz(w)
+		s.handleHealthz(w, r)
+		return
+	}
+	if r.URL.Path == "/_sealtun/metrics" {
+		s.handleMetrics(w, r)
 		return
 	}
 
@@ -92,10 +106,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. All other requests are public traffic -> Forward to Local Client via Reverse Proxy
-	s.reverseProxy.ServeHTTP(w, r)
+	s.handlePublicTraffic(w, r)
 }
 
-func (s *Server) handleHealthz(w http.ResponseWriter) {
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if !requireReadOnlyMethod(w, r) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	s.mu.RLock()
 	connected := s.activeSession != nil && !s.activeSession.IsClosed()
 	s.mu.RUnlock()
@@ -110,12 +128,143 @@ func (s *Server) handleHealthz(w http.ResponseWriter) {
 	_, _ = fmt.Fprintf(w, `{"ok":true,"clientConnected":true,"protocol":%q,"connectedAt":%q}`, s.protocol, time.Unix(s.connectedAt.Load(), 0).Format(time.RFC3339))
 }
 
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !requireReadOnlyMethod(w, r) {
+		return
+	}
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	s.mu.RLock()
+	connected := s.activeSession != nil && !s.activeSession.IsClosed()
+	s.mu.RUnlock()
+
+	connectedAt := ""
+	if value := s.connectedAt.Load(); value > 0 {
+		connectedAt = time.Unix(value, 0).Format(time.RFC3339)
+	}
+	lastRequestAt := ""
+	if value := s.lastRequestAt.Load(); value > 0 {
+		lastRequestAt = time.Unix(value, 0).Format(time.RFC3339)
+	}
+
+	total := s.totalRequests.Load()
+	avgDurationMs := int64(0)
+	if total > 0 {
+		avgDurationMs = s.totalDurationMs.Load() / total
+	}
+	payload := map[string]interface{}{
+		"clientConnected":     connected,
+		"connectedAt":         connectedAt,
+		"protocol":            s.protocol,
+		"localPort":           s.localPort,
+		"totalRequests":       total,
+		"activeRequests":      s.activeRequests.Load(),
+		"totalResponseBytes":  s.totalResponseBytes.Load(),
+		"total5xx":            s.total5xx.Load(),
+		"lastStatus":          s.lastStatus.Load(),
+		"lastRequestAt":       lastRequestAt,
+		"averageDurationMs":   avgDurationMs,
+		"totalDurationMillis": s.totalDurationMs.Load(),
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func requireReadOnlyMethod(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	s.totalRequests.Add(1)
+	s.activeRequests.Add(1)
+	defer s.activeRequests.Add(-1)
+
+	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	s.reverseProxy.ServeHTTP(recorder, r)
+
+	status := recorder.status
+	s.lastStatus.Store(int64(status))
+	s.lastRequestAt.Store(time.Now().Unix())
+	s.totalResponseBytes.Add(int64(recorder.bytes))
+	s.totalDurationMs.Add(time.Since(start).Milliseconds())
+	if status >= 500 {
+		s.total5xx.Add(1)
+	}
+	fmt.Printf("request method=%s path=%q status=%d bytes=%d duration=%s\n", r.Method, redactedRequestPath(r), status, recorder.bytes, time.Since(start).Round(time.Millisecond))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+	bytes       int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.wroteHeader {
+		return
+	}
+	r.status = status
+	r.wroteHeader = true
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(data []byte) (int, error) {
+	if !r.wroteHeader {
+		r.status = http.StatusOK
+		r.wroteHeader = true
+	}
+	n, err := r.ResponseWriter.Write(data)
+	r.bytes += n
+	return n, err
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func redactedRequestPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	path := r.URL.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if r.URL.RawQuery != "" {
+		return path + "?<redacted>"
+	}
+	return path
+}
+
 func (s *Server) handleTunnelConnection(w http.ResponseWriter, r *http.Request) {
 	// Authenticate
-	authHeader := r.Header.Get("Authorization")
-	expectedAuth := fmt.Sprintf("Bearer %s", s.secret)
-
-	if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedAuth)) != 1 {
+	if !s.authorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -177,6 +326,12 @@ func (s *Server) handleTunnelConnection(w http.ResponseWriter, r *http.Request) 
 	// Wait for the session to close before exiting the handler
 	<-session.CloseChan()
 	fmt.Println("Local client disconnected.")
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	authHeader := r.Header.Get("Authorization")
+	expectedAuth := fmt.Sprintf("Bearer %s", s.secret)
+	return subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedAuth)) == 1
 }
 
 func (s *Server) Start() error {

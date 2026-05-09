@@ -34,6 +34,14 @@ func statePath() (string, error) {
 	return filepath.Join(root, stateFileName), nil
 }
 
+func existingStatePath() (string, error) {
+	root, err := auth.CurrentSealtunDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, stateFileName), nil
+}
+
 func SaveState(pid int) error {
 	path, err := statePath()
 	if err != nil {
@@ -95,7 +103,7 @@ func AcquireLaunchLock() (func(), error) {
 		return nil, err
 	}
 
-	if info, err := os.Stat(path); err == nil {
+	if info, err := regularDaemonFileInfo(path, "daemon launch lock"); err == nil {
 		switch alive, ok := lockOwnerAlive(path); {
 		case ok && alive:
 			return nil, os.ErrExist
@@ -104,6 +112,8 @@ func AcquireLaunchLock() (func(), error) {
 		case time.Since(info.ModTime()) > 30*time.Second:
 			_ = os.Remove(path)
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 
 	return createOwnedLock(path)
@@ -123,7 +133,7 @@ func AcquireRuntimeLock() (func(), error) {
 		return nil, err
 	}
 
-	if info, err := os.Stat(path); err == nil {
+	if info, err := regularDaemonFileInfo(path, "daemon runtime lock"); err == nil {
 		if alive, ok := lockOwnerAlive(path); ok && alive {
 			return nil, os.ErrExist
 		}
@@ -136,6 +146,8 @@ func AcquireRuntimeLock() (func(), error) {
 		case time.Since(info.ModTime()) > heartbeatMaxAge:
 			_ = os.Remove(path)
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 
 	return createOwnedLock(path)
@@ -158,7 +170,7 @@ func createOwnedLock(path string) (func(), error) {
 	}
 
 	return func() {
-		data, err := os.ReadFile(path) // #nosec G304 -- lock path is fixed under the user-owned Sealtun config directory.
+		data, err := readDaemonRegularFile(path, "daemon lock")
 		if err == nil && string(data) == token {
 			_ = os.Remove(path)
 		}
@@ -166,7 +178,7 @@ func createOwnedLock(path string) (func(), error) {
 }
 
 func lockOwnerAlive(path string) (bool, bool) {
-	data, err := os.ReadFile(path) // #nosec G304 -- lock path is fixed under the user-owned Sealtun config directory.
+	data, err := readDaemonRegularFile(path, "daemon lock")
 	if err != nil {
 		return false, false
 	}
@@ -182,12 +194,12 @@ func lockOwnerAlive(path string) (bool, bool) {
 }
 
 func LoadState() (*State, error) {
-	path, err := statePath()
+	path, err := existingStatePath()
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path) // #nosec G304 -- daemon state path is fixed under the user-owned Sealtun config directory.
+	data, err := readDaemonRegularFile(path, "daemon state")
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +211,26 @@ func LoadState() (*State, error) {
 	return &state, nil
 }
 
+func regularDaemonFileInfo(path, label string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s %s is not a regular file", label, path)
+	}
+	return info, nil
+}
+
+func readDaemonRegularFile(path, label string) ([]byte, error) {
+	if _, err := regularDaemonFileInfo(path, label); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path) // #nosec G304 -- daemon files are fixed under the user-owned Sealtun config directory and are Lstat-validated before reading.
+}
+
 func DeleteState() error {
-	path, err := statePath()
+	path, err := existingStatePath()
 	if err != nil {
 		return err
 	}

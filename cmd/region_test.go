@@ -54,6 +54,22 @@ func TestCollectRegionListItems(t *testing.T) {
 	}
 }
 
+func TestCollectRegionListItemsDoesNotCreateConfigDirWhenLoggedOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	items, err := collectRegionListItems()
+	if err != nil {
+		t.Fatalf("collectRegionListItems: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected known regions")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected region list not to create config dir, stat error: %v", err)
+	}
+}
+
 func TestCollectRegionListItemsFailsOnCorruptAuth(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -69,6 +85,40 @@ func TestCollectRegionListItemsFailsOnCorruptAuth(t *testing.T) {
 	if _, err := collectRegionListItems(); err == nil {
 		t.Fatal("expected corrupt auth to fail")
 	}
+}
+
+func TestCollectRegionListItemsUsesActiveSealosDomain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	authJSON, err := json.Marshal(auth.AuthData{
+		Region:       "https://hzh.sealos.run",
+		SealosDomain: "runtime-hzh.example",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), authJSON, 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	items, err := collectRegionListItems()
+	if err != nil {
+		t.Fatalf("collectRegionListItems: %v", err)
+	}
+	for _, item := range items {
+		if item.Current {
+			if item.SealosDomain != "runtime-hzh.example" {
+				t.Fatalf("expected active launchpad domain to win, got %s", item.SealosDomain)
+			}
+			return
+		}
+	}
+	t.Fatal("expected current region item")
 }
 
 func TestRegionCurrentCommandPrintsRegionOnlyByDefault(t *testing.T) {

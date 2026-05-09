@@ -56,7 +56,11 @@ var profileCurrentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show the active named profile",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, err := auth.CurrentProfileName()
+		root, err := auth.CurrentSealtunDir()
+		if err != nil {
+			return fmt.Errorf("load current profile marker: %w", err)
+		}
+		name, err := auth.CurrentProfileNameFromDir(root)
 		if err != nil {
 			return fmt.Errorf("load current profile marker: %w", err)
 		}

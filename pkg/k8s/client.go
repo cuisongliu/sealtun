@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
+	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
@@ -136,6 +140,12 @@ type EventDiagnostic struct {
 	Object  string `json:"object,omitempty"`
 }
 
+type TunnelLogOptions struct {
+	TailLines    int64
+	SinceSeconds int64
+	Follow       bool
+}
+
 type resourceKind string
 
 const (
@@ -156,8 +166,10 @@ const (
 var reservedCustomDomainSuffixes = []string{
 	"cloud.sealos.app",
 	"cloud.sealos.io",
+	"sealosbja.site",
 	"sealosgzg.site",
 	"sealoshzh.site",
+	"usw-1.sealos.app",
 }
 
 var (
@@ -173,7 +185,11 @@ type createdResource struct {
 
 // NewClient initializes a Kubernetes client from the sealtun config
 func NewClient(kubeconfigPath string, authData *auth.AuthData) (*Client, error) {
-	rawConfig, err := clientcmd.LoadFromFile(kubeconfigPath)
+	kubeconfig, err := readKubeconfigFile(kubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+	rawConfig, err := clientcmd.Load(kubeconfig)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +201,17 @@ func NewClient(kubeconfigPath string, authData *auth.AuthData) (*Client, error) 
 	config.WarningHandler = rest.NoWarnings{}
 
 	return newClientFromRawConfig(config, *rawConfig, authData)
+}
+
+func readKubeconfigFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("kubeconfig %s is not a regular file", path)
+	}
+	return os.ReadFile(path) // #nosec G304 -- callers pass the fixed Sealtun kubeconfig path or a validated profile path.
 }
 
 // NewClientFromKubeconfig initializes a Kubernetes client from a raw kubeconfig string.
@@ -225,14 +252,16 @@ func newClientFromRawConfig(config *rest.Config, rawConfig clientcmdapi.Config, 
 	if authData != nil && authData.SealosDomain != "" {
 		domain = normalizeHostname(authData.SealosDomain)
 	} else if authData != nil && authData.Region != "" {
-		if u, err := url.Parse(authData.Region); err == nil {
+		if knownDomain := knownSealosDomainForRegion(authData.Region); knownDomain != "" {
+			domain = knownDomain
+		} else if u, err := url.Parse(authData.Region); err == nil {
 			host := u.Host
 			if strings.Contains(host, ":") {
 				host = strings.Split(host, ":")[0]
 			}
 			switch {
 			case host == "cloud.sealos.io":
-				domain = "cloud.sealos.app"
+				domain = "cloud.sealos.io"
 			case strings.HasSuffix(host, ".sealos.run"):
 				region := strings.TrimSuffix(host, ".sealos.run")
 				if region != "" {
@@ -262,6 +291,16 @@ func newClientFromRawConfig(config *rest.Config, rawConfig clientcmdapi.Config, 
 	}, nil
 }
 
+func knownSealosDomainForRegion(regionURL string) string {
+	normalized := strings.TrimRight(strings.TrimSpace(regionURL), "/")
+	for _, region := range auth.KnownRegions() {
+		if normalized == region.URL {
+			return normalizeHostname(region.SealosDomain)
+		}
+	}
+	return ""
+}
+
 // EnsureTunnel deploys the server module in kubernetes
 func (c *Client) EnsureTunnel(ctx context.Context, tunnelID string, secret string, protocol string, localPort string) (string, error) {
 	hosts, err := c.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, TunnelOptions{})
@@ -288,6 +327,16 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 
 	name := fmt.Sprintf("sealtun-%s", tunnelID)
 	opts.CustomDomain = normalizeHostname(opts.CustomDomain)
+	opts.SealosHost = normalizeHostname(opts.SealosHost)
+	if opts.SealosHost == "" {
+		opts.SealosHost = c.sealosHost(name)
+	}
+	if err := validateSealosHost(opts.SealosHost); err != nil {
+		return TunnelHosts{}, err
+	}
+	if err := validateCustomDomainTarget(opts.CustomDomain, opts.SealosHost); err != nil {
+		return TunnelHosts{}, err
+	}
 	created := []createdResource{}
 	rollback := true
 	customSnapshotsCaptured := false
@@ -374,6 +423,10 @@ func managedLabels(name string) map[string]string {
 
 func managedLabelMatches(labels map[string]string, owner string) bool {
 	return labels != nil && labels[managedLabelKey] == owner
+}
+
+func tunnelPodLabelSelector(name string) string {
+	return klabels.Set(managedLabels(name)).AsSelector().String()
 }
 
 func rejectUnmanagedExisting(kind, resourceName, owner string, labels map[string]string) error {
@@ -562,10 +615,19 @@ func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {
 }
 
 func (c *Client) ensureIngress(ctx context.Context, name string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
-	return c.ensureIngressForHost(ctx, name, c.sealosHost(name), opts)
+	sealosHost := normalizeHostname(opts.SealosHost)
+	if sealosHost == "" {
+		sealosHost = c.sealosHost(name)
+	}
+	return c.ensureIngressForHost(ctx, name, sealosHost, opts)
 }
 
 func (c *Client) ensureIngressForHost(ctx context.Context, name, sealosHost string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
+	sealosHost = normalizeHostname(sealosHost)
+	opts.CustomDomain = normalizeHostname(opts.CustomDomain)
+	if err := validateSealosHost(sealosHost); err != nil {
+		return TunnelHosts{}, nil, err
+	}
 	if err := validateCustomDomainTarget(opts.CustomDomain, sealosHost); err != nil {
 		return TunnelHosts{}, nil, err
 	}
@@ -620,6 +682,16 @@ func validateCustomDomainTarget(customDomain, sealosHost string) error {
 		if customDomain == suffix || strings.HasSuffix(customDomain, "."+suffix) {
 			return fmt.Errorf("custom domain %s must not be under reserved Sealos domain %s", customDomain, suffix)
 		}
+	}
+	return nil
+}
+
+func validateSealosHost(value string) error {
+	if value == "" {
+		return fmt.Errorf("sealos CNAME target is required")
+	}
+	if err := validateCustomDomainHostname(value); err != nil {
+		return fmt.Errorf("invalid Sealos CNAME target: %w", err)
 	}
 	return nil
 }
@@ -948,6 +1020,9 @@ func (c *Client) ConfigureCustomDomain(ctx context.Context, tunnelID, sealosHost
 	if sealosHost == "" {
 		sealosHost = c.sealosHost(name)
 	}
+	if err := validateSealosHost(sealosHost); err != nil {
+		return TunnelHosts{}, err
+	}
 	if err := validateCustomDomainTarget(customDomain, sealosHost); err != nil {
 		return TunnelHosts{}, err
 	}
@@ -997,6 +1072,9 @@ func (c *Client) ClearCustomDomain(ctx context.Context, tunnelID, sealosHost str
 	name := fmt.Sprintf("sealtun-%s", tunnelID)
 	if sealosHost == "" {
 		sealosHost = c.sealosHost(name)
+	}
+	if err := validateSealosHost(sealosHost); err != nil {
+		return TunnelHosts{}, err
 	}
 	if err := c.validateTunnelCoreResources(ctx, name); err != nil {
 		return TunnelHosts{}, err
@@ -1067,9 +1145,9 @@ func (c *Client) restoreDynamicResource(ctx context.Context, gvr schema.GroupVer
 		return nil
 	}
 	restore := snapshot.DeepCopy()
+	sanitizeDynamicResourceForApply(restore)
 	restore.SetNamespace(c.namespace)
 	if apierrors.IsNotFound(err) {
-		restore.SetResourceVersion("")
 		_, err = resClient.Create(ctx, restore, metav1.CreateOptions{})
 		return err
 	}
@@ -1082,6 +1160,18 @@ func (c *Client) restoreDynamicResource(ctx context.Context, gvr schema.GroupVer
 	restore.SetResourceVersion(current.GetResourceVersion())
 	_, err = resClient.Update(ctx, restore, metav1.UpdateOptions{})
 	return err
+}
+
+func sanitizeDynamicResourceForApply(resource *unstructured.Unstructured) {
+	if resource == nil {
+		return
+	}
+	resource.SetUID("")
+	resource.SetResourceVersion("")
+	resource.SetGeneration(0)
+	resource.SetCreationTimestamp(metav1.Time{})
+	resource.SetManagedFields(nil)
+	delete(resource.Object, "status")
 }
 
 func (c *Client) deleteSecretIfOwned(ctx context.Context, secretName, owner string, cert *unstructured.Unstructured) (bool, error) {
@@ -1334,6 +1424,59 @@ func (c *Client) DiagnoseTunnel(ctx context.Context, tunnelID string) (*TunnelDi
 	return c.DiagnoseTunnelWithOptions(ctx, tunnelID, TunnelOptions{})
 }
 
+func (c *Client) StreamTunnelLogs(ctx context.Context, tunnelID string, out io.Writer, opts TunnelLogOptions) error {
+	if err := validateTunnelID(tunnelID); err != nil {
+		return err
+	}
+	if out == nil {
+		return fmt.Errorf("log output writer is required")
+	}
+	name := fmt.Sprintf("sealtun-%s", tunnelID)
+	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: tunnelPodLabelSelector(name),
+	})
+	if err != nil {
+		return fmt.Errorf("list tunnel pods for %s: %w", tunnelID, err)
+	}
+	if len(pods.Items) == 0 {
+		return fmt.Errorf("no tunnel pods found for %s", tunnelID)
+	}
+
+	sort.Slice(pods.Items, func(i, j int) bool {
+		return pods.Items[i].CreationTimestamp.Time.After(pods.Items[j].CreationTimestamp.Time)
+	})
+	pod := pods.Items[0]
+	logOpts := tunnelPodLogOptions(name, opts)
+
+	stream, err := c.clientset.CoreV1().Pods(c.namespace).GetLogs(pod.Name, logOpts).Stream(ctx)
+	if err != nil {
+		return fmt.Errorf("open logs for pod %s: %w", pod.Name, err)
+	}
+	defer stream.Close()
+
+	if _, err := fmt.Fprintf(out, "# pod=%s container=%s namespace=%s\n", pod.Name, name, c.namespace); err != nil {
+		return err
+	}
+	_, err = io.Copy(out, stream)
+	return err
+}
+
+func tunnelPodLogOptions(container string, opts TunnelLogOptions) *corev1.PodLogOptions {
+	logOpts := &corev1.PodLogOptions{
+		Container: container,
+		Follow:    opts.Follow,
+	}
+	if opts.TailLines >= 0 {
+		tailLines := opts.TailLines
+		logOpts.TailLines = &tailLines
+	}
+	if opts.SinceSeconds > 0 {
+		sinceSeconds := opts.SinceSeconds
+		logOpts.SinceSeconds = &sinceSeconds
+	}
+	return logOpts
+}
+
 func (c *Client) DiagnoseTunnelWithOptions(ctx context.Context, tunnelID string, opts TunnelOptions) (*TunnelDiagnostics, error) {
 	if err := validateTunnelID(tunnelID); err != nil {
 		return nil, err
@@ -1412,7 +1555,7 @@ func (c *Client) DiagnoseTunnelWithOptions(ctx context.Context, tunnelID string,
 	}
 	eventObjectNames := []string{name}
 	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", name),
+		LabelSelector: tunnelPodLabelSelector(name),
 	})
 	if err != nil {
 		diag.Warnings = append(diag.Warnings, fmt.Sprintf("remote pods unavailable: %v", err))

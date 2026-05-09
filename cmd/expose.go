@@ -59,7 +59,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return err
 		}
 		kcPath := filepath.Join(sealtunDir, "kubeconfig")
-		kubeconfigBytes, err := os.ReadFile(kcPath) // #nosec G304 -- kubeconfig path is fixed under the user-owned Sealtun config directory.
+		kubeconfig, err := auth.ActiveKubeconfig()
 		if err != nil {
 			return fmt.Errorf("failed to read kubeconfig: %w", err)
 		}
@@ -96,7 +96,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			TunnelID:        tunnelID,
 			Region:          authData.Region,
 			Namespace:       k8sClient.Namespace(),
-			Kubeconfig:      string(kubeconfigBytes),
+			Kubeconfig:      kubeconfig,
 			Protocol:        protocol,
 			Host:            hosts.PublicHost,
 			SealosHost:      hosts.SealosHost,

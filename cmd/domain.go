@@ -355,6 +355,10 @@ func collectDomainStatusWithVerifier(parent context.Context, tunnelID string, ti
 		sessions = list
 	}
 
+	return collectDomainStatusFromSessions(parent, sessions, timeout, verifier), nil
+}
+
+func collectDomainStatusFromSessions(parent context.Context, sessions []session.TunnelSession, timeout time.Duration, verifier domainVerifier) *domainStatusPayload {
 	payload := &domainStatusPayload{TotalSessions: len(sessions)}
 	targets := make([]session.TunnelSession, 0, len(sessions))
 	for _, sess := range sessions {
@@ -376,7 +380,7 @@ func collectDomainStatusWithVerifier(parent context.Context, tunnelID string, ti
 	if payload.CustomDomains == 0 {
 		payload.Warnings = append(payload.Warnings, "no custom domains configured")
 	}
-	return payload, nil
+	return payload
 }
 
 type domainStatusJob struct {
@@ -613,6 +617,10 @@ func waitForDomainReady(parent context.Context, sess session.TunnelSession, time
 }
 
 func verifyDomainForSession(ctx context.Context, sess session.TunnelSession) *domainVerifyPayload {
+	return verifyDomainForSessionWithRemote(ctx, sess, collectRemoteDiagnosticsWithContext)
+}
+
+func verifyDomainForSessionWithRemote(ctx context.Context, sess session.TunnelSession, remoteCollector remoteDiagnosticsCollector) *domainVerifyPayload {
 	sealosHost := sessionSealosHostForDomain(sess, "")
 	payload := &domainVerifyPayload{
 		TunnelID:     sess.TunnelID,
@@ -632,8 +640,9 @@ func verifyDomainForSession(ctx context.Context, sess session.TunnelSession) *do
 		}
 	}
 
-	remote, err := collectRemoteDiagnosticsWithContext(ctx, sess)
-	if err != nil {
+	if remoteCollector == nil {
+		payload.Warnings = append(payload.Warnings, "remote certificate diagnostics unavailable: remote collector is disabled")
+	} else if remote, err := remoteCollector(ctx, sess); err != nil {
 		payload.Warnings = append(payload.Warnings, fmt.Sprintf("remote certificate diagnostics unavailable: %v", err))
 	} else {
 		payload.IngressReady = remote.Ingress.Exists &&

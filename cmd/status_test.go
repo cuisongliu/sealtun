@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -27,6 +28,18 @@ func TestCollectStatusLoggedOut(t *testing.T) {
 	}
 	if status.AuthFile.Present {
 		t.Fatal("expected auth file to be absent")
+	}
+}
+
+func TestCollectStatusDoesNotCreateConfigDirWhenLoggedOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := collectStatus(); err != nil {
+		t.Fatalf("collectStatus returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected collectStatus not to create config dir, stat error: %v", err)
 	}
 }
 
@@ -195,5 +208,53 @@ func TestStatusJSONOutput(t *testing.T) {
 	}
 	if !strings.Contains(jsonText, `"kubeconfig"`) {
 		t.Fatalf("expected kubeconfig field in json output: %s", jsonText)
+	}
+}
+
+func TestCollectStatusDoesNotFollowKubeconfigSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := auth.GetSealosDir()
+	if err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
+	}
+	outside := filepath.Join(home, "outside-kubeconfig")
+	if err := os.WriteFile(outside, []byte(`
+apiVersion: v1
+kind: Config
+current-context: outside
+contexts:
+- name: outside
+  context:
+    cluster: outside-cluster
+clusters:
+- name: outside-cluster
+  cluster:
+    server: https://outside.example.com
+users:
+- name: outside-user
+  user:
+    token: abc
+`), 0o600); err != nil {
+		t.Fatalf("write outside kubeconfig: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "kubeconfig")); err != nil {
+		t.Fatalf("create kubeconfig symlink: %v", err)
+	}
+
+	status, err := collectStatus()
+	if err != nil {
+		t.Fatalf("collectStatus returned error: %v", err)
+	}
+	if status.Kubeconfig.CurrentContext != "" || status.Kubeconfig.Cluster != "" {
+		t.Fatalf("status followed kubeconfig symlink: %#v", status.Kubeconfig)
+	}
+	if status.Kubeconfig.Error == "" || !strings.Contains(status.Kubeconfig.Error, "not a regular file") {
+		t.Fatalf("expected symlink error, got %#v", status.Kubeconfig)
 	}
 }

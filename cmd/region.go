@@ -65,7 +65,7 @@ var regionCurrentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show the current Sealos Cloud region",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		authData, err := auth.LoadAuthData()
+		authData, err := loadActiveAuthDataReadOnly()
 		if err != nil {
 			if os.IsNotExist(err) {
 				return fmt.Errorf("not logged in")
@@ -111,12 +111,23 @@ func init() {
 
 func collectRegionListItems() ([]regionListItem, error) {
 	current := ""
-	if authData, err := auth.LoadAuthData(); err == nil {
+	currentSealosDomain := ""
+	if authData, err := loadActiveAuthDataReadOnly(); err == nil {
 		current = authData.Region
+		currentSealosDomain = authData.SealosDomain
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to load auth data: %w", err)
 	}
+	items := regionListItemsForCurrent(current)
+	for i := range items {
+		if items[i].Current && currentSealosDomain != "" {
+			items[i].SealosDomain = currentSealosDomain
+		}
+	}
+	return items, nil
+}
 
+func regionListItemsForCurrent(current string) []regionListItem {
 	regions := auth.KnownRegions()
 	items := make([]regionListItem, 0, len(regions))
 	for _, region := range regions {
@@ -128,5 +139,17 @@ func collectRegionListItems() ([]regionListItem, error) {
 			Current:      region.URL == current,
 		})
 	}
-	return items, nil
+	return items
+}
+
+func loadActiveAuthDataReadOnly() (*auth.AuthData, error) {
+	root, err := auth.CurrentSealtunDir()
+	if err != nil {
+		return nil, err
+	}
+	authData, err := auth.LoadAuthDataFromDir(root)
+	if err != nil {
+		return nil, err
+	}
+	return authData, nil
 }

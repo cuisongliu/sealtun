@@ -47,6 +47,70 @@ func TestSaveListDelete(t *testing.T) {
 	}
 }
 
+func TestListDoesNotCreateConfigDirWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	sessions, err := List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %#v", sessions)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected List not to create config dir, stat error: %v", err)
+	}
+}
+
+func TestListDoesNotCreateSessionsDirWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+
+	sessions, err := List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %#v", sessions)
+	}
+	if _, err := os.Stat(filepath.Join(root, sessionsDirName)); !os.IsNotExist(err) {
+		t.Fatalf("expected List not to create sessions dir, stat error: %v", err)
+	}
+}
+
+func TestGetDoesNotCreateConfigDirWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := Get("missing1"); !os.IsNotExist(err) {
+		t.Fatalf("expected missing session, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("expected Get not to create config dir, stat error: %v", err)
+	}
+}
+
+func TestGetDoesNotCreateSessionsDirWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+
+	if _, err := Get("missing1"); !os.IsNotExist(err) {
+		t.Fatalf("expected missing session, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, sessionsDirName)); !os.IsNotExist(err) {
+		t.Fatalf("expected Get not to create sessions dir, stat error: %v", err)
+	}
+}
+
 func TestSessionsDirRejectsSymlinkRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires extra privileges on Windows")
@@ -69,6 +133,32 @@ func TestSessionsDirRejectsSymlinkRoot(t *testing.T) {
 
 	if _, err := SessionsDir(); err == nil {
 		t.Fatal("expected sessions root symlink to be rejected")
+	}
+}
+
+func TestSessionLockRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create config root: %v", err)
+	}
+	outside := filepath.Join(home, "outside.lock")
+	if err := os.WriteFile(outside, []byte("lock"), 0o600); err != nil {
+		t.Fatalf("write outside lock: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, sessionLockFileName)); err != nil {
+		t.Fatalf("create session lock symlink: %v", err)
+	}
+
+	release, err := acquireSessionLockFromConfigDir(root)
+	if err == nil {
+		release()
+		t.Fatal("expected symlinked session lock to be rejected")
 	}
 }
 
@@ -396,6 +486,37 @@ func TestSaveDoesNotRestoreScrubbedCredentials(t *testing.T) {
 	}
 	if sess.ConnectionState != ConnectionStateStopped {
 		t.Fatalf("expected scrubbed session to stay stopped, got %s", sess.ConnectionState)
+	}
+}
+
+func TestSaveCanRehydrateLegacySessionMissingKubeconfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Save(TunnelSession{
+		TunnelID: "legacy123",
+		Secret:   "tunnel-secret",
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if err := Save(TunnelSession{
+		TunnelID:   "legacy123",
+		Kubeconfig: "apiVersion: v1",
+		Secret:     "tunnel-secret",
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	sess, err := Get("legacy123")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if sess.Kubeconfig == "" {
+		t.Fatal("expected legacy session kubeconfig to be rehydrated when the secret was not scrubbed")
+	}
+	if sess.Secret != "tunnel-secret" {
+		t.Fatalf("expected secret to remain, got %q", sess.Secret)
 	}
 }
 

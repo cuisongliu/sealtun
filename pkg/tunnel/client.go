@@ -33,16 +33,24 @@ func dialServerAndServe(ctx context.Context, wsURL, secret, localPort string, on
 	headers := http.Header{}
 	headers.Add("Authorization", fmt.Sprintf("Bearer %s", secret))
 
-	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
+	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		return fmt.Errorf("failed to dial tunnel server %s: %w", wsURL, err)
 	}
 	defer conn.Close()
 
 	// Intercept context cancellation to close TCP connection eagerly
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		_ = conn.Close()
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
 	}()
 
 	netConn := NewWSConn(conn)
@@ -89,7 +97,7 @@ func handleLocalForwarding(stream net.Conn, localPort string) {
 	defer stream.Close()
 
 	localAddr := fmt.Sprintf("localhost:%s", localPort)
-	localConn, err := net.Dial("tcp", localAddr)
+	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
 		warningMu.Lock()
 		if time.Since(lastWarning) > 2*time.Second {

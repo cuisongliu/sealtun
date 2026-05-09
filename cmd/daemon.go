@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 )
 
 type managedTunnel struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel      context.CancelFunc
+	done        chan struct{}
+	fingerprint string
 }
 
 var daemonCmd = &cobra.Command{
@@ -75,7 +77,13 @@ var daemonCmd = &cobra.Command{
 			}
 
 			for tunnelID, managedTunnel := range managed {
-				if _, ok := desired[tunnelID]; !ok {
+				desiredSession, ok := desired[tunnelID]
+				if !ok {
+					managedTunnel.cancel()
+					delete(managed, tunnelID)
+					continue
+				}
+				if managedTunnel.fingerprint != daemonTunnelFingerprint(desiredSession) {
 					managedTunnel.cancel()
 					delete(managed, tunnelID)
 				}
@@ -87,7 +95,11 @@ var daemonCmd = &cobra.Command{
 				}
 
 				tunnelCtx, cancel := context.WithCancel(ctx)
-				mt := &managedTunnel{cancel: cancel, done: make(chan struct{})}
+				mt := &managedTunnel{
+					cancel:      cancel,
+					done:        make(chan struct{}),
+					fingerprint: daemonTunnelFingerprint(sess),
+				}
 				managed[tunnelID] = mt
 
 				go func(sess session.TunnelSession, mt *managedTunnel) {
@@ -131,6 +143,16 @@ var daemonCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(daemonCmd)
+}
+
+func daemonTunnelFingerprint(sess session.TunnelSession) string {
+	return strings.Join([]string{
+		sess.TunnelID,
+		sessionControlHost(sess),
+		sess.LocalPort,
+		sess.Protocol,
+		sess.Secret,
+	}, "\x00")
 }
 
 func runDaemonHeartbeat(ctx context.Context) {
@@ -180,21 +202,26 @@ func runDaemonTunnel(ctx context.Context, sess session.TunnelSession) {
 			fmt.Printf("[!] failed to refresh session %s: %v\n", current.TunnelID, err)
 		}
 
-		wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(*current))
-		err = tunnel.DialServerAndServeWithOnConnected(ctx, wsURL, current.Secret, current.LocalPort, func() {
-			latest, getErr := session.Get(sess.TunnelID)
-			if getErr != nil {
-				return
-			}
-			latest.Mode = "daemon"
-			latest.PID = os.Getpid()
-			latest.ConnectionState = session.ConnectionStateConnected
-			latest.LastError = ""
-			latest.LastConnectedAt = time.Now().Format(time.RFC3339)
-			if saveErr := session.Update(*latest); saveErr != nil && !os.IsNotExist(saveErr) {
-				fmt.Printf("[!] failed to mark tunnel %s connected: %v\n", latest.TunnelID, saveErr)
-			}
-		})
+		controlHost, hostErr := normalizePublicHostname(sessionControlHost(*current))
+		if hostErr != nil {
+			err = fmt.Errorf("invalid tunnel control host: %w", hostErr)
+		} else {
+			wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", controlHost)
+			err = tunnel.DialServerAndServeWithOnConnected(ctx, wsURL, current.Secret, current.LocalPort, func() {
+				latest, getErr := session.Get(sess.TunnelID)
+				if getErr != nil {
+					return
+				}
+				latest.Mode = "daemon"
+				latest.PID = os.Getpid()
+				latest.ConnectionState = session.ConnectionStateConnected
+				latest.LastError = ""
+				latest.LastConnectedAt = time.Now().Format(time.RFC3339)
+				if saveErr := session.Update(*latest); saveErr != nil && !os.IsNotExist(saveErr) {
+					fmt.Printf("[!] failed to mark tunnel %s connected: %v\n", latest.TunnelID, saveErr)
+				}
+			})
+		}
 		if ctx.Err() != nil {
 			return
 		}

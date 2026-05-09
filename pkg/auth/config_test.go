@@ -134,6 +134,103 @@ func TestGetSealosDirRejectsCurrentConfigSymlink(t *testing.T) {
 	}
 }
 
+func TestCurrentSealtunDirDoesNotCreateConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := CurrentSealtunDir()
+	if err != nil {
+		t.Fatalf("CurrentSealtunDir returned error: %v", err)
+	}
+	if dir != filepath.Join(home, currentConfigDir) {
+		t.Fatalf("unexpected config dir: %s", dir)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("CurrentSealtunDir must not create config dir, stat err=%v", err)
+	}
+}
+
+func TestGetSealosDirRejectsWriteTestSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, currentConfigDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "outside-write-test")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, ".write_test")); err != nil {
+		t.Fatalf("create write-test symlink: %v", err)
+	}
+
+	if _, err := GetSealosDir(); err == nil || !strings.Contains(err.Error(), "write-test") {
+		t.Fatalf("expected write-test symlink to be rejected, got %v", err)
+	}
+	data, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "outside" {
+		t.Fatalf("outside file was modified through symlink: %q", string(data))
+	}
+}
+
+func TestLoadAuthDataRejectsSymlinkFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := GetSealosDir()
+	if err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
+	}
+	outside := filepath.Join(home, "outside-auth.json")
+	if err := os.WriteFile(outside, []byte(`{"region":"https://gzg.sealos.run"}`), 0o600); err != nil {
+		t.Fatalf("write outside auth: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "auth.json")); err != nil {
+		t.Fatalf("create auth symlink: %v", err)
+	}
+
+	if _, err := LoadAuthData(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected auth symlink to be rejected, got %v", err)
+	}
+}
+
+func TestActiveKubeconfigRejectsSymlinkFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires extra privileges on Windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := GetSealosDir()
+	if err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
+	}
+	outside := filepath.Join(home, "outside-kubeconfig")
+	if err := os.WriteFile(outside, []byte("kubeconfig"), 0o600); err != nil {
+		t.Fatalf("write outside kubeconfig: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "kubeconfig")); err != nil {
+		t.Fatalf("create kubeconfig symlink: %v", err)
+	}
+
+	if _, err := ActiveKubeconfig(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected kubeconfig symlink to be rejected, got %v", err)
+	}
+}
+
 func TestEnsurePrivateDirRestrictsExistingDirectoryPermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod permission bits are not portable on Windows")
@@ -517,6 +614,36 @@ func TestResolveRegionAllowsKnownRegionURLWithTrailingSlash(t *testing.T) {
 	}
 	if got != "https://hzh.sealos.run" {
 		t.Fatalf("unexpected normalized region: %s", got)
+	}
+}
+
+func TestKnownRegionsIncludesAllSupportedSealosRegions(t *testing.T) {
+	want := map[string]RegionOption{
+		"gzg":   {Name: "gzg", URL: "https://gzg.sealos.run", SealosDomain: "sealosgzg.site"},
+		"hzh":   {Name: "hzh", URL: "https://hzh.sealos.run", SealosDomain: "sealoshzh.site"},
+		"bja":   {Name: "bja", URL: "https://bja.sealos.run", SealosDomain: "sealosbja.site"},
+		"cloud": {Name: "cloud", URL: "https://cloud.sealos.io", SealosDomain: "cloud.sealos.io"},
+		"usw":   {Name: "usw", URL: "https://usw-1.sealos.io", SealosDomain: "usw-1.sealos.app"},
+	}
+
+	got := KnownRegions()
+	if len(got) != len(want) {
+		t.Fatalf("expected %d known regions, got %#v", len(want), got)
+	}
+	for _, region := range got {
+		expected, ok := want[region.Name]
+		if !ok {
+			t.Fatalf("unexpected region: %#v", region)
+		}
+		if region != expected {
+			t.Fatalf("unexpected metadata for %s: got %#v want %#v", region.Name, region, expected)
+		}
+		if resolved, err := ResolveRegion(region.Name); err != nil || resolved != region.URL {
+			t.Fatalf("ResolveRegion(%q) = %q, %v; want %q", region.Name, resolved, err, region.URL)
+		}
+		if resolved, err := ResolveRegion(region.URL + "/"); err != nil || resolved != region.URL {
+			t.Fatalf("ResolveRegion(%q/) = %q, %v; want %q", region.URL, resolved, err, region.URL)
+		}
 	}
 }
 

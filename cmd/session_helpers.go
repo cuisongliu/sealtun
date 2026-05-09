@@ -107,6 +107,17 @@ func sessionControlHost(sess session.TunnelSession) string {
 	return sess.Host
 }
 
+func normalizePublicHostname(value string) (string, error) {
+	host, err := validateCustomDomain(value)
+	if err != nil {
+		return "", err
+	}
+	if host == "" {
+		return "", fmt.Errorf("public host is missing")
+	}
+	return host, nil
+}
+
 func sessionSealosHostForDomain(sess session.TunnelSession, computed string) string {
 	if sess.SealosHost != "" {
 		return sess.SealosHost

@@ -135,6 +135,62 @@ func TestRuntimeLockDoesNotStartDuplicateWhenStatePIDIsAliveButHeartbeatIsStale(
 	}
 }
 
+func TestAliveDoesNotCreateConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if Alive() {
+		t.Fatal("expected daemon to be inactive")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sealtun")); !os.IsNotExist(err) {
+		t.Fatalf("Alive must not create config dir, stat err=%v", err)
+	}
+}
+
+func TestDaemonLocksRejectSymlinks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	outside := filepath.Join(home, "outside.lock")
+	if err := os.WriteFile(outside, []byte("999999:1"), 0o600); err != nil {
+		t.Fatalf("write outside lock: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, lockFileName)); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	release, err := AcquireLaunchLock()
+	if err == nil {
+		release()
+		t.Fatal("expected symlinked launch lock to be rejected")
+	}
+}
+
+func TestLoadStateRejectsSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, ".sealtun")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	outside := filepath.Join(home, "daemon.json")
+	if err := os.WriteFile(outside, []byte(`{"pid":123}`), 0o600); err != nil {
+		t.Fatalf("write outside state: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, stateFileName)); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	if _, err := LoadState(); err == nil {
+		t.Fatal("expected symlinked daemon state to be rejected")
+	}
+}
+
 func TestDeleteStateForPIDDoesNotDeleteReplacement(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

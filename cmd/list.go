@@ -64,7 +64,10 @@ func collectListItemsWithLocalCheck(checkLocalPort bool) ([]listItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load tunnel sessions: %w", err)
 	}
+	return listItemsFromSessions(sessions, checkLocalPort), nil
+}
 
+func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool) []listItem {
 	items := make([]listItem, 0, len(sessions))
 	for _, sess := range sessions {
 		snapshot := classifySession(sess, checkLocalPort)
@@ -83,7 +86,7 @@ func collectListItemsWithLocalCheck(checkLocalPort bool) ([]listItem, error) {
 		})
 	}
 
-	return items, nil
+	return items
 }
 
 func printListTable(cmd *cobra.Command, items []listItem) {

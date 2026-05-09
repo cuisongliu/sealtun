@@ -71,34 +71,46 @@ func init() {
 }
 
 func collectStatus() (*statusPayload, error) {
-	dir, err := auth.GetSealosDir()
+	dir, err := auth.CurrentSealtunDir()
 	if err != nil {
 		return nil, err
 	}
+	return collectStatusFromDir(dir)
+}
 
+func collectStatusFromDir(dir string) (*statusPayload, error) {
 	authPath := filepath.Join(dir, "auth.json")
 	kubeconfigPath := filepath.Join(dir, "kubeconfig")
+	authPresent, authFileError := localConfigFileState(authPath)
+	kubeconfigPresent, kubeconfigFileError := localConfigFileState(kubeconfigPath)
 
 	status := &statusPayload{
 		DaemonRunning: daemonstate.Alive(),
 		ConfigDir:     dir,
 		AuthFile: fileStatus{
 			Path:    authPath,
-			Present: fileExists(authPath),
+			Present: authPresent,
 		},
 		Kubeconfig: kubeconfigStatus{
 			Path:    kubeconfigPath,
-			Present: fileExists(kubeconfigPath),
+			Present: kubeconfigPresent,
 		},
 	}
+	if authFileError != "" {
+		status.Warnings = append(status.Warnings, "auth file exists but is not a regular file")
+	}
+	if kubeconfigFileError != "" {
+		status.Kubeconfig.Error = kubeconfigFileError
+		status.Warnings = append(status.Warnings, "kubeconfig exists but is not a regular file")
+	}
 
-	currentProfile, err := auth.CurrentProfileName()
+	currentProfile, err := auth.CurrentProfileNameFromDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load active profile marker: %w", err)
 	}
 	status.ActiveProfile = currentProfile
 
-	authData, err := auth.LoadAuthData()
+	authData, err := auth.LoadAuthDataFromDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to load auth status: %w", err)
@@ -115,9 +127,12 @@ func collectStatus() (*statusPayload, error) {
 		}
 	}
 
-	if status.Kubeconfig.Present {
-		cfg, err := clientcmd.LoadFromFile(kubeconfigPath)
+	if status.Kubeconfig.Present && status.Kubeconfig.Error == "" {
+		data, err := readLocalConfigFile(kubeconfigPath)
 		if err != nil {
+			status.Kubeconfig.Error = err.Error()
+			status.Warnings = append(status.Warnings, "kubeconfig exists but could not be read")
+		} else if cfg, err := clientcmd.Load(data); err != nil {
 			status.Kubeconfig.Error = err.Error()
 			status.Warnings = append(status.Warnings, "kubeconfig exists but could not be parsed")
 		} else {
@@ -141,6 +156,13 @@ func collectStatus() (*statusPayload, error) {
 	}
 
 	return status, nil
+}
+
+func readLocalConfigFile(path string) ([]byte, error) {
+	if _, errText := localConfigFileState(path); errText != "" {
+		return nil, fmt.Errorf("%s", errText)
+	}
+	return os.ReadFile(path) // #nosec G304 -- path is a fixed Sealtun config file validated as regular before reading.
 }
 
 func printHumanStatus(cmd *cobra.Command, status *statusPayload) {
@@ -206,9 +228,18 @@ func formatAuthTime(value string) string {
 	return t.Local().Format(time.RFC3339)
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func localConfigFileState(path string) (bool, string) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, ""
+	}
+	if err != nil {
+		return false, err.Error()
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return true, fmt.Sprintf("%s is not a regular file", path)
+	}
+	return true, ""
 }
 
 func yesNo(v bool) string {

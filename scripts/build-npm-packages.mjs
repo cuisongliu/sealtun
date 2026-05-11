@@ -78,6 +78,7 @@ function parseArgs(argv) {
     tag: process.env.NPM_RELEASE_TAG || '',
     version: process.env.NPM_VERSION || '',
     packageName: process.env.NPM_PACKAGE_NAME || 'sealtun',
+    binaryPackageScope: process.env.NPM_BINARY_PACKAGE_SCOPE || '@gitlayzer',
     outDir: process.env.NPM_PACKAGES_DIR || path.join(rootDir, 'packages')
   };
 
@@ -104,6 +105,9 @@ function parseArgs(argv) {
         break;
       case '--package-name':
         args.packageName = readValue();
+        break;
+      case '--binary-package-scope':
+        args.binaryPackageScope = readValue();
         break;
       case '--out-dir':
         args.outDir = readValue();
@@ -139,6 +143,8 @@ Options:
   --tag <tag>               GitHub Release tag, e.g. v0.0.13
   --version <version>       npm package version, e.g. 0.0.13
   --package-name <name>     main npm package name, default sealtun
+  --binary-package-scope <scope>
+                            scope for platform packages, default @gitlayzer
   --out-dir <dir>           generated package directory, default packages
 `);
 }
@@ -149,6 +155,9 @@ function assetNameFor(target) {
 }
 
 function binaryPackageName(packageName, targetId) {
+  if (parsedArgs?.binaryPackageScope) {
+    return `${parsedArgs.binaryPackageScope}/${packageName.replace(/^@[^/]+\//, '')}-${targetId}`;
+  }
   if (packageName.startsWith('@')) {
     const [scope, name] = packageName.split('/');
     if (!scope || !name) {
@@ -158,6 +167,8 @@ function binaryPackageName(packageName, targetId) {
   }
   return `${packageName}-${targetId}`;
 }
+
+let parsedArgs = null;
 
 function packageJsonBase(args) {
   const repository = {
@@ -311,6 +322,7 @@ function readExistingRootPackage(outDir) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  parsedArgs = args;
   const existingPackage = readExistingRootPackage(args.outDir);
   const optionalDependencies = Object.fromEntries(
     targets.map((target) => [binaryPackageName(args.packageName, target.id), args.version])

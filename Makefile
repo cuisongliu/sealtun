@@ -14,6 +14,7 @@ NPM_VERSION ?= $(shell (git describe --tags --abbrev=0 2>/dev/null || echo v0.0.
 NPM_RELEASE_TAG ?= v$(NPM_VERSION)
 NPM_GITHUB_REPO ?= gitlayzer/sealtun
 NPM_PACKAGE_NAME ?= sealtun
+NPM_BINARY_PACKAGE_SCOPE ?= @gitlayzer
 NPM_PACKAGES_DIR ?= packages
 NPM_DIST_TAG ?= latest
 NPM_PUBLISH_FLAGS ?=
@@ -48,6 +49,7 @@ npm-packages:
 		--tag $(NPM_RELEASE_TAG) \
 		--version $(NPM_VERSION) \
 		--package-name $(NPM_PACKAGE_NAME) \
+		--binary-package-scope $(NPM_BINARY_PACKAGE_SCOPE) \
 		--out-dir $(NPM_PACKAGES_DIR)
 
 ## npm-pack: generate npm packages and create local npm tarballs

@@ -20,6 +20,7 @@ type listItem struct {
 	Mode         string `json:"mode"`
 	Namespace    string `json:"namespace"`
 	Protocol     string `json:"protocol"`
+	BasicAuth    bool   `json:"basicAuth"`
 	CreatedAt    string `json:"createdAt"`
 }
 
@@ -82,6 +83,7 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 			Mode:         valueOr(sess.Mode, "foreground"),
 			Namespace:    valueOr(sess.Namespace, "-"),
 			Protocol:     valueOr(sess.Protocol, "-"),
+			BasicAuth:    sess.BasicAuth != nil && sess.BasicAuth.Enabled,
 			CreatedAt:    formatAuthTime(sess.CreatedAt),
 		})
 	}
@@ -101,13 +103,14 @@ func printListTable(cmd *cobra.Command, items []listItem) {
 	fmt.Fprintln(out, "")
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tHOST\tPORT\tPID\tMODE\tNAMESPACE\tCREATED AT")
+	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tHOST\tPORT\tAUTH\tPID\tMODE\tNAMESPACE\tCREATED AT")
 	for _, item := range items {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 			item.TunnelID,
 			item.Status,
 			item.Host,
 			item.LocalPort,
+			yesNo(item.BasicAuth),
 			item.PID,
 			item.Mode,
 			item.Namespace,

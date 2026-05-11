@@ -458,6 +458,11 @@ func TestSaveDoesNotRestoreScrubbedCredentials(t *testing.T) {
 		TunnelID:   "race123",
 		Kubeconfig: "apiVersion: v1",
 		Secret:     "tunnel-secret",
+		BasicAuth: &BasicAuthConfig{
+			Enabled:      true,
+			Username:     "admin",
+			PasswordHash: "hash",
+		},
 	}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
 	}
@@ -478,8 +483,8 @@ func TestSaveDoesNotRestoreScrubbedCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
-	if sess.Kubeconfig != "" || sess.Secret != "" {
-		t.Fatalf("expected scrubbed credentials to stay empty, kubeconfig=%q secret=%q", sess.Kubeconfig, sess.Secret)
+	if sess.Kubeconfig != "" || sess.Secret != "" || sess.BasicAuth != nil {
+		t.Fatalf("expected scrubbed credentials to stay empty, kubeconfig=%q secret=%q basicAuth=%#v", sess.Kubeconfig, sess.Secret, sess.BasicAuth)
 	}
 	if sess.PID != 0 {
 		t.Fatalf("expected scrubbed session PID to stay reset, got %d", sess.PID)

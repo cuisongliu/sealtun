@@ -80,7 +80,19 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return err
 		}
 
-		hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{})
+		basicAuthConfig, err := resolveBasicAuth(basicAuthInput{
+			Credential:  basicAuthCredential,
+			Username:    basicAuthUser,
+			Password:    basicAuthPassword,
+			PasswordEnv: basicAuthPasswordEnv,
+		}, os.Getenv)
+		if err != nil {
+			return err
+		}
+
+		hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{
+			BasicAuth: basicAuthToK8s(basicAuthConfig),
+		})
 		if err != nil {
 			return fmt.Errorf("failed to provision tunnel on Sealos: %w", err)
 		}
@@ -103,6 +115,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			CustomDomain:    hosts.CustomDomain,
 			LocalPort:       localPort,
 			Secret:          secret,
+			BasicAuth:       basicAuthConfig,
 			Mode:            "foreground",
 			PID:             os.Getpid(),
 			ConnectionState: session.ConnectionStatePending,
@@ -115,6 +128,9 @@ and establishes a secure connection to forward traffic to your local port.`,
 		}
 
 		fmt.Printf("[+] Public URL will be: https://%s\n", hosts.PublicHost)
+		if basicAuthConfig != nil && basicAuthConfig.Enabled {
+			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
+		}
 		if normalizedCustomDomain != "" {
 			fmt.Printf("[+] Requested custom domain: %s\n", normalizedCustomDomain)
 			fmt.Printf("[+] Sealos CNAME target: %s\n", hosts.SealosHost)
@@ -202,6 +218,10 @@ var foreground bool
 var customDomain string
 var waitDomain bool
 var domainWaitTimeout time.Duration
+var basicAuthCredential string
+var basicAuthUser string
+var basicAuthPassword string
+var basicAuthPasswordEnv string
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
@@ -215,6 +235,10 @@ func init() {
 	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
 	exposeCmd.Flags().BoolVar(&waitDomain, "wait-domain", false, "Wait for verified custom domain DNS, then attach it and wait for Ingress/certificate readiness")
 	exposeCmd.Flags().DurationVar(&domainWaitTimeout, "domain-timeout", 5*time.Minute, "Maximum time to wait for custom domain readiness")
+	exposeCmd.Flags().StringVar(&basicAuthCredential, "basic-auth", "", "Enable Basic Auth for public traffic as username:password")
+	exposeCmd.Flags().StringVar(&basicAuthUser, "basic-auth-user", "", "Basic Auth username for public traffic")
+	exposeCmd.Flags().StringVar(&basicAuthPassword, "basic-auth-password", "", "Basic Auth password for public traffic; prefer --basic-auth-password-env to avoid shell history")
+	exposeCmd.Flags().StringVar(&basicAuthPasswordEnv, "basic-auth-password-env", "", "Read Basic Auth password for public traffic from an environment variable")
 }
 
 func validateLocalPort(port string) error {

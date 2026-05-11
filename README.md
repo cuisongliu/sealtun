@@ -75,7 +75,7 @@ make build
 ./sealtun --version
 ```
 
-`make build` 默认会把当前 Git short hash 注入到本地二进制的 version 中，用于确认本地二进制和已 push 的代码提交一致。正式 tag 发布时，GitHub Actions 会用 tag 版本构建 GitHub Release 产物和容器镜像。
+`make build` 默认会把当前 Git short hash 注入到本地二进制的 version 中，用于确认本地二进制和已 push 的代码提交一致。未打 tag 的本地构建会使用 `latest` 远端隧道镜像；正式 tag 发布时，GitHub Actions 会用 tag 版本构建 GitHub Release 产物和同版本容器镜像。
 
 ## 🚢 发版流程
 
@@ -93,6 +93,15 @@ git push origin vX.Y.Z
 ```
 
 推送 `v*` tag 后，GitHub Actions 会触发 GoReleaser 生成多平台二进制和 GitHub Release；Docker workflow 会同步构建并发布 `ghcr.io/gitlayzer/sealtun` 镜像。发版后建议重新执行 `make build && ./sealtun --version`，确认本地二进制显示的 Git hash 与已 push 的提交一致。
+
+GitHub Release 产物构建完成后，再发布 npm 包：
+
+```bash
+NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish-dry-run
+NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
+```
+
+`make npm-publish` 会先从对应 GitHub Release 下载 GoReleaser 生成的二进制资产，生成本地 `packages/` 目录，然后先发布各平台可选依赖包，最后发布主包。`packages/` 是发包中间产物，已被 `.gitignore` 忽略，不提交到远端。
 
 ## 🚀 快速上手
 
@@ -133,6 +142,18 @@ sealtun profile use hzh-dev
 sealtun expose 3000
 
 ```
+
+为公网业务流量启用 Basic Auth：
+```bash
+# 推荐：从环境变量读取密码，避免进入 shell history
+export SEALTUN_BASIC_AUTH_PASSWORD='change-me'
+sealtun expose 3000 --basic-auth-user admin --basic-auth-password-env SEALTUN_BASIC_AUTH_PASSWORD
+
+# 也支持一次性写法
+sealtun expose 3000 --basic-auth admin:change-me
+```
+
+Basic Auth 由 Sealtun server 代理层校验，不依赖 Ingress annotation；它只保护公网业务路径，不会拦截 `/_sealtun/ws` 隧道控制通道、健康检查或受内部 Bearer secret 保护的 metrics。
 
 Sealtun 会自动执行以下操作：
 1. 在你的 Sealos Namespace 中启动一个隧道代理 Pod。
@@ -212,6 +233,8 @@ tunnels:
     localPort: 3000
     protocol: https
     domain: app.example.com
+    basicAuth:
+      credential: admin:change-me
     waitDomain: false
     readyTimeout: 90s
     domainTimeout: 5m
@@ -224,6 +247,20 @@ sealtun apply -f sealtun.yaml --dry-run
 
 # 创建或更新隧道
 sealtun apply -f sealtun.yaml
+```
+
+也可以使用展开的明文写法：
+```yaml
+basicAuth:
+  username: admin
+  password: change-me
+```
+
+或从环境变量读取密码：
+```yaml
+basicAuth:
+  username: admin
+  passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
 `name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。

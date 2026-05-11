@@ -2,7 +2,7 @@
 
 [中文版本](./README.md)
 
-Sealtun is a powerful, elegant CLI tool that provides a `cloudflared` tunnel-like experience entirely built on **Sealos Cloud** and **Kubernetes**. 
+Sealtun is a powerful, elegant CLI tool that provides a `cloudflared` tunnel-like experience entirely built on **Sealos Cloud** and **Kubernetes**.
 
 It connects your local development machine straight to the internet by dynamically provisioning Kubernetes resources (Deployments, Services, Ingresses) and tunneling the traffic securely via bidirectional multiplexed WebSocket streams (`yamux`).
 
@@ -75,7 +75,7 @@ make build
 ./sealtun --version
 ```
 
-`make build` injects the current Git short hash into the local binary version by default, which makes it easy to verify that the local binary matches the pushed commit. Tagged releases are built by GitHub Actions using the tag version for GitHub Release assets and container images.
+`make build` injects the current Git short hash into the local binary version by default, which makes it easy to verify that the local binary matches the pushed commit. Untagged local builds use the `latest` remote tunnel image; tagged releases are built by GitHub Actions using the tag version for GitHub Release assets and matching container images.
 
 ## Release Process
 
@@ -93,6 +93,15 @@ git push origin vX.Y.Z
 ```
 
 Pushing a `v*` tag triggers GitHub Actions: GoReleaser builds multi-platform binaries and creates the GitHub Release, while the Docker workflow builds and publishes the matching `ghcr.io/gitlayzer/sealtun` image. After release, run `make build && ./sealtun --version` again to confirm that the local binary reports the Git hash that was pushed.
+
+After GitHub Release assets finish building, publish the npm packages:
+
+```bash
+NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish-dry-run
+NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
+```
+
+`make npm-publish` downloads the GoReleaser binary assets from the matching GitHub Release, generates the local `packages/` directory, publishes each platform optional dependency first, and then publishes the main package. `packages/` is a publish-time artifact and is ignored by `.gitignore`, so it is not committed.
 
 ## Quick Start
 
@@ -133,6 +142,18 @@ For instance, to make your local Web Server running on Port `3000` accessible to
 sealtun expose 3000
 
 ```
+
+Enable Basic Auth for public application traffic:
+```bash
+# Recommended: read the password from the environment to avoid shell history
+export SEALTUN_BASIC_AUTH_PASSWORD='change-me'
+sealtun expose 3000 --basic-auth-user admin --basic-auth-password-env SEALTUN_BASIC_AUTH_PASSWORD
+
+# One-shot form is also supported
+sealtun expose 3000 --basic-auth admin:change-me
+```
+
+Basic Auth is enforced by the Sealtun server proxy layer, not by Ingress annotations. It protects only public application paths and does not block the `/_sealtun/ws` tunnel control channel, health checks, or metrics protected by the internal Bearer secret.
 
 Sealtun will:
 1. Spin up a tunnel proxy Pod in your Sealos namespace.
@@ -212,6 +233,8 @@ tunnels:
     localPort: 3000
     protocol: https
     domain: app.example.com
+    basicAuth:
+      credential: admin:change-me
     waitDomain: false
     readyTimeout: 90s
     domainTimeout: 5m
@@ -224,6 +247,20 @@ sealtun apply -f sealtun.yaml --dry-run
 
 # Create or update tunnels
 sealtun apply -f sealtun.yaml
+```
+
+You can also use the expanded inline form:
+```yaml
+basicAuth:
+  username: admin
+  password: change-me
+```
+
+If you prefer not to store the password in the config file, use `passwordEnv`:
+```yaml
+basicAuth:
+  username: admin
+  passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
 `name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.

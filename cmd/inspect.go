@@ -22,6 +22,7 @@ type inspectPayload struct {
 	SealosHost         string                 `json:"sealosHost,omitempty"`
 	CustomDomain       string                 `json:"customDomain,omitempty"`
 	LocalPort          string                 `json:"localPort,omitempty"`
+	BasicAuth          *inspectBasicAuth      `json:"basicAuth,omitempty"`
 	PID                int                    `json:"pid"`
 	ProcessAlive       bool                   `json:"processAlive"`
 	LocalPortReachable bool                   `json:"localPortReachable"`
@@ -30,6 +31,11 @@ type inspectPayload struct {
 	LastError          string                 `json:"lastError,omitempty"`
 	Remote             *k8s.TunnelDiagnostics `json:"remote,omitempty"`
 	Warnings           []string               `json:"warnings,omitempty"`
+}
+
+type inspectBasicAuth struct {
+	Enabled  bool   `json:"enabled"`
+	Username string `json:"username,omitempty"`
 }
 
 type remoteDiagnosticsCollector func(context.Context, session.TunnelSession) (*k8s.TunnelDiagnostics, error)
@@ -86,6 +92,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 		SealosHost:         sess.SealosHost,
 		CustomDomain:       sess.CustomDomain,
 		LocalPort:          sess.LocalPort,
+		BasicAuth:          inspectBasicAuthFromSession(sess.BasicAuth),
 		PID:                sess.PID,
 		ProcessAlive:       snapshot.ProcessAlive,
 		LocalPortReachable: snapshot.LocalPortReachable,
@@ -159,6 +166,13 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		fmt.Fprintf(out, "  DNS CNAME target: %s\n", valueOr(payload.SealosHost, payload.Host))
 	}
 	fmt.Fprintf(out, "  Local port: %s\n", valueOr(payload.LocalPort, "unknown"))
+	if payload.BasicAuth != nil && payload.BasicAuth.Enabled {
+		fmt.Fprintf(out, "  Basic Auth: enabled")
+		if payload.BasicAuth.Username != "" {
+			fmt.Fprintf(out, " (user: %s)", payload.BasicAuth.Username)
+		}
+		fmt.Fprintln(out)
+	}
 	fmt.Fprintf(out, "  Protocol: %s\n", valueOr(payload.Protocol, "unknown"))
 	fmt.Fprintf(out, "  Namespace: %s\n", valueOr(payload.Namespace, "unknown"))
 	fmt.Fprintf(out, "  Region: %s\n", valueOr(payload.Region, "unknown"))
@@ -222,4 +236,11 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 			fmt.Fprintf(out, "  - %s\n", warning)
 		}
 	}
+}
+
+func inspectBasicAuthFromSession(config *session.BasicAuthConfig) *inspectBasicAuth {
+	if config == nil || !config.Enabled {
+		return nil
+	}
+	return &inspectBasicAuth{Enabled: true, Username: config.Username}
 }

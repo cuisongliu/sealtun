@@ -26,6 +26,13 @@ func TestDaemonTunnelFingerprintChangesForForwardingInputs(t *testing.T) {
 		{name: "local port", mut: func(sess *session.TunnelSession) { sess.LocalPort = "3001" }},
 		{name: "protocol", mut: func(sess *session.TunnelSession) { sess.Protocol = "http" }},
 		{name: "secret", mut: func(sess *session.TunnelSession) { sess.Secret = "new-secret" }},
+		{name: "basic auth enabled", mut: func(sess *session.TunnelSession) {
+			sess.BasicAuth = &session.BasicAuthConfig{
+				Enabled:      true,
+				Username:     "admin",
+				PasswordHash: "hash",
+			}
+		}},
 	}
 
 	for _, tt := range tests {

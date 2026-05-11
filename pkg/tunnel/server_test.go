@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/labring/sealtun/pkg/publicauth"
 )
 
 func TestServerUnavailablePageWhenClientDisconnected(t *testing.T) {
@@ -130,6 +132,52 @@ func TestServerMetricsRejectsUnsupportedMethods(t *testing.T) {
 	}
 	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
 		t.Fatalf("expected Allow GET, HEAD header, got %q", got)
+	}
+}
+
+func TestServerBasicAuthProtectsPublicTrafficOnly(t *testing.T) {
+	t.Parallel()
+
+	basicAuth, err := publicauth.NewBasicAuth("admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithOptions("tunnel-secret", 8080, "https", "3000", ServerOptions{BasicAuth: basicAuth})
+
+	publicReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	publicRec := httptest.NewRecorder()
+	server.ServeHTTP(publicRec, publicReq)
+	if publicRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected public traffic to require basic auth, got %d", publicRec.Code)
+	}
+	if got := publicRec.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Basic") {
+		t.Fatalf("expected Basic challenge header, got %q", got)
+	}
+
+	healthReq := httptest.NewRequest(http.MethodGet, "https://example.test/_sealtun/healthz", nil)
+	healthRec := httptest.NewRecorder()
+	server.ServeHTTP(healthRec, healthReq)
+	if healthRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health endpoint should not require basic auth, got %d", healthRec.Code)
+	}
+}
+
+func TestServerBasicAuthAcceptsMatchingCredentials(t *testing.T) {
+	t.Parallel()
+
+	basicAuth, err := publicauth.NewBasicAuth("admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithOptions("tunnel-secret", 8080, "https", "3000", ServerOptions{BasicAuth: basicAuth})
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	req.SetBasicAuth("admin", "secret")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected authenticated request to reach proxy path, got %d", rec.Code)
 	}
 }
 

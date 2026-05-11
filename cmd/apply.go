@@ -17,6 +17,7 @@ import (
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/labring/sealtun/pkg/k8s"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -28,27 +29,37 @@ type applyFile struct {
 }
 
 type applyTunnel struct {
-	Name          string `json:"name" yaml:"name"`
-	LocalPort     int    `json:"localPort" yaml:"localPort"`
-	Port          int    `json:"port,omitempty" yaml:"port,omitempty"`
-	Protocol      string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
-	Domain        string `json:"domain,omitempty" yaml:"domain,omitempty"`
-	WaitDomain    bool   `json:"waitDomain,omitempty" yaml:"waitDomain,omitempty"`
-	ReadyTimeout  string `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
-	DomainTimeout string `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
+	Name          string          `json:"name" yaml:"name"`
+	LocalPort     int             `json:"localPort" yaml:"localPort"`
+	Port          int             `json:"port,omitempty" yaml:"port,omitempty"`
+	Protocol      string          `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Domain        string          `json:"domain,omitempty" yaml:"domain,omitempty"`
+	WaitDomain    bool            `json:"waitDomain,omitempty" yaml:"waitDomain,omitempty"`
+	ReadyTimeout  string          `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
+	DomainTimeout string          `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
+	BasicAuth     *applyBasicAuth `json:"basicAuth,omitempty" yaml:"basicAuth,omitempty"`
+}
+
+type applyBasicAuth struct {
+	Credential  string `json:"credential,omitempty" yaml:"credential,omitempty"`
+	Username    string `json:"username" yaml:"username"`
+	Password    string `json:"password,omitempty" yaml:"password,omitempty"`
+	PasswordEnv string `json:"passwordEnv,omitempty" yaml:"passwordEnv,omitempty"`
 }
 
 type applyResult struct {
-	Name         string                 `json:"name"`
-	TunnelID     string                 `json:"tunnelId"`
-	Host         string                 `json:"host"`
-	SealosHost   string                 `json:"sealosHost,omitempty"`
-	CustomDomain string                 `json:"customDomain,omitempty"`
-	LocalPort    string                 `json:"localPort"`
-	Status       string                 `json:"status"`
-	Warnings     []string               `json:"warnings,omitempty"`
-	NewTunnel    bool                   `json:"-"`
-	Previous     *session.TunnelSession `json:"-"`
+	Name          string                 `json:"name"`
+	TunnelID      string                 `json:"tunnelId"`
+	Host          string                 `json:"host"`
+	SealosHost    string                 `json:"sealosHost,omitempty"`
+	CustomDomain  string                 `json:"customDomain,omitempty"`
+	LocalPort     string                 `json:"localPort"`
+	BasicAuth     bool                   `json:"basicAuth"`
+	BasicAuthUser string                 `json:"basicAuthUser,omitempty"`
+	Status        string                 `json:"status"`
+	Warnings      []string               `json:"warnings,omitempty"`
+	NewTunnel     bool                   `json:"-"`
+	Previous      *session.TunnelSession `json:"-"`
 }
 
 type normalizedApplyTunnel struct {
@@ -57,6 +68,8 @@ type normalizedApplyTunnel struct {
 	LocalPort     string
 	Protocol      string
 	CustomDomain  string
+	BasicAuth     *session.BasicAuthConfig
+	BasicAuthPass string
 	WaitDomain    bool
 	ReadyTimeout  time.Duration
 	DomainTimeout time.Duration
@@ -118,10 +131,12 @@ func runApply(ctx context.Context, path string, dryRun bool) ([]applyResult, err
 				return results, err
 			}
 			results = append(results, applyResult{
-				Name:      normalized.Name,
-				TunnelID:  normalized.TunnelID,
-				LocalPort: normalized.LocalPort,
-				Status:    "planned",
+				Name:          normalized.Name,
+				TunnelID:      normalized.TunnelID,
+				LocalPort:     normalized.LocalPort,
+				BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+				BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
+				Status:        "planned",
 			})
 		}
 		return results, nil
@@ -227,10 +242,12 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	}
 
 	result = applyResult{
-		Name:      normalized.Name,
-		TunnelID:  normalized.TunnelID,
-		LocalPort: normalized.LocalPort,
-		Status:    "planned",
+		Name:          normalized.Name,
+		TunnelID:      normalized.TunnelID,
+		LocalPort:     normalized.LocalPort,
+		BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+		BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
+		Status:        "planned",
 	}
 	secret := uuid.New().String()
 	createdAt := ""
@@ -251,6 +268,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 			if existing.Secret != "" {
 				secret = existing.Secret
 			}
+			reuseExistingBasicAuthHash(&normalized, existing.BasicAuth)
 			createdAt = existing.CreatedAt
 		} else if !os.IsNotExist(err) {
 			return result, fmt.Errorf("tunnel %s: load existing session: %w", normalized.TunnelID, err)
@@ -308,6 +326,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	}()
 
 	options := k8s.TunnelOptions{}
+	options.BasicAuth = basicAuthToK8s(normalized.BasicAuth)
 	if customDomainVerified {
 		options.CustomDomain = desiredCustomDomain
 		options.SealosHost = sealosHost
@@ -364,6 +383,8 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result.Host = hosts.PublicHost
 	result.SealosHost = hosts.SealosHost
 	result.CustomDomain = hosts.CustomDomain
+	result.BasicAuth = normalized.BasicAuth != nil && normalized.BasicAuth.Enabled
+	result.BasicAuthUser = basicAuthUsername(normalized.BasicAuth)
 	result.Status = "applied"
 	remoteChanged = false
 	return result, nil
@@ -385,6 +406,7 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		CustomDomain:    hosts.CustomDomain,
 		LocalPort:       normalized.LocalPort,
 		Secret:          secret,
+		BasicAuth:       normalized.BasicAuth,
 		Mode:            "daemon",
 		PID:             0,
 		ConnectionState: session.ConnectionStatePending,
@@ -434,6 +456,7 @@ func restoreExistingApplyTunnel(client *k8s.Client, previous session.TunnelSessi
 	_, err := client.WithNamespace(previous.Namespace).EnsureTunnelWithOptions(cleanupCtx, previous.TunnelID, previous.Secret, protocol, previous.LocalPort, k8s.TunnelOptions{
 		CustomDomain: previous.CustomDomain,
 		SealosHost:   previous.SealosHost,
+		BasicAuth:    basicAuthToK8s(previous.BasicAuth),
 	})
 	return err
 }
@@ -502,16 +525,69 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s domainTimeout: %w", tunnelID, err)
 	}
+	basicAuth, basicAuthPass, err := resolveApplyBasicAuth(item.BasicAuth)
+	if err != nil {
+		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
+	}
 	return normalizedApplyTunnel{
 		Name:          item.Name,
 		TunnelID:      tunnelID,
 		LocalPort:     localPort,
 		Protocol:      tunnelprotocol.Normalize(protocol),
 		CustomDomain:  customDomain,
+		BasicAuth:     basicAuth,
+		BasicAuthPass: basicAuthPass,
 		WaitDomain:    item.WaitDomain,
 		ReadyTimeout:  effectiveReadyTimeout,
 		DomainTimeout: effectiveDomainTimeout,
 	}, nil
+}
+
+func resolveApplyBasicAuth(config *applyBasicAuth) (*session.BasicAuthConfig, string, error) {
+	if config == nil {
+		return nil, "", nil
+	}
+	input := basicAuthInput{
+		Credential:  config.Credential,
+		Username:    config.Username,
+		Password:    config.Password,
+		PasswordEnv: config.PasswordEnv,
+	}
+	username, password, ok, err := resolveBasicAuthCredentials(input, os.Getenv)
+	if err != nil || !ok {
+		return nil, "", err
+	}
+	basicAuth, err := newSessionBasicAuth(username, password)
+	if err != nil {
+		return nil, "", err
+	}
+	return basicAuth, password, nil
+}
+
+func reuseExistingBasicAuthHash(normalized *normalizedApplyTunnel, existing *session.BasicAuthConfig) {
+	if normalized == nil || normalized.BasicAuth == nil || existing == nil || !existing.Enabled {
+		return
+	}
+	existingHash := basicAuthPasswordHash(existing)
+	if existingHash == "" || normalized.BasicAuthPass == "" || existing.Username != normalized.BasicAuth.Username {
+		return
+	}
+	if !publicauth.Check(publicauth.BasicAuth{Username: existing.Username, PasswordHash: existingHash}, normalized.BasicAuth.Username, normalized.BasicAuthPass) {
+		return
+	}
+	if existing.PasswordHash == "" {
+		normalized.BasicAuth.PasswordSHA256 = ""
+		return
+	}
+	normalized.BasicAuth.PasswordHash = existingHash
+	normalized.BasicAuth.PasswordSHA256 = ""
+}
+
+func basicAuthUsername(config *session.BasicAuthConfig) string {
+	if config == nil || !config.Enabled {
+		return ""
+	}
+	return config.Username
 }
 
 func applyTunnelID(name string) (string, error) {
@@ -557,6 +633,13 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 		}
 		if result.CustomDomain != "" {
 			fmt.Fprintf(out, "    Custom domain: %s\n", result.CustomDomain)
+		}
+		if result.BasicAuth {
+			fmt.Fprintf(out, "    Basic Auth: enabled")
+			if result.BasicAuthUser != "" {
+				fmt.Fprintf(out, " (user: %s)", result.BasicAuthUser)
+			}
+			fmt.Fprintln(out)
 		}
 		for _, warning := range result.Warnings {
 			fmt.Fprintf(out, "    Warning: %s\n", warning)

@@ -10,14 +10,17 @@ BINARY_NAME=sealtun
 
 # Get version from git (Pure Git Hash mode)
 VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
-NPM_VERSION ?= $(shell (git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0) | sed 's/^v//')
+NPM_LATEST_RELEASE_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+NPM_VERSION ?= $(shell echo $(NPM_LATEST_RELEASE_TAG) | sed 's/^v//')
 NPM_RELEASE_TAG ?= v$(NPM_VERSION)
 NPM_GITHUB_REPO ?= gitlayzer/sealtun
 NPM_PACKAGE_NAME ?= sealtun
 NPM_BINARY_PACKAGE_SCOPE ?= @gitlayzer
 NPM_PACKAGES_DIR ?= packages
 NPM_DIST_TAG ?= latest
-NPM_PUBLISH_FLAGS ?=
+NPM_PUBLISH_FLAGS ?= --access public
+NPM_DRY_RUN_VERSION ?= 0.0.0-dry-run.$(shell date +%Y%m%d%H%M%S)
+NPM_DRY_RUN_RELEASE_TAG ?= $(NPM_LATEST_RELEASE_TAG)
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X github.com/labring/sealtun/pkg/version.Version=$(VERSION)"
@@ -77,6 +80,8 @@ npm-publish: npm-packages
 	(cd "$(NPM_PACKAGES_DIR)" && $(NPM) publish --tag "$(NPM_DIST_TAG)" $(NPM_PUBLISH_FLAGS))
 
 ## npm-publish-dry-run: verify the npm publish payload without publishing
+npm-publish-dry-run: NPM_VERSION := $(NPM_DRY_RUN_VERSION)
+npm-publish-dry-run: NPM_RELEASE_TAG := $(NPM_DRY_RUN_RELEASE_TAG)
 npm-publish-dry-run: NPM_PUBLISH_FLAGS += --dry-run
 npm-publish-dry-run: npm-publish
 

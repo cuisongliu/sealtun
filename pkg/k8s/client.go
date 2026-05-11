@@ -17,6 +17,7 @@ import (
 
 	"github.com/labring/sealtun/pkg/auth"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/version"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -53,6 +54,12 @@ type CleanupSummary struct {
 type TunnelOptions struct {
 	CustomDomain string
 	SealosHost   string
+	BasicAuth    *BasicAuthOptions
+}
+
+type BasicAuthOptions struct {
+	Username     string
+	PasswordHash string
 }
 
 type TunnelHosts struct {
@@ -160,7 +167,10 @@ const (
 const (
 	managedLabelKey       = "cloud.sealos.io/app-deploy-manager"
 	managedDomainLabelKey = "cloud.sealos.io/app-deploy-manager-domain"
+	serverConfigDigestKey = "sealtun.labring.com/server-config"
 	tunnelAuthSecretKey   = "secret"
+	basicAuthUserKey      = "basicAuthUsername"
+	basicAuthPasswordKey  = "basicAuthPasswordHash"
 )
 
 var reservedCustomDomainSuffixes = []string{
@@ -173,9 +183,9 @@ var reservedCustomDomainSuffixes = []string{
 }
 
 var (
-	tunnelIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,53}[a-z0-9])?$`)
-	dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	gitHashPattern  = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+	tunnelIDPattern       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,53}[a-z0-9])?$`)
+	dnsLabelPattern       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	releaseVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 )
 
 type createdResource struct {
@@ -337,6 +347,9 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	if err := validateCustomDomainTarget(opts.CustomDomain, opts.SealosHost); err != nil {
 		return TunnelHosts{}, err
 	}
+	if err := validateBasicAuthOptions(opts.BasicAuth); err != nil {
+		return TunnelHosts{}, err
+	}
 	created := []createdResource{}
 	rollback := true
 	customSnapshotsCaptured := false
@@ -355,7 +368,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		}
 	}()
 
-	authSecretCreated, err := c.ensureAuthSecret(ctx, name, secret)
+	authSecretCreated, err := c.ensureAuthSecret(ctx, name, secret, opts.BasicAuth)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure tunnel auth secret: %w", err)
 	}
@@ -364,7 +377,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Deployment
-	deploymentCreated, err := c.ensureDeployment(ctx, name, protocol, localPort)
+	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.BasicAuth)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure deployment: %w", err)
 	}
@@ -454,7 +467,33 @@ func validateLocalPort(port string) error {
 	return nil
 }
 
-func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string) (bool, error) {
+func validateBasicAuthOptions(opts *BasicAuthOptions) error {
+	if opts == nil {
+		return nil
+	}
+	return publicauth.Validate(publicauth.BasicAuth{
+		Username:     opts.Username,
+		PasswordHash: opts.PasswordHash,
+	})
+}
+
+func serverConfigDigest(secret string, basicAuth *BasicAuthOptions) string {
+	parts := []string{secret}
+	if basicAuth != nil {
+		parts = append(parts, strings.TrimSpace(basicAuth.Username), basicAuth.PasswordHash)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basicAuth *BasicAuthOptions) (bool, error) {
+	data := map[string][]byte{
+		tunnelAuthSecretKey: []byte(secret),
+	}
+	if basicAuth != nil {
+		data[basicAuthUserKey] = []byte(strings.TrimSpace(basicAuth.Username))
+		data[basicAuthPasswordKey] = []byte(basicAuth.PasswordHash)
+	}
 	authSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      authSecretName(name),
@@ -462,9 +501,7 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string) (boo
 			Labels:    managedLabels(name),
 		},
 		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			tunnelAuthSecretKey: []byte(secret),
-		},
+		Data: data,
 	}
 
 	secretClient := c.clientset.CoreV1().Secrets(c.namespace)
@@ -482,13 +519,54 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string) (boo
 	return false, err
 }
 
-func (c *Client) ensureDeployment(ctx context.Context, name, protocol, localPort string) (bool, error) {
+func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, basicAuth *BasicAuthOptions) (bool, error) {
 	replicas := int32(1)
 	labels := managedLabels(name)
 
 	f := false
 	t := true
 	u := int64(1001)
+
+	args := []string{"server", "--secret-env", "SEALTUN_SECRET", "--port", "8080", "--protocol", protocol, "--local-port", localPort}
+	podAnnotations := map[string]string{}
+	env := []corev1.EnvVar{
+		{
+			Name: "SEALTUN_SECRET",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName(name)},
+					Key:                  tunnelAuthSecretKey,
+				},
+			},
+		},
+	}
+	if basicAuth != nil {
+		args = append(args,
+			"--basic-auth-user-env", "SEALTUN_BASIC_AUTH_USER",
+			"--basic-auth-password-hash-env", "SEALTUN_BASIC_AUTH_PASSWORD_HASH",
+		)
+		env = append(env,
+			corev1.EnvVar{
+				Name: "SEALTUN_BASIC_AUTH_USER",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName(name)},
+						Key:                  basicAuthUserKey,
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "SEALTUN_BASIC_AUTH_PASSWORD_HASH",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName(name)},
+						Key:                  basicAuthPasswordKey,
+					},
+				},
+			},
+		)
+	}
+	podAnnotations[serverConfigDigestKey] = serverConfigDigest(secret, basicAuth)
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -500,7 +578,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, protocol, localPort
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 				Spec: corev1.PodSpec{
 					AutomountServiceAccountToken: &f,
 					Containers: []corev1.Container{
@@ -508,18 +586,8 @@ func (c *Client) ensureDeployment(ctx context.Context, name, protocol, localPort
 							Name:            name,
 							Image:           fmt.Sprintf("ghcr.io/gitlayzer/sealtun:%s", imageTagForVersion(version.Version)),
 							ImagePullPolicy: corev1.PullAlways,
-							Args:            []string{"server", "--secret-env", "SEALTUN_SECRET", "--port", "8080", "--protocol", protocol, "--local-port", localPort},
-							Env: []corev1.EnvVar{
-								{
-									Name: "SEALTUN_SECRET",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName(name)},
-											Key:                  tunnelAuthSecretKey,
-										},
-									},
-								},
-							},
+							Args:            args,
+							Env:             env,
 							Ports: []corev1.ContainerPort{
 								{ContainerPort: 8080},
 							},
@@ -570,10 +638,10 @@ func imageTagForVersion(value string) string {
 	if value == "" || value == "dev" {
 		return "latest"
 	}
-	if gitHashPattern.MatchString(value) {
-		return "sha-" + value
+	if releaseVersionPattern.MatchString(value) {
+		return strings.TrimPrefix(value, "v")
 	}
-	return strings.TrimPrefix(value, "v")
+	return "latest"
 }
 
 func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {

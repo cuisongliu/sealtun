@@ -3,7 +3,9 @@ package tunnel
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -15,15 +17,22 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
+type ServerOptions struct {
+	BasicAuth *publicauth.BasicAuth
+}
+
 type Server struct {
-	secret    string
-	port      int
-	protocol  string
-	localPort string
+	secret                     string
+	port                       int
+	protocol                   string
+	localPort                  string
+	basicAuth                  *publicauth.BasicAuth
+	basicAuthAuthorizedHeaders sync.Map
 
 	mu            sync.RWMutex
 	activeSession *yamux.Session
@@ -41,11 +50,16 @@ type Server struct {
 }
 
 func NewServer(secret string, port int, protocol string, localPort string) *Server {
+	return NewServerWithOptions(secret, port, protocol, localPort, ServerOptions{})
+}
+
+func NewServerWithOptions(secret string, port int, protocol string, localPort string, opts ServerOptions) *Server {
 	s := &Server{
 		secret:    secret,
 		port:      port,
 		protocol:  protocol,
 		localPort: localPort,
+		basicAuth: opts.BasicAuth,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -185,6 +199,12 @@ func requireReadOnlyMethod(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
+	if s.basicAuth != nil && !s.authorizedBasicAuth(r) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Sealtun Tunnel", charset="UTF-8"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	start := time.Now()
 	s.totalRequests.Add(1)
 	s.activeRequests.Add(1)
@@ -332,6 +352,32 @@ func (s *Server) authorized(r *http.Request) bool {
 	authHeader := r.Header.Get("Authorization")
 	expectedAuth := fmt.Sprintf("Bearer %s", s.secret)
 	return subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedAuth)) == 1
+}
+
+func (s *Server) authorizedBasicAuth(r *http.Request) bool {
+	if s.basicAuth == nil {
+		return true
+	}
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		if _, ok := s.basicAuthAuthorizedHeaders.Load(basicAuthHeaderDigest(authHeader)); ok {
+			return true
+		}
+	}
+	username, password, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+	authorized := publicauth.Check(*s.basicAuth, username, password)
+	if authorized && authHeader != "" {
+		s.basicAuthAuthorizedHeaders.Store(basicAuthHeaderDigest(authHeader), struct{}{})
+	}
+	return authorized
+}
+
+func basicAuthHeaderDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Server) Start() error {

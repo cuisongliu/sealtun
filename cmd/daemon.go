@@ -146,12 +146,23 @@ func init() {
 }
 
 func daemonTunnelFingerprint(sess session.TunnelSession) string {
+	basicAuthEnabled := "false"
+	basicAuthUsername := ""
+	basicAuthHash := ""
+	if sess.BasicAuth != nil && sess.BasicAuth.Enabled {
+		basicAuthEnabled = "true"
+		basicAuthUsername = sess.BasicAuth.Username
+		basicAuthHash = basicAuthPasswordHash(sess.BasicAuth)
+	}
 	return strings.Join([]string{
 		sess.TunnelID,
 		sessionControlHost(sess),
 		sess.LocalPort,
 		sess.Protocol,
 		sess.Secret,
+		basicAuthEnabled,
+		basicAuthUsername,
+		basicAuthHash,
 	}, "\x00")
 }
 

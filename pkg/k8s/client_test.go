@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/labring/sealtun/pkg/auth"
+	"github.com/labring/sealtun/pkg/publicauth"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
@@ -416,6 +417,88 @@ func TestEnsureTunnelStoresAuthSecretOutsideDeploymentArgs(t *testing.T) {
 	}
 }
 
+func TestEnsureTunnelInjectsBasicAuthViaSecret(t *testing.T) {
+	name := "sealtun-abc123"
+	firstHash, err := publicauth.HashPassword("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := publicauth.HashPassword("new-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientset := fake.NewSimpleClientset()
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	_, err = client.EnsureTunnelWithOptions(context.Background(), "abc123", "raw-secret", "https", "3000", TunnelOptions{
+		BasicAuth: &BasicAuthOptions{
+			Username:     "admin",
+			PasswordHash: firstHash,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+
+	authSecret, err := clientset.CoreV1().Secrets("default").Get(context.Background(), authSecretName(name), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected auth secret to be created: %v", err)
+	}
+	if got := string(authSecret.Data[basicAuthUserKey]); got != "admin" {
+		t.Fatalf("unexpected basic auth username: %q", got)
+	}
+	if got := string(authSecret.Data[basicAuthPasswordKey]); got != firstHash {
+		t.Fatalf("unexpected basic auth password hash: %q", got)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	container := deployment.Spec.Template.Spec.Containers[0]
+	args := strings.Join(container.Args, " ")
+	if !strings.Contains(args, "--basic-auth-user-env SEALTUN_BASIC_AUTH_USER") {
+		t.Fatalf("expected basic auth username env arg, got %#v", container.Args)
+	}
+	if !strings.Contains(args, "--basic-auth-password-hash-env SEALTUN_BASIC_AUTH_PASSWORD_HASH") {
+		t.Fatalf("expected basic auth password hash env arg, got %#v", container.Args)
+	}
+	if strings.Contains(args, firstHash) {
+		t.Fatalf("deployment args must not contain basic auth password hash: %#v", container.Args)
+	}
+	if len(container.Env) != 3 {
+		t.Fatalf("expected tunnel secret and basic auth env vars, got %#v", container.Env)
+	}
+	firstDigest := deployment.Spec.Template.Annotations[serverConfigDigestKey]
+	if firstDigest == "" {
+		t.Fatalf("expected server config digest annotation to trigger pod rollout")
+	}
+	if strings.Contains(firstDigest, firstHash) {
+		t.Fatalf("server config digest annotation must not expose password hash: %q", firstDigest)
+	}
+
+	_, err = client.EnsureTunnelWithOptions(context.Background(), "abc123", "raw-secret", "https", "3000", TunnelOptions{
+		BasicAuth: &BasicAuthOptions{
+			Username:     "admin",
+			PasswordHash: secondHash,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error after password change: %v", err)
+	}
+	updated, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated deployment: %v", err)
+	}
+	if got := updated.Spec.Template.Annotations[serverConfigDigestKey]; got == "" || got == firstDigest {
+		t.Fatalf("expected server config digest annotation to change after password change, got %q", got)
+	}
+}
+
 func TestImageTagForVersion(t *testing.T) {
 	tests := []struct {
 		version string
@@ -423,10 +506,11 @@ func TestImageTagForVersion(t *testing.T) {
 	}{
 		{version: "dev", want: "latest"},
 		{version: "", want: "latest"},
-		{version: "f596979", want: "sha-f596979"},
-		{version: "f596979a", want: "sha-f596979a"},
+		{version: "f596979", want: "latest"},
+		{version: "f596979a", want: "latest"},
 		{version: "v0.0.9", want: "0.0.9"},
 		{version: "0.0.9", want: "0.0.9"},
+		{version: "v0.0.9-rc.1", want: "0.0.9-rc.1"},
 	}
 
 	for _, tt := range tests {

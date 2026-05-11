@@ -7,6 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/yamux v0.1.2
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/crypto v0.50.0
 	golang.org/x/net v0.53.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1

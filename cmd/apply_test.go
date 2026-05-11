@@ -9,6 +9,7 @@ import (
 
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/labring/sealtun/pkg/k8s"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/session"
 )
 
@@ -38,10 +39,15 @@ tunnels:
 }
 
 func TestBuildApplySessionRecordPersistsCustomDomain(t *testing.T) {
+	basicAuth, err := newSessionBasicAuth("admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
 	record := buildApplySessionRecord(normalizedApplyTunnel{
 		TunnelID:  "web",
 		LocalPort: "3000",
 		Protocol:  "https",
+		BasicAuth: basicAuth,
 	}, &auth.AuthData{Region: "https://gzg.sealos.run"}, "ns-demo", "kubeconfig", "secret", k8s.TunnelHosts{
 		PublicHost:   "app.example.com",
 		SealosHost:   "sealtun-web-ns-demo.sealosgzg.site",
@@ -53,6 +59,12 @@ func TestBuildApplySessionRecordPersistsCustomDomain(t *testing.T) {
 	}
 	if record.Host != "app.example.com" || record.SealosHost != "sealtun-web-ns-demo.sealosgzg.site" {
 		t.Fatalf("unexpected hosts in session record: %#v", record)
+	}
+	if record.BasicAuth == nil || !record.BasicAuth.Enabled || record.BasicAuth.Username != "admin" {
+		t.Fatalf("expected basic auth to be persisted without plain password, got %#v", record.BasicAuth)
+	}
+	if record.BasicAuth.PasswordHash == "" || record.BasicAuth.PasswordHash == "secret" {
+		t.Fatal("basic auth password must not be persisted in plain text")
 	}
 }
 
@@ -79,6 +91,110 @@ func TestNormalizeApplyTunnelDefaultsProtocol(t *testing.T) {
 	}
 	if normalized.LocalPort != "8080" {
 		t.Fatalf("expected port alias to be used, got %q", normalized.LocalPort)
+	}
+}
+
+func TestNormalizeApplyTunnelResolvesBasicAuthPasswordEnv(t *testing.T) {
+	t.Setenv("SEALTUN_TEST_BASIC_AUTH_PASSWORD", "secret")
+
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		BasicAuth: &applyBasicAuth{
+			Username:    "admin",
+			PasswordEnv: "SEALTUN_TEST_BASIC_AUTH_PASSWORD",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.BasicAuth == nil || !normalized.BasicAuth.Enabled {
+		t.Fatal("expected basic auth to be enabled")
+	}
+	if normalized.BasicAuth.Username != "admin" {
+		t.Fatalf("unexpected basic auth username: %q", normalized.BasicAuth.Username)
+	}
+	if normalized.BasicAuth.PasswordHash == "" || normalized.BasicAuth.PasswordHash == "secret" {
+		t.Fatalf("expected hashed password, got %q", normalized.BasicAuth.PasswordHash)
+	}
+}
+
+func TestNormalizeApplyTunnelResolvesBasicAuthCredential(t *testing.T) {
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		BasicAuth: &applyBasicAuth{
+			Credential: "admin:secret",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.BasicAuth == nil || !normalized.BasicAuth.Enabled {
+		t.Fatal("expected basic auth to be enabled")
+	}
+	if normalized.BasicAuth.Username != "admin" {
+		t.Fatalf("unexpected basic auth username: %q", normalized.BasicAuth.Username)
+	}
+	if normalized.BasicAuth.PasswordHash == "" || normalized.BasicAuth.PasswordHash == "secret" {
+		t.Fatalf("expected hashed password, got %q", normalized.BasicAuth.PasswordHash)
+	}
+}
+
+func TestReuseExistingBasicAuthHashKeepsApplyIdempotent(t *testing.T) {
+	existing, err := newSessionBasicAuth("admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		BasicAuth: &applyBasicAuth{
+			Credential: "admin:secret",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.BasicAuth == nil || normalized.BasicAuth.PasswordHash == existing.PasswordHash {
+		t.Fatal("test setup expected a fresh bcrypt hash before reuse")
+	}
+
+	reuseExistingBasicAuthHash(&normalized, existing)
+
+	if normalized.BasicAuth.PasswordHash != existing.PasswordHash {
+		t.Fatal("expected matching existing basic auth hash to be reused")
+	}
+}
+
+func TestReuseExistingBasicAuthHashMigratesLegacySHA256(t *testing.T) {
+	existing := &session.BasicAuthConfig{
+		Enabled:        true,
+		Username:       "admin",
+		PasswordSHA256: publicauth.LegacySHA256Hash("secret"),
+	}
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		BasicAuth: &applyBasicAuth{
+			Credential: "admin:secret",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshHash := normalized.BasicAuth.PasswordHash
+
+	reuseExistingBasicAuthHash(&normalized, existing)
+
+	if normalized.BasicAuth.PasswordHash == existing.PasswordSHA256 {
+		t.Fatal("legacy SHA-256 hash should not be reused")
+	}
+	if normalized.BasicAuth.PasswordHash != freshHash {
+		t.Fatal("expected fresh bcrypt hash to be kept while migrating legacy SHA-256 session")
+	}
+	if normalized.BasicAuth.PasswordSHA256 != "" {
+		t.Fatal("expected legacy SHA-256 field to be cleared after migration")
 	}
 }
 

@@ -1,0 +1,16 @@
+.git
+.github
+.DS_Store
+
+sealtun
+dist
+tmp
+*.tmp
+
+docs
+homepage
+packages
+
+coverage.out
+*.test
+

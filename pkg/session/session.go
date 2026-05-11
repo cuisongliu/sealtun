@@ -28,24 +28,32 @@ const (
 )
 
 type TunnelSession struct {
-	TunnelID        string   `json:"tunnelId"`
-	Region          string   `json:"region"`
-	Namespace       string   `json:"namespace"`
-	Kubeconfig      string   `json:"kubeconfig,omitempty"`
-	Protocol        string   `json:"protocol"`
-	Host            string   `json:"host"`
-	SealosHost      string   `json:"sealosHost,omitempty"`
-	CustomDomain    string   `json:"customDomain,omitempty"`
-	LocalPort       string   `json:"localPort"`
-	Secret          string   `json:"secret,omitempty"`
-	Mode            string   `json:"mode,omitempty"`
-	PID             int      `json:"pid"`
-	ConnectionState string   `json:"connectionState,omitempty"`
-	LastError       string   `json:"lastError,omitempty"`
-	LastConnectedAt string   `json:"lastConnectedAt,omitempty"`
-	UpdatedAt       string   `json:"updatedAt,omitempty"`
-	CreatedAt       string   `json:"createdAt"`
-	Resources       []string `json:"resources"`
+	TunnelID        string           `json:"tunnelId"`
+	Region          string           `json:"region"`
+	Namespace       string           `json:"namespace"`
+	Kubeconfig      string           `json:"kubeconfig,omitempty"`
+	Protocol        string           `json:"protocol"`
+	Host            string           `json:"host"`
+	SealosHost      string           `json:"sealosHost,omitempty"`
+	CustomDomain    string           `json:"customDomain,omitempty"`
+	LocalPort       string           `json:"localPort"`
+	Secret          string           `json:"secret,omitempty"`
+	BasicAuth       *BasicAuthConfig `json:"basicAuth,omitempty"`
+	Mode            string           `json:"mode,omitempty"`
+	PID             int              `json:"pid"`
+	ConnectionState string           `json:"connectionState,omitempty"`
+	LastError       string           `json:"lastError,omitempty"`
+	LastConnectedAt string           `json:"lastConnectedAt,omitempty"`
+	UpdatedAt       string           `json:"updatedAt,omitempty"`
+	CreatedAt       string           `json:"createdAt"`
+	Resources       []string         `json:"resources"`
+}
+
+type BasicAuthConfig struct {
+	Enabled        bool   `json:"enabled"`
+	Username       string `json:"username,omitempty"`
+	PasswordHash   string `json:"passwordHash,omitempty"`
+	PasswordSHA256 string `json:"passwordSha256,omitempty"`
 }
 
 func SessionsDir() (string, error) {
@@ -206,6 +214,7 @@ func preserveScrubbedCredentials(path string, next *TunnelSession) {
 	}
 	if existing.Secret == "" {
 		next.Secret = ""
+		next.BasicAuth = nil
 		next.Kubeconfig = ""
 		next.PID = 0
 		next.ConnectionState = ConnectionStateStopped
@@ -285,6 +294,7 @@ func ScrubCredentials() error {
 
 		sess.Kubeconfig = ""
 		sess.Secret = ""
+		sess.BasicAuth = nil
 		sess.PID = 0
 		sess.ConnectionState = ConnectionStateStopped
 		sess.LastError = "local credentials scrubbed"

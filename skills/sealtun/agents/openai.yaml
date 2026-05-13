@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sealtun"
+  short_description: "Use and troubleshoot Sealtun CLI workflows"
+  default_prompt: "Use $sealtun to expose, secure, inspect, or release a Sealtun tunnel."

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/tunnel"
@@ -45,8 +47,15 @@ var serverCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		accessPolicy, err := resolveServerAccessPolicy(serverAccessPolicy, serverAccessPolicyEnv, os.Getenv)
+		if err != nil {
+			return err
+		}
 
-		svr := tunnel.NewServerWithOptions(resolvedSecret, bindPort, serverProtocol, serverLocalPort, tunnel.ServerOptions{BasicAuth: basicAuth})
+		svr := tunnel.NewServerWithOptions(resolvedSecret, bindPort, serverProtocol, serverLocalPort, tunnel.ServerOptions{
+			BasicAuth:    basicAuth,
+			AccessPolicy: accessPolicy,
+		})
 		return svr.Start()
 	},
 }
@@ -62,6 +71,8 @@ var serverBasicAuthPasswordHash string
 var serverBasicAuthPasswordHashEnv string
 var serverBasicAuthPasswordSHA256 string
 var serverBasicAuthPasswordSHA256Env string
+var serverAccessPolicy string
+var serverAccessPolicyEnv string
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
@@ -76,6 +87,8 @@ func init() {
 	serverCmd.Flags().StringVar(&serverBasicAuthPasswordHashEnv, "basic-auth-password-hash-env", "", "Read Basic Auth password hash from an environment variable")
 	serverCmd.Flags().StringVar(&serverBasicAuthPasswordSHA256, "basic-auth-password-sha256", "", "Deprecated: Basic Auth password SHA-256 hex digest for public tunnel traffic")
 	serverCmd.Flags().StringVar(&serverBasicAuthPasswordSHA256Env, "basic-auth-password-sha256-env", "", "Deprecated: read Basic Auth password SHA-256 hex digest from an environment variable")
+	serverCmd.Flags().StringVar(&serverAccessPolicy, "access-policy", "", "Access policy JSON for public tunnel traffic")
+	serverCmd.Flags().StringVar(&serverAccessPolicyEnv, "access-policy-env", "", "Read access policy JSON from an environment variable")
 	_ = serverCmd.Flags().MarkHidden("basic-auth-password-sha256")
 	_ = serverCmd.Flags().MarkHidden("basic-auth-password-sha256-env")
 }
@@ -142,4 +155,22 @@ func resolveServerBasicAuth(input serverBasicAuthInput, lookupEnv func(string) s
 		return nil, err
 	}
 	return &config, nil
+}
+
+func resolveServerAccessPolicy(flagValue, envName string, lookupEnv func(string) string) (*accesspolicy.Policy, error) {
+	value, err := resolveServerValue(flagValue, envName, "access policy", lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	if value == "" {
+		return nil, nil
+	}
+	var policy accesspolicy.Policy
+	if err := json.Unmarshal([]byte(value), &policy); err != nil {
+		return nil, fmt.Errorf("parse access policy: %w", err)
+	}
+	if err := accesspolicy.Validate(&policy); err != nil {
+		return nil, fmt.Errorf("invalid access policy: %w", err)
+	}
+	return &policy, nil
 }

@@ -61,6 +61,20 @@ var daemonCmd = &cobra.Command{
 				if sess.Mode != "daemon" {
 					continue
 				}
+				if sessionExpired(sess, time.Now()) {
+					fmt.Printf("[+] tunnel %s expired; cleaning up...\n", sess.TunnelID)
+					cleanupCtx, cancel := context.WithTimeout(ctx, tunnelCleanupTimeout)
+					err := cleanupSessionResources(cleanupCtx, sess)
+					cancel()
+					if err != nil {
+						fmt.Printf("[!] expired tunnel %s cleanup failed: %v\n", sess.TunnelID, err)
+						continue
+					}
+					if err := session.Delete(sess.TunnelID); err != nil && !os.IsNotExist(err) {
+						fmt.Printf("[!] expired tunnel %s local cleanup failed: %v\n", sess.TunnelID, err)
+					}
+					continue
+				}
 				if sess.ConnectionState == session.ConnectionStateStopped {
 					continue
 				}
@@ -163,6 +177,8 @@ func daemonTunnelFingerprint(sess session.TunnelSession) string {
 		basicAuthEnabled,
 		basicAuthUsername,
 		basicAuthHash,
+		sess.TTL,
+		sess.ExpiresAt,
 	}, "\x00")
 }
 

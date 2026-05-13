@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/publicauth"
 )
 
@@ -178,6 +179,88 @@ func TestServerBasicAuthAcceptsMatchingCredentials(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected authenticated request to reach proxy path, got %d", rec.Code)
+	}
+}
+
+func TestServerBearerTokenProtectsPublicTraffic(t *testing.T) {
+	t.Parallel()
+
+	hash, err := accesspolicy.HashToken("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithOptions("tunnel-secret", 8080, "https", "3000", ServerOptions{
+		AccessPolicy: &accesspolicy.Policy{BearerTokenHashes: []string{hash}},
+	})
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "https://example.test/app", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing bearer token to be rejected, got %d", unauthorized.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	req.Header.Set("Authorization", "Bearer access-token")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected bearer-authenticated request to reach proxy, got %d", rec.Code)
+	}
+}
+
+func TestServerIPAllowlistAndDenylist(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions("tunnel-secret", 8080, "https", "3000", ServerOptions{
+		AccessPolicy: &accesspolicy.Policy{
+			IPAllowlist: []string{"10.0.0.0/8"},
+			IPDenylist:  []string{"10.0.0.5"},
+		},
+	})
+
+	deniedReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	deniedReq.Header.Set("X-Forwarded-For", "10.0.0.5")
+	deniedRec := httptest.NewRecorder()
+	server.ServeHTTP(deniedRec, deniedReq)
+	if deniedRec.Code != http.StatusForbidden {
+		t.Fatalf("expected denied IP to be rejected, got %d", deniedRec.Code)
+	}
+
+	allowedReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	allowedReq.Header.Set("X-Forwarded-For", "10.0.0.6")
+	allowedRec := httptest.NewRecorder()
+	server.ServeHTTP(allowedRec, allowedReq)
+	if allowedRec.Code != http.StatusBadGateway {
+		t.Fatalf("expected allowed IP to reach proxy path, got %d", allowedRec.Code)
+	}
+}
+
+func TestServerTemporaryAccessTokenIsStrippedBeforeProxy(t *testing.T) {
+	t.Parallel()
+
+	hash, err := accesspolicy.HashToken("preview-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithOptions("tunnel-secret", 8080, "https", "3000", ServerOptions{
+		AccessPolicy: &accesspolicy.Policy{TemporaryTokens: []accesspolicy.TemporaryToken{{
+			TokenHash: hash,
+			ExpiresAt: "2099-01-01T00:00:00Z",
+		}}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/app?_sealtun_token=preview-token&a=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected temporary token request to reach proxy path, got %d", rec.Code)
+	}
+	if got := req.URL.Query().Get(accesspolicy.TemporaryTokenQueryParam); got != "" {
+		t.Fatalf("temporary token query should be stripped, got %q", got)
+	}
+	if got := req.URL.Query().Get("a"); got != "1" {
+		t.Fatalf("unrelated query should remain, got %q", got)
 	}
 }
 

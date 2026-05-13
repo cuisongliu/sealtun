@@ -39,6 +39,9 @@ type TunnelSession struct {
 	LocalPort       string           `json:"localPort"`
 	Secret          string           `json:"secret,omitempty"`
 	BasicAuth       *BasicAuthConfig `json:"basicAuth,omitempty"`
+	AccessPolicy    *AccessPolicy    `json:"accessPolicy,omitempty"`
+	TTL             string           `json:"ttl,omitempty"`
+	ExpiresAt       string           `json:"expiresAt,omitempty"`
 	Mode            string           `json:"mode,omitempty"`
 	PID             int              `json:"pid"`
 	ConnectionState string           `json:"connectionState,omitempty"`
@@ -54,6 +57,20 @@ type BasicAuthConfig struct {
 	Username       string `json:"username,omitempty"`
 	PasswordHash   string `json:"passwordHash,omitempty"`
 	PasswordSHA256 string `json:"passwordSha256,omitempty"`
+}
+
+type AccessPolicy struct {
+	BearerTokenHashes []string         `json:"bearerTokenHashes,omitempty"`
+	IPAllowlist       []string         `json:"ipAllowlist,omitempty"`
+	IPDenylist        []string         `json:"ipDenylist,omitempty"`
+	TemporaryTokens   []TemporaryToken `json:"temporaryTokens,omitempty"`
+}
+
+type TemporaryToken struct {
+	Name      string `json:"name,omitempty"`
+	TokenHash string `json:"tokenHash"`
+	TTL       string `json:"ttl,omitempty"`
+	ExpiresAt string `json:"expiresAt"`
 }
 
 func SessionsDir() (string, error) {
@@ -215,6 +232,7 @@ func preserveScrubbedCredentials(path string, next *TunnelSession) {
 	if existing.Secret == "" {
 		next.Secret = ""
 		next.BasicAuth = nil
+		next.AccessPolicy = nil
 		next.Kubeconfig = ""
 		next.PID = 0
 		next.ConnectionState = ConnectionStateStopped
@@ -295,6 +313,7 @@ func ScrubCredentials() error {
 		sess.Kubeconfig = ""
 		sess.Secret = ""
 		sess.BasicAuth = nil
+		sess.AccessPolicy = nil
 		sess.PID = 0
 		sess.ConnectionState = ConnectionStateStopped
 		sess.LastError = "local credentials scrubbed"

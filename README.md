@@ -103,6 +103,19 @@ NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
 
 `make npm-publish` 会先从对应 GitHub Release 下载 GoReleaser 生成的二进制资产，生成本地 `packages/` 目录，然后先发布各平台可选依赖包，最后发布主包。`packages/` 是发包中间产物，已被 `.gitignore` 忽略，不提交到远端。
 
+## 🤖 Codex Skill
+
+仓库内置了 `skills/sealtun`，用于让 Codex 类 AI agent 更准确地理解和操作 Sealtun。这个 skill 会在用户提到 `sealtun`、`sealtun.yaml`、内网穿透、本地端口暴露、临时公网预览链接、第三方回调到本地、隧道访问控制、发版或 npm 发布等场景时被动匹配。
+
+skill 触发后会先判断是否真的属于“本地/dev 服务通过 Sealtun 暴露到公网”的范围，再按用法指导、实际操作、仓库修改、排障或发版流程执行；没有明确要求时，不会擅自运行 `sealtun expose/apply/domain set/stop/cleanup/logout`、`git tag/push` 或 `npm publish` 这类会改变本地、云端或远端状态的命令。
+
+如果希望在当前机器全局启用，可以把该目录同步到 Codex 的全局技能目录：
+
+```bash
+mkdir -p ~/.codex/skills
+cp -R skills/sealtun ~/.codex/skills/sealtun
+```
+
 ## 🚀 快速上手
 
 ### 1. 登录到 Sealos
@@ -154,6 +167,22 @@ sealtun expose 3000 --basic-auth admin:change-me
 ```
 
 Basic Auth 由 Sealtun server 代理层校验，不依赖 Ingress annotation；它只保护公网业务路径，不会拦截 `/_sealtun/ws` 隧道控制通道、健康检查或受内部 Bearer secret 保护的 metrics。
+
+也可以启用不依赖 Ingress 的访问策略：
+```bash
+# Bearer Token
+export SEALTUN_BEARER_TOKEN='share-secret'
+sealtun expose 3000 --bearer-token-env SEALTUN_BEARER_TOKEN
+
+# IP allowlist / denylist，支持单个 IP 或 CIDR
+sealtun expose 3000 --ip-allowlist 203.0.113.10,198.51.100.0/24 --ip-denylist 198.51.100.9
+
+# 临时访问链接，默认 1 小时后失效
+export SEALTUN_TEMP_TOKEN='review-link-secret'
+sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-access-ttl 1h
+```
+
+Bearer Token 和临时链接 token 至少需要 8 个字符，只保存 SHA-256 hash，不会写入 Deployment 参数；临时链接使用 `?_sealtun_token=...` 访问，Sealtun 会在转发到本地服务前移除该查询参数。IP 规则优先使用 Ingress/代理传入的 `X-Real-IP`，再回退到最近一跳 `X-Forwarded-For`。Basic Auth 与 Bearer/临时链接同时配置时，任一认证方式通过即可访问。
 
 Sealtun 会自动执行以下操作：
 1. 在你的 Sealos Namespace 中启动一个隧道代理 Pod。
@@ -233,8 +262,20 @@ tunnels:
     localPort: 3000
     protocol: https
     domain: app.example.com
+    ttl: 2h
     basicAuth:
       credential: admin:change-me
+    accessPolicy:
+      bearerTokenEnv: SEALTUN_BEARER_TOKEN
+      ipAllowlist:
+        - 203.0.113.10
+        - 198.51.100.0/24
+      ipDenylist:
+        - 198.51.100.9
+      temporaryLinks:
+        - name: review
+          tokenEnv: SEALTUN_TEMP_TOKEN
+          ttl: 1h
     waitDomain: false
     readyTimeout: 90s
     domainTimeout: 5m
@@ -244,6 +285,9 @@ tunnels:
 ```bash
 # 离线校验和预览，不需要登录
 sealtun apply -f sealtun.yaml --dry-run
+
+# 对比本地 session 与声明式配置
+sealtun diff -f sealtun.yaml
 
 # 创建或更新隧道
 sealtun apply -f sealtun.yaml
@@ -263,7 +307,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
+`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
 
 ## 🛠️ 架构详情
 
@@ -283,6 +327,8 @@ basicAuth:
 - 绑定后会同时保留 Sealos 官方 host 和用户域名：daemon 始终使用 Sealos host 连接控制面，用户访问域名可通过 CNAME 指向该 Sealos host。
 - `--wait-domain` 只在同时提供 `--domain` 时等待 DNS CNAME、绑定 Ingress 与 cert-manager 证书就绪；超时不会删除隧道，可稍后用 `sealtun domain set` 或 `sealtun domain verify` 复查。
 - `domain status` 可批量查看所有自定义域名的 DNS、Ingress、证书是否就绪；`domain doctor` 会输出每个域名的详细诊断和告警。
+- 访问策略支持 Basic Auth、Bearer Token、IP allowlist/denylist 与临时访问链接，均由 Sealtun server 代理层执行，不依赖 Ingress annotation。
+- 声明式配置支持 `sealtun diff -f`、多 tunnel 批量 apply 和 `ttl` 自动过期清理。
 - `logs` 读取远端 tunnel Pod 日志；`metrics` 聚合本地、远端和 server counters，其中 server counters 需要新版本远端镜像支持。
 - `dashboard` 是本地只读 Web 控制台，不需要额外服务端组件。
 - `apply -f sealtun.yaml` 是声明式配置 MVP，当前覆盖 HTTPS 隧道、稳定 tunnel name、自定义域名指引和 daemon 托管。

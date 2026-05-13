@@ -1,0 +1,151 @@
+# Sealtun Troubleshooting
+
+Use this when users report tunnel failures, auth issues, stale sessions, domain problems, missing metrics, or confusing CLI output.
+
+## Fast Local Checks
+
+```bash
+sealtun status
+sealtun region current
+sealtun profile current
+sealtun list --check
+sealtun inspect <tunnel-id>
+sealtun doctor
+```
+
+Start by checking login, active region/profile, local session records, and whether the local target port is reachable.
+
+## Login, Region, Profile
+
+Symptoms:
+
+- `not logged in. Please run 'sealtun login' first`
+- A tunnel appears in the wrong namespace or region.
+- `apply` refuses to update a tunnel because region or namespace differs.
+
+Actions:
+
+```bash
+sealtun status --json
+sealtun region list
+sealtun region current
+sealtun profile list
+sealtun profile use <name>
+sealtun login <region> --profile <name>
+```
+
+Profiles are stored under `~/.sealtun/profiles/<name>`. Switching a profile updates the active auth and kubeconfig used by later commands.
+
+## Daemon And Session Issues
+
+Symptoms:
+
+- Tunnel is listed but not connected.
+- A stale tunnel remains after the owner process exits.
+- Local daemon does not pick up an applied tunnel.
+
+Actions:
+
+```bash
+sealtun list
+sealtun inspect <tunnel-id>
+sealtun doctor
+sealtun stop <tunnel-id>
+sealtun cleanup
+```
+
+`expose` normally starts daemon mode unless `--foreground` is used. `apply` also ensures the local daemon is running after successful cloud changes. Stale sessions can be cleaned up with `stop`, `cleanup`, or `cleanup --all` depending on scope.
+
+## Local Port Unreachable
+
+Symptoms:
+
+- Public URL returns the Sealtun offline page.
+- `list --check` shows degraded local target health.
+- `inspect` shows the tunnel owner alive but target port unreachable.
+
+Actions:
+
+```bash
+sealtun list --check
+sealtun inspect <tunnel-id>
+lsof -i :3000
+curl -v http://127.0.0.1:3000/
+```
+
+Fix the local service first. Sealtun forwards to `localhost:<localPort>` from the machine running the CLI.
+
+## Remote Kubernetes Or Pod Problems
+
+Symptoms:
+
+- Timed out waiting for tunnel server.
+- Remote pod is not ready.
+- Image pull, service, or ingress errors.
+
+Actions:
+
+```bash
+sealtun inspect <tunnel-id> --remote
+sealtun logs <tunnel-id> --tail 200
+sealtun metrics <tunnel-id> --json
+sealtun doctor --json
+```
+
+Remote diagnostics inspect the Sealtun-managed Deployment, Service, Ingress, Pod, Events, and readiness where available. If code changes are needed, inspect `pkg/k8s`, `cmd/inspect.go`, `cmd/doctor.go`, and related tests.
+
+## Custom Domain, DNS, Certificate
+
+Symptoms:
+
+- Custom domain still points to the Sealos host only.
+- `domain set` or `apply` refuses an unverified domain.
+- Certificate is not ready.
+
+Actions:
+
+```bash
+sealtun domain status
+sealtun domain verify <tunnel-id>
+sealtun domain verify <tunnel-id> --wait --timeout 5m
+sealtun domain doctor <tunnel-id>
+```
+
+Confirm the user configured:
+
+```text
+CNAME <custom-domain> -> <sealos-host>
+```
+
+Sealtun intentionally verifies the CNAME before writing the custom host to Ingress. This avoids claiming arbitrary hosts in shared Ingress infrastructure. Certificate readiness depends on cert-manager after the custom host is attached.
+
+## Access Control Problems
+
+Symptoms:
+
+- Basic Auth prompt is missing or rejects credentials.
+- Bearer token requests return unauthorized.
+- Temporary link stopped working.
+- IP allowlist denies a caller unexpectedly.
+
+Actions:
+
+```bash
+sealtun inspect <tunnel-id>
+sealtun logs <tunnel-id> --tail 200
+sealtun metrics <tunnel-id> --json
+```
+
+Check the session access policy. Tokens must be at least 8 characters. Temporary links expire at `expiresAt`; query parameter name is `_sealtun_token`. IP decisions use `X-Real-IP`, then nearest valid `X-Forwarded-For`, then `RemoteAddr`, so upstream proxy headers matter.
+
+## Metrics And Dashboard
+
+`metrics` combines local session data, remote Kubernetes readiness, and server counters where the remote image supports them. Missing server counters usually mean the remote pod is older or unreachable, not necessarily that the tunnel is down.
+
+Dashboard is local and read-only by default:
+
+```bash
+sealtun dashboard --addr 127.0.0.1 --port 19777
+```
+
+Treat `dashboard --allow-remote` as exposing local operational data.

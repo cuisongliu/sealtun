@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/labring/sealtun/pkg/k8s"
@@ -141,6 +142,68 @@ func TestNormalizeApplyTunnelResolvesBasicAuthCredential(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplyTunnelResolvesAccessPolicyAndTTL(t *testing.T) {
+	t.Setenv("SEALTUN_TEST_BEARER", "secret-token")
+	t.Setenv("SEALTUN_TEST_TEMP", "preview-token")
+
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		TTL:       "2h",
+		AccessPolicy: &applyAccessPolicy{
+			BearerTokenEnv: "SEALTUN_TEST_BEARER",
+			IPAllowlist:    []string{"10.0.0.0/8"},
+			IPDenylist:     []string{"10.0.0.9"},
+			TemporaryLinks: []applyTemporaryLink{{
+				Name:     "review",
+				TokenEnv: "SEALTUN_TEST_TEMP",
+				TTL:      "1h",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.AccessPolicy == nil {
+		t.Fatal("expected access policy")
+	}
+	if len(normalized.AccessPolicy.BearerTokenHashes) != 1 || strings.Contains(normalized.AccessPolicy.BearerTokenHashes[0], "secret-token") {
+		t.Fatalf("expected bearer token hash, got %#v", normalized.AccessPolicy.BearerTokenHashes)
+	}
+	if len(normalized.AccessPolicy.TemporaryTokens) != 1 || normalized.AccessPolicy.TemporaryTokens[0].Name != "review" {
+		t.Fatalf("expected temporary link config, got %#v", normalized.AccessPolicy.TemporaryTokens)
+	}
+	if normalized.ExpiresAt == "" {
+		t.Fatal("expected ttl to produce expiresAt")
+	}
+	if _, err := time.Parse(time.RFC3339, normalized.ExpiresAt); err != nil {
+		t.Fatalf("expected RFC3339 expiresAt, got %q", normalized.ExpiresAt)
+	}
+}
+
+func TestTemporaryAccessURLEscapesToken(t *testing.T) {
+	got := temporaryAccessURL("app.example.com", "token with&symbols?")
+	want := "https://app.example.com/?_sealtun_token=token+with%26symbols%3F"
+	if got != want {
+		t.Fatalf("expected escaped temporary URL %q, got %q", want, got)
+	}
+}
+
+func TestApplyTemporaryAccessURLsOnlyPrintsInlineTokens(t *testing.T) {
+	got := applyTemporaryAccessURLs("app.example.com", &applyAccessPolicy{
+		TemporaryLinks: []applyTemporaryLink{
+			{Token: "inline-token", TTL: "1h"},
+			{TokenEnv: "SEALTUN_TEMP_TOKEN", TTL: "1h"},
+		},
+	})
+	if len(got) != 1 {
+		t.Fatalf("expected only inline temporary token URL to be printable, got %#v", got)
+	}
+	if got[0] != "https://app.example.com/?_sealtun_token=inline-token" {
+		t.Fatalf("unexpected temporary URL: %q", got[0])
+	}
+}
+
 func TestReuseExistingBasicAuthHashKeepsApplyIdempotent(t *testing.T) {
 	existing, err := newSessionBasicAuth("admin", "secret")
 	if err != nil {
@@ -216,6 +279,216 @@ tunnels:
 	if _, err := runApply(context.Background(), path, true); err == nil {
 		t.Fatal("expected duplicate tunnel names to be rejected")
 	}
+}
+
+func TestRunDiffDetectsCreateAndUpdate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "default",
+		Protocol:  "https",
+		Host:      "web.example.com",
+		LocalPort: "3000",
+		Secret:    "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: web
+    localPort: 3001
+  - name: api
+    localPort: 8080
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runDiff(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected two diff results, got %d", len(results))
+	}
+	if results[0].TunnelID != "api" && results[1].TunnelID != "api" {
+		t.Fatalf("expected api create result, got %#v", results)
+	}
+	foundUpdate := false
+	for _, result := range results {
+		if result.TunnelID == "web" {
+			foundUpdate = result.Action == "update" && len(result.Changes) > 0
+			if result.CurrentHost != "" {
+				t.Fatalf("expected currentHost to report custom domain, got public host %q", result.CurrentHost)
+			}
+		}
+	}
+	if !foundUpdate {
+		t.Fatalf("expected web update diff, got %#v", results)
+	}
+}
+
+func TestRunDiffWithoutSessionDirectoryPlansCreate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: web
+    localPort: 3000
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runDiff(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Action != "create" {
+		t.Fatalf("expected create diff without session dir, got %#v", results)
+	}
+}
+
+func TestRunDiffReusesUnexpiredTTLSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "default",
+		Protocol:  "https",
+		Host:      "web.example.com",
+		LocalPort: "3000",
+		Secret:    "secret",
+		TTL:       "2h",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: web
+    localPort: 3000
+    ttl: 2h
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runDiff(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Action != "no-op" {
+		t.Fatalf("expected ttl-only reapply to be a no-op while unexpired, got %#v", results)
+	}
+}
+
+func TestRunDiffDetectsBasicAuthPasswordChange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	basicAuth, err := newSessionBasicAuth("admin", "old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "default",
+		Protocol:  "https",
+		Host:      "web.example.com",
+		LocalPort: "3000",
+		Secret:    "secret",
+		BasicAuth: basicAuth,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: web
+    localPort: 3000
+    basicAuth:
+      credential: admin:new-password
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runDiff(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Action != "update" {
+		t.Fatalf("expected basic auth password change to be an update, got %#v", results)
+	}
+	if !containsString(results[0].Changes, "basicAuth") {
+		t.Fatalf("expected basicAuth change, got %#v", results[0].Changes)
+	}
+}
+
+func TestRunDiffReusesTemporaryLinkTTLSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SEALTUN_TEST_TEMP", "preview-token")
+	existingPolicy, err := resolveApplyAccessPolicy(&applyAccessPolicy{
+		TemporaryLinks: []applyTemporaryLink{{
+			Name:     "review",
+			TokenEnv: "SEALTUN_TEST_TEMP",
+			TTL:      "1h",
+		}},
+	}, time.Now().UTC(), getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingPolicy.TemporaryTokens[0].ExpiresAt = time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:     "web",
+		Region:       "https://gzg.sealos.run",
+		Namespace:    "default",
+		Protocol:     "https",
+		Host:         "web.example.com",
+		LocalPort:    "3000",
+		Secret:       "secret",
+		AccessPolicy: existingPolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: web
+    localPort: 3000
+    accessPolicy:
+      temporaryLinks:
+        - name: review
+          tokenEnv: SEALTUN_TEST_TEMP
+          ttl: 1h
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runDiff(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Action != "no-op" {
+		t.Fatalf("expected temporary-link ttl reapply to be a no-op while unexpired, got %#v", results)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadApplyFileRejectsOversizedFiles(t *testing.T) {

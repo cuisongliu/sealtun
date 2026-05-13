@@ -103,6 +103,19 @@ NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
 
 `make npm-publish` downloads the GoReleaser binary assets from the matching GitHub Release, generates the local `packages/` directory, publishes each platform optional dependency first, and then publishes the main package. `packages/` is a publish-time artifact and is ignored by `.gitignore`, so it is not committed.
 
+## Codex Skill
+
+This repository includes `skills/sealtun` so Codex-like AI agents can understand and operate Sealtun more accurately. The skill is designed to passively match requests about `sealtun`, `sealtun.yaml`, local tunneling, exposing a local port, temporary public preview links, third-party callbacks to a local service, tunnel access control, releases, and npm publishing.
+
+After the skill triggers, it first checks whether the request is actually about making a local/dev service public through Sealtun. It then follows a fixed guidance, live operation, repository-change, troubleshooting, or release workflow. Unless the user explicitly asks for execution, it will not run state-changing commands such as `sealtun expose/apply/domain set/stop/cleanup/logout`, `git tag/push`, or `npm publish`.
+
+To enable it globally on the current machine, sync the directory into Codex's global skills directory:
+
+```bash
+mkdir -p ~/.codex/skills
+cp -R skills/sealtun ~/.codex/skills/sealtun
+```
+
 ## Quick Start
 
 ### 1. Login to Sealos
@@ -154,6 +167,22 @@ sealtun expose 3000 --basic-auth admin:change-me
 ```
 
 Basic Auth is enforced by the Sealtun server proxy layer, not by Ingress annotations. It protects only public application paths and does not block the `/_sealtun/ws` tunnel control channel, health checks, or metrics protected by the internal Bearer secret.
+
+You can also enable proxy-layer access policies without depending on Ingress annotations:
+```bash
+# Bearer Token
+export SEALTUN_BEARER_TOKEN='share-secret'
+sealtun expose 3000 --bearer-token-env SEALTUN_BEARER_TOKEN
+
+# IP allowlist / denylist, supporting single IPs and CIDR ranges
+sealtun expose 3000 --ip-allowlist 203.0.113.10,198.51.100.0/24 --ip-denylist 198.51.100.9
+
+# Temporary access link, expiring after 1 hour by default
+export SEALTUN_TEMP_TOKEN='review-link-secret'
+sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-access-ttl 1h
+```
+
+Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the nearest `X-Forwarded-For` hop. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access.
 
 Sealtun will:
 1. Spin up a tunnel proxy Pod in your Sealos namespace.
@@ -233,8 +262,20 @@ tunnels:
     localPort: 3000
     protocol: https
     domain: app.example.com
+    ttl: 2h
     basicAuth:
       credential: admin:change-me
+    accessPolicy:
+      bearerTokenEnv: SEALTUN_BEARER_TOKEN
+      ipAllowlist:
+        - 203.0.113.10
+        - 198.51.100.0/24
+      ipDenylist:
+        - 198.51.100.9
+      temporaryLinks:
+        - name: review
+          tokenEnv: SEALTUN_TEMP_TOKEN
+          ttl: 1h
     waitDomain: false
     readyTimeout: 90s
     domainTimeout: 5m
@@ -244,6 +285,9 @@ Apply it:
 ```bash
 # Offline validation and preview; no login required
 sealtun apply -f sealtun.yaml --dry-run
+
+# Compare local sessions with the declarative config
+sealtun diff -f sealtun.yaml
 
 # Create or update tunnels
 sealtun apply -f sealtun.yaml
@@ -263,7 +307,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
+`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
 
 ## Architecture Details
 
@@ -281,6 +325,8 @@ basicAuth:
 - After attachment, custom domains keep both hosts on the Ingress: the daemon uses the Sealos host for the control tunnel, while user traffic can use the CNAME-backed custom domain.
 - `--wait-domain` waits for DNS CNAME, Ingress attachment, and cert-manager certificate readiness only when `--domain` is also provided; timeout does not delete the tunnel, and you can retry with `sealtun domain set` or recheck with `sealtun domain verify`.
 - `domain status` summarizes DNS, Ingress, and certificate readiness for every custom domain; `domain doctor` prints detailed per-domain diagnostics and warnings.
+- Access policies support Basic Auth, Bearer Token, IP allowlist/denylist, and temporary access links at the Sealtun server proxy layer without relying on Ingress annotations.
+- Declarative config supports `sealtun diff -f`, multi-tunnel batch apply, and `ttl` automatic expiry cleanup.
 - `logs` reads remote tunnel pod logs; `metrics` aggregates local state, remote readiness, and server counters when the remote image supports them.
 - `dashboard` is a local read-only web console and does not require any additional hosted backend.
 - `apply -f sealtun.yaml` is the declarative config MVP for HTTPS tunnels, stable tunnel names, custom domain guidance, and daemon-managed sessions.

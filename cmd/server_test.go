@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/publicauth"
 )
 
@@ -91,5 +92,30 @@ func TestResolveServerBasicAuthAcceptsLegacySHA256(t *testing.T) {
 	}
 	if got == nil || got.PasswordHash != hash {
 		t.Fatalf("unexpected basic auth config: %#v", got)
+	}
+}
+
+func TestResolveServerAccessPolicyFromEnv(t *testing.T) {
+	hash, err := accesspolicy.HashToken("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveServerAccessPolicy("", "ACCESS_POLICY", func(name string) string {
+		if name != "ACCESS_POLICY" {
+			t.Fatalf("unexpected env lookup: %s", name)
+		}
+		return `{"bearerTokenHashes":["` + hash + `"],"ipAllowlist":["10.0.0.0/8"]}`
+	})
+	if err != nil {
+		t.Fatalf("resolveServerAccessPolicy returned error: %v", err)
+	}
+	if got == nil || len(got.BearerTokenHashes) != 1 || got.IPAllowlist[0] != "10.0.0.0/8" {
+		t.Fatalf("unexpected access policy: %#v", got)
+	}
+}
+
+func TestResolveServerAccessPolicyRejectsInvalidJSON(t *testing.T) {
+	if _, err := resolveServerAccessPolicy("{bad", "", func(string) string { return "" }); err == nil {
+		t.Fatal("expected invalid access policy JSON to fail")
 	}
 }

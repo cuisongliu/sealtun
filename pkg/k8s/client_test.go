@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/labring/sealtun/pkg/publicauth"
 	appsv1 "k8s.io/api/apps/v1"
@@ -496,6 +497,67 @@ func TestEnsureTunnelInjectsBasicAuthViaSecret(t *testing.T) {
 	}
 	if got := updated.Spec.Template.Annotations[serverConfigDigestKey]; got == "" || got == firstDigest {
 		t.Fatalf("expected server config digest annotation to change after password change, got %q", got)
+	}
+}
+
+func TestEnsureTunnelInjectsAccessPolicyViaSecret(t *testing.T) {
+	name := "sealtun-abc123"
+	hash, err := accesspolicy.HashToken("access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientset := fake.NewSimpleClientset()
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	_, err = client.EnsureTunnelWithOptions(context.Background(), "abc123", "raw-secret", "https", "3000", TunnelOptions{
+		AccessPolicy: &accesspolicy.Policy{
+			BearerTokenHashes: []string{hash},
+			IPAllowlist:       []string{"10.0.0.0/8"},
+			IPDenylist:        []string{"10.0.0.9"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+
+	authSecret, err := clientset.CoreV1().Secrets("default").Get(context.Background(), authSecretName(name), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected auth secret to be created: %v", err)
+	}
+	policyJSON := string(authSecret.Data[accessPolicyKey])
+	if !strings.Contains(policyJSON, hash) || !strings.Contains(policyJSON, "10.0.0.0/8") {
+		t.Fatalf("expected access policy JSON in secret, got %s", policyJSON)
+	}
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	container := deployment.Spec.Template.Spec.Containers[0]
+	args := strings.Join(container.Args, " ")
+	if !strings.Contains(args, "--access-policy-env SEALTUN_ACCESS_POLICY") {
+		t.Fatalf("expected access policy env arg, got %#v", container.Args)
+	}
+	if strings.Contains(args, hash) || strings.Contains(deployment.Spec.Template.Annotations[serverConfigDigestKey], hash) {
+		t.Fatal("deployment args and annotations must not expose access policy token hashes")
+	}
+}
+
+func TestEnsureTunnelRejectsInvalidAccessPolicy(t *testing.T) {
+	client := &Client{
+		clientset: fake.NewSimpleClientset(),
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	_, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "https", "3000", TunnelOptions{
+		AccessPolicy: &accesspolicy.Policy{IPAllowlist: []string{"not-an-ip"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid access policy") {
+		t.Fatalf("expected invalid access policy error, got %v", err)
 	}
 }
 

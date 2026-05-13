@@ -17,13 +17,15 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/publicauth"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
 type ServerOptions struct {
-	BasicAuth *publicauth.BasicAuth
+	BasicAuth    *publicauth.BasicAuth
+	AccessPolicy *accesspolicy.Policy
 }
 
 type Server struct {
@@ -32,6 +34,7 @@ type Server struct {
 	protocol                   string
 	localPort                  string
 	basicAuth                  *publicauth.BasicAuth
+	accessPolicy               *accesspolicy.Policy
 	basicAuthAuthorizedHeaders sync.Map
 
 	mu            sync.RWMutex
@@ -55,11 +58,12 @@ func NewServer(secret string, port int, protocol string, localPort string) *Serv
 
 func NewServerWithOptions(secret string, port int, protocol string, localPort string, opts ServerOptions) *Server {
 	s := &Server{
-		secret:    secret,
-		port:      port,
-		protocol:  protocol,
-		localPort: localPort,
-		basicAuth: opts.BasicAuth,
+		secret:       secret,
+		port:         port,
+		protocol:     protocol,
+		localPort:    localPort,
+		basicAuth:    opts.BasicAuth,
+		accessPolicy: opts.AccessPolicy,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -199,11 +203,21 @@ func requireReadOnlyMethod(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
-	if s.basicAuth != nil && !s.authorizedBasicAuth(r) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Sealtun Tunnel", charset="UTF-8"`)
+	if ok, reason := accesspolicy.NetworkAllowed(s.accessPolicy, r); !ok {
+		http.Error(w, reason, http.StatusForbidden)
+		return
+	}
+	if !s.authorizedPublicTraffic(r) {
+		if s.basicAuth != nil {
+			w.Header().Add("WWW-Authenticate", `Basic realm="Sealtun Tunnel", charset="UTF-8"`)
+		}
+		if accesspolicy.HasTokenAuth(s.accessPolicy) {
+			w.Header().Add("WWW-Authenticate", `Bearer realm="Sealtun Tunnel"`)
+		}
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	accesspolicy.StripTemporaryTokenQuery(r.URL)
 
 	start := time.Now()
 	s.totalRequests.Add(1)
@@ -222,6 +236,18 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 		s.total5xx.Add(1)
 	}
 	fmt.Printf("request method=%s path=%q status=%d bytes=%d duration=%s\n", r.Method, redactedRequestPath(r), status, recorder.bytes, time.Since(start).Round(time.Millisecond))
+}
+
+func (s *Server) authorizedPublicTraffic(r *http.Request) bool {
+	requiresBasic := s.basicAuth != nil
+	requiresToken := accesspolicy.HasTokenAuth(s.accessPolicy)
+	if !requiresBasic && !requiresToken {
+		return true
+	}
+	if requiresBasic && s.authorizedBasicAuth(r) {
+		return true
+	}
+	return requiresToken && accesspolicy.TokenAuthorized(s.accessPolicy, r, time.Now())
 }
 
 type statusRecorder struct {

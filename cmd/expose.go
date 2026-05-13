@@ -85,13 +85,27 @@ and establishes a secure connection to forward traffic to your local port.`,
 			Username:    basicAuthUser,
 			Password:    basicAuthPassword,
 			PasswordEnv: basicAuthPasswordEnv,
-		}, os.Getenv)
+		}, getenv)
+		if err != nil {
+			return err
+		}
+		accessPolicyConfig, err := resolveAccessPolicy(accessPolicyInput{
+			BearerToken:       bearerToken,
+			BearerTokenEnv:    bearerTokenEnv,
+			IPAllowlist:       ipAllowlist,
+			IPDenylist:        ipDenylist,
+			TemporaryToken:    temporaryAccessToken,
+			TemporaryTokenEnv: temporaryAccessTokenEnv,
+			TemporaryTTL:      temporaryAccessTTL,
+			TemporaryName:     "default",
+		}, nowUTC(), getenv)
 		if err != nil {
 			return err
 		}
 
 		hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{
-			BasicAuth: basicAuthToK8s(basicAuthConfig),
+			BasicAuth:    basicAuthToK8s(basicAuthConfig),
+			AccessPolicy: accessPolicyToK8s(accessPolicyConfig),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to provision tunnel on Sealos: %w", err)
@@ -116,6 +130,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			LocalPort:       localPort,
 			Secret:          secret,
 			BasicAuth:       basicAuthConfig,
+			AccessPolicy:    accessPolicyConfig,
 			Mode:            "foreground",
 			PID:             os.Getpid(),
 			ConnectionState: session.ConnectionStatePending,
@@ -130,6 +145,15 @@ and establishes a secure connection to forward traffic to your local port.`,
 		fmt.Printf("[+] Public URL will be: https://%s\n", hosts.PublicHost)
 		if basicAuthConfig != nil && basicAuthConfig.Enabled {
 			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
+		}
+		if accessPolicyConfig != nil {
+			printAccessPolicySummary(accessPolicyConfig)
+			if temporaryAccessToken != "" || temporaryAccessTokenEnv != "" {
+				token, tokenErr := resolveSecretValue(temporaryAccessToken, temporaryAccessTokenEnv, "temporary access token", getenv)
+				if tokenErr == nil {
+					fmt.Printf("[+] Temporary access URL: %s\n", temporaryAccessURL(hosts.PublicHost, token))
+				}
+			}
 		}
 		if normalizedCustomDomain != "" {
 			fmt.Printf("[+] Requested custom domain: %s\n", normalizedCustomDomain)
@@ -222,6 +246,13 @@ var basicAuthCredential string
 var basicAuthUser string
 var basicAuthPassword string
 var basicAuthPasswordEnv string
+var bearerToken string
+var bearerTokenEnv string
+var ipAllowlist []string
+var ipDenylist []string
+var temporaryAccessToken string
+var temporaryAccessTokenEnv string
+var temporaryAccessTTL time.Duration
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
@@ -239,6 +270,31 @@ func init() {
 	exposeCmd.Flags().StringVar(&basicAuthUser, "basic-auth-user", "", "Basic Auth username for public traffic")
 	exposeCmd.Flags().StringVar(&basicAuthPassword, "basic-auth-password", "", "Basic Auth password for public traffic; prefer --basic-auth-password-env to avoid shell history")
 	exposeCmd.Flags().StringVar(&basicAuthPasswordEnv, "basic-auth-password-env", "", "Read Basic Auth password for public traffic from an environment variable")
+	exposeCmd.Flags().StringVar(&bearerToken, "bearer-token", "", "Require this bearer token for public traffic; prefer --bearer-token-env")
+	exposeCmd.Flags().StringVar(&bearerTokenEnv, "bearer-token-env", "", "Read bearer token for public traffic from an environment variable")
+	exposeCmd.Flags().StringSliceVar(&ipAllowlist, "ip-allowlist", nil, "Allow public traffic only from these IP/CIDR entries; repeat or comma-separate")
+	exposeCmd.Flags().StringSliceVar(&ipDenylist, "ip-denylist", nil, "Deny public traffic from these IP/CIDR entries; repeat or comma-separate")
+	exposeCmd.Flags().StringVar(&temporaryAccessToken, "temporary-access-token", "", "Enable a temporary access URL token; prefer --temporary-access-token-env")
+	exposeCmd.Flags().StringVar(&temporaryAccessTokenEnv, "temporary-access-token-env", "", "Read temporary access URL token from an environment variable")
+	exposeCmd.Flags().DurationVar(&temporaryAccessTTL, "temporary-access-ttl", time.Hour, "Temporary access URL lifetime")
+}
+
+func printAccessPolicySummary(config *session.AccessPolicy) {
+	if config == nil {
+		return
+	}
+	if len(config.BearerTokenHashes) > 0 {
+		fmt.Printf("[+] Bearer token access enabled for public traffic.\n")
+	}
+	if len(config.IPAllowlist) > 0 {
+		fmt.Printf("[+] IP allowlist enabled with %d rule(s).\n", len(config.IPAllowlist))
+	}
+	if len(config.IPDenylist) > 0 {
+		fmt.Printf("[+] IP denylist enabled with %d rule(s).\n", len(config.IPDenylist))
+	}
+	if len(config.TemporaryTokens) > 0 {
+		fmt.Printf("[+] Temporary access link enabled until %s.\n", config.TemporaryTokens[0].ExpiresAt)
+	}
 }
 
 func validateLocalPort(port string) error {

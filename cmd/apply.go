@@ -29,15 +29,17 @@ type applyFile struct {
 }
 
 type applyTunnel struct {
-	Name          string          `json:"name" yaml:"name"`
-	LocalPort     int             `json:"localPort" yaml:"localPort"`
-	Port          int             `json:"port,omitempty" yaml:"port,omitempty"`
-	Protocol      string          `json:"protocol,omitempty" yaml:"protocol,omitempty"`
-	Domain        string          `json:"domain,omitempty" yaml:"domain,omitempty"`
-	WaitDomain    bool            `json:"waitDomain,omitempty" yaml:"waitDomain,omitempty"`
-	ReadyTimeout  string          `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
-	DomainTimeout string          `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
-	BasicAuth     *applyBasicAuth `json:"basicAuth,omitempty" yaml:"basicAuth,omitempty"`
+	Name          string             `json:"name" yaml:"name"`
+	LocalPort     int                `json:"localPort" yaml:"localPort"`
+	Port          int                `json:"port,omitempty" yaml:"port,omitempty"`
+	Protocol      string             `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Domain        string             `json:"domain,omitempty" yaml:"domain,omitempty"`
+	TTL           string             `json:"ttl,omitempty" yaml:"ttl,omitempty"`
+	WaitDomain    bool               `json:"waitDomain,omitempty" yaml:"waitDomain,omitempty"`
+	ReadyTimeout  string             `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
+	DomainTimeout string             `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
+	BasicAuth     *applyBasicAuth    `json:"basicAuth,omitempty" yaml:"basicAuth,omitempty"`
+	AccessPolicy  *applyAccessPolicy `json:"accessPolicy,omitempty" yaml:"accessPolicy,omitempty"`
 }
 
 type applyBasicAuth struct {
@@ -45,6 +47,21 @@ type applyBasicAuth struct {
 	Username    string `json:"username" yaml:"username"`
 	Password    string `json:"password,omitempty" yaml:"password,omitempty"`
 	PasswordEnv string `json:"passwordEnv,omitempty" yaml:"passwordEnv,omitempty"`
+}
+
+type diffResult struct {
+	Name         string   `json:"name"`
+	TunnelID     string   `json:"tunnelId"`
+	Action       string   `json:"action"`
+	Changes      []string `json:"changes,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+	DesiredPort  string   `json:"desiredPort,omitempty"`
+	CurrentPort  string   `json:"currentPort,omitempty"`
+	DesiredHost  string   `json:"desiredHost,omitempty"`
+	CurrentHost  string   `json:"currentHost,omitempty"`
+	ExpiresAt    string   `json:"expiresAt,omitempty"`
+	AccessPolicy bool     `json:"accessPolicy"`
+	BasicAuth    bool     `json:"basicAuth"`
 }
 
 type applyResult struct {
@@ -56,6 +73,9 @@ type applyResult struct {
 	LocalPort     string                 `json:"localPort"`
 	BasicAuth     bool                   `json:"basicAuth"`
 	BasicAuthUser string                 `json:"basicAuthUser,omitempty"`
+	AccessPolicy  bool                   `json:"accessPolicy"`
+	ExpiresAt     string                 `json:"expiresAt,omitempty"`
+	TemporaryURLs []string               `json:"temporaryUrls,omitempty"`
 	Status        string                 `json:"status"`
 	Warnings      []string               `json:"warnings,omitempty"`
 	NewTunnel     bool                   `json:"-"`
@@ -70,6 +90,9 @@ type normalizedApplyTunnel struct {
 	CustomDomain  string
 	BasicAuth     *session.BasicAuthConfig
 	BasicAuthPass string
+	AccessPolicy  *session.AccessPolicy
+	TTL           string
+	ExpiresAt     string
 	WaitDomain    bool
 	ReadyTimeout  time.Duration
 	DomainTimeout time.Duration
@@ -78,6 +101,8 @@ type normalizedApplyTunnel struct {
 var applyFilePath string
 var applyJSON bool
 var applyDryRun bool
+var diffFilePath string
+var diffJSON bool
 
 var applyNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,53}[a-z0-9])?$`)
 
@@ -105,11 +130,36 @@ var applyCmd = &cobra.Command{
 	},
 }
 
+var diffCmd = &cobra.Command{
+	Use:          "diff -f sealtun.yaml",
+	Short:        "Show declarative Sealtun tunnel changes without applying them",
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(diffFilePath) == "" {
+			return fmt.Errorf("missing -f/--file")
+		}
+		results, err := runDiff(diffFilePath)
+		if err != nil {
+			return err
+		}
+		if diffJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(results)
+		}
+		printDiffResults(cmd, results)
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(applyCmd)
+	rootCmd.AddCommand(diffCmd)
 	applyCmd.Flags().StringVarP(&applyFilePath, "file", "f", "", "Path to sealtun.yaml")
 	applyCmd.Flags().BoolVar(&applyJSON, "json", false, "Output apply results as JSON")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "Validate and show planned tunnels without changing local or cloud state")
+	diffCmd.Flags().StringVarP(&diffFilePath, "file", "f", "", "Path to sealtun.yaml")
+	diffCmd.Flags().BoolVar(&diffJSON, "json", false, "Output diff results as JSON")
 }
 
 func runApply(ctx context.Context, path string, dryRun bool) ([]applyResult, error) {
@@ -136,6 +186,8 @@ func runApply(ctx context.Context, path string, dryRun bool) ([]applyResult, err
 				LocalPort:     normalized.LocalPort,
 				BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 				BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
+				AccessPolicy:  normalized.AccessPolicy != nil,
+				ExpiresAt:     normalized.ExpiresAt,
 				Status:        "planned",
 			})
 		}
@@ -247,6 +299,8 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 		LocalPort:     normalized.LocalPort,
 		BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
+		AccessPolicy:  normalized.AccessPolicy != nil,
+		ExpiresAt:     normalized.ExpiresAt,
 		Status:        "planned",
 	}
 	secret := uuid.New().String()
@@ -268,6 +322,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 			if existing.Secret != "" {
 				secret = existing.Secret
 			}
+			reuseExistingExpiration(&normalized, existing)
 			reuseExistingBasicAuthHash(&normalized, existing.BasicAuth)
 			createdAt = existing.CreatedAt
 		} else if !os.IsNotExist(err) {
@@ -327,6 +382,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 
 	options := k8s.TunnelOptions{}
 	options.BasicAuth = basicAuthToK8s(normalized.BasicAuth)
+	options.AccessPolicy = accessPolicyToK8s(normalized.AccessPolicy)
 	if customDomainVerified {
 		options.CustomDomain = desiredCustomDomain
 		options.SealosHost = sealosHost
@@ -385,6 +441,9 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result.CustomDomain = hosts.CustomDomain
 	result.BasicAuth = normalized.BasicAuth != nil && normalized.BasicAuth.Enabled
 	result.BasicAuthUser = basicAuthUsername(normalized.BasicAuth)
+	result.AccessPolicy = normalized.AccessPolicy != nil
+	result.ExpiresAt = normalized.ExpiresAt
+	result.TemporaryURLs = applyTemporaryAccessURLs(hosts.PublicHost, item.AccessPolicy)
 	result.Status = "applied"
 	remoteChanged = false
 	return result, nil
@@ -407,6 +466,9 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		LocalPort:       normalized.LocalPort,
 		Secret:          secret,
 		BasicAuth:       normalized.BasicAuth,
+		AccessPolicy:    normalized.AccessPolicy,
+		TTL:             normalized.TTL,
+		ExpiresAt:       normalized.ExpiresAt,
 		Mode:            "daemon",
 		PID:             0,
 		ConnectionState: session.ConnectionStatePending,
@@ -457,6 +519,7 @@ func restoreExistingApplyTunnel(client *k8s.Client, previous session.TunnelSessi
 		CustomDomain: previous.CustomDomain,
 		SealosHost:   previous.SealosHost,
 		BasicAuth:    basicAuthToK8s(previous.BasicAuth),
+		AccessPolicy: accessPolicyToK8s(previous.AccessPolicy),
 	})
 	return err
 }
@@ -529,6 +592,16 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
 	}
+	now := nowUTC()
+	accessPolicy, err := resolveApplyAccessPolicy(item.AccessPolicy, now, getenv)
+	if err != nil {
+		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s accessPolicy: %w", tunnelID, err)
+	}
+	ttl := strings.TrimSpace(item.TTL)
+	expiresAt, err := resolveApplyTunnelExpiresAt(ttl, now)
+	if err != nil {
+		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s ttl: %w", tunnelID, err)
+	}
 	return normalizedApplyTunnel{
 		Name:          item.Name,
 		TunnelID:      tunnelID,
@@ -537,10 +610,27 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		CustomDomain:  customDomain,
 		BasicAuth:     basicAuth,
 		BasicAuthPass: basicAuthPass,
+		AccessPolicy:  accessPolicy,
+		TTL:           ttl,
+		ExpiresAt:     expiresAt,
 		WaitDomain:    item.WaitDomain,
 		ReadyTimeout:  effectiveReadyTimeout,
 		DomainTimeout: effectiveDomainTimeout,
 	}, nil
+}
+
+func resolveApplyTunnelExpiresAt(ttl string, now time.Time) (string, error) {
+	if strings.TrimSpace(ttl) == "" {
+		return "", nil
+	}
+	duration, err := time.ParseDuration(ttl)
+	if err != nil {
+		return "", err
+	}
+	if duration <= 0 {
+		return "", fmt.Errorf("must be greater than 0")
+	}
+	return now.Add(duration).UTC().Format(time.RFC3339), nil
 }
 
 func resolveApplyBasicAuth(config *applyBasicAuth) (*session.BasicAuthConfig, string, error) {
@@ -581,6 +671,45 @@ func reuseExistingBasicAuthHash(normalized *normalizedApplyTunnel, existing *ses
 	}
 	normalized.BasicAuth.PasswordHash = existingHash
 	normalized.BasicAuth.PasswordSHA256 = ""
+}
+
+func reuseExistingExpiration(normalized *normalizedApplyTunnel, existing *session.TunnelSession) {
+	if normalized == nil || existing == nil {
+		return
+	}
+	if normalized.TTL != "" && existing.TTL == normalized.TTL && !sessionExpired(*existing, nowUTC()) && existing.ExpiresAt != "" {
+		normalized.ExpiresAt = existing.ExpiresAt
+	}
+	reuseExistingTemporaryTokenExpirations(normalized.AccessPolicy, existing.AccessPolicy)
+}
+
+func reuseExistingTemporaryTokenExpirations(desired, existing *session.AccessPolicy) {
+	if desired == nil || existing == nil || len(desired.TemporaryTokens) == 0 || len(existing.TemporaryTokens) == 0 {
+		return
+	}
+	existingByKey := map[string]session.TemporaryToken{}
+	for _, token := range existing.TemporaryTokens {
+		if token.TTL == "" || token.ExpiresAt == "" {
+			continue
+		}
+		if expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt); err != nil || !nowUTC().Before(expiresAt) {
+			continue
+		}
+		existingByKey[temporaryTokenIdentity(token)] = token
+	}
+	for i := range desired.TemporaryTokens {
+		token := &desired.TemporaryTokens[i]
+		if token.TTL == "" {
+			continue
+		}
+		if existingToken, ok := existingByKey[temporaryTokenIdentity(*token)]; ok {
+			token.ExpiresAt = existingToken.ExpiresAt
+		}
+	}
+}
+
+func temporaryTokenIdentity(token session.TemporaryToken) string {
+	return strings.Join([]string{token.Name, token.TokenHash, token.TTL}, "\x00")
 }
 
 func basicAuthUsername(config *session.BasicAuthConfig) string {
@@ -640,6 +769,161 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 				fmt.Fprintf(out, " (user: %s)", result.BasicAuthUser)
 			}
 			fmt.Fprintln(out)
+		}
+		if result.AccessPolicy {
+			fmt.Fprintln(out, "    Access policy: enabled")
+		}
+		if result.ExpiresAt != "" {
+			fmt.Fprintf(out, "    Expires at: %s\n", result.ExpiresAt)
+		}
+		for _, link := range result.TemporaryURLs {
+			fmt.Fprintf(out, "    Temporary access URL: %s\n", link)
+		}
+		for _, warning := range result.Warnings {
+			fmt.Fprintf(out, "    Warning: %s\n", warning)
+		}
+	}
+}
+
+func applyTemporaryAccessURLs(host string, config *applyAccessPolicy) []string {
+	if config == nil || host == "" {
+		return nil
+	}
+	links := make([]string, 0, len(config.TemporaryLinks))
+	for _, item := range config.TemporaryLinks {
+		if item.Token == "" {
+			continue
+		}
+		if link := temporaryAccessURL(host, item.Token); link != "" {
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
+func runDiff(path string) ([]diffResult, error) {
+	config, err := loadApplyFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(config.Tunnels) == 0 {
+		return nil, fmt.Errorf("apply file has no tunnels")
+	}
+	if err := validateApplyTunnelNames(config.Tunnels); err != nil {
+		return nil, err
+	}
+	results := make([]diffResult, 0, len(config.Tunnels))
+	for _, item := range config.Tunnels {
+		normalized, err := normalizeApplyTunnel(item)
+		if err != nil {
+			return results, err
+		}
+		result := diffResult{
+			Name:         normalized.Name,
+			TunnelID:     normalized.TunnelID,
+			DesiredPort:  normalized.LocalPort,
+			DesiredHost:  normalized.CustomDomain,
+			ExpiresAt:    normalized.ExpiresAt,
+			AccessPolicy: normalized.AccessPolicy != nil,
+			BasicAuth:    normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+		}
+		existing, err := session.Get(normalized.TunnelID)
+		if err == nil {
+			reuseExistingExpiration(&normalized, existing)
+			result.ExpiresAt = normalized.ExpiresAt
+			result.AccessPolicy = normalized.AccessPolicy != nil
+			result.CurrentPort = existing.LocalPort
+			result.CurrentHost = existing.CustomDomain
+			result.Action = "no-op"
+			if existing.LocalPort != normalized.LocalPort {
+				result.Changes = append(result.Changes, fmt.Sprintf("localPort: %s -> %s", valueOr(existing.LocalPort, "-"), normalized.LocalPort))
+			}
+			if valueOr(existing.Protocol, "https") != normalized.Protocol {
+				result.Changes = append(result.Changes, fmt.Sprintf("protocol: %s -> %s", valueOr(existing.Protocol, "-"), normalized.Protocol))
+			}
+			if existing.CustomDomain != normalized.CustomDomain {
+				result.Changes = append(result.Changes, fmt.Sprintf("domain: %s -> %s", valueOr(existing.CustomDomain, "-"), valueOr(normalized.CustomDomain, "-")))
+			}
+			if basicAuthChanged(existing.BasicAuth, normalized.BasicAuth, normalized.BasicAuthPass) {
+				result.Changes = append(result.Changes, "basicAuth")
+			}
+			if accessPolicyChanged(existing.AccessPolicy, normalized.AccessPolicy) {
+				result.Changes = append(result.Changes, "accessPolicy")
+			}
+			if existing.ExpiresAt != normalized.ExpiresAt {
+				result.Changes = append(result.Changes, fmt.Sprintf("ttl/expiresAt: %s -> %s", valueOr(existing.ExpiresAt, "-"), valueOr(normalized.ExpiresAt, "-")))
+			}
+			if len(result.Changes) > 0 {
+				result.Action = "update"
+			}
+			results = append(results, result)
+			continue
+		}
+		if diffTreatsMissingSessionAsCreate(err) {
+			result.Action = "create"
+			result.Changes = append(result.Changes, "create tunnel")
+			results = append(results, result)
+			continue
+		}
+		return results, fmt.Errorf("tunnel %s: load existing session: %w", normalized.TunnelID, err)
+	}
+	return results, nil
+}
+
+func diffTreatsMissingSessionAsCreate(err error) bool {
+	if os.IsNotExist(err) {
+		return true
+	}
+	return strings.Contains(err.Error(), "config directory") && strings.Contains(err.Error(), "no such file or directory")
+}
+
+func accessPolicyChanged(current, desired *session.AccessPolicy) bool {
+	currentJSON, _ := json.Marshal(accessPolicyToRuntime(current))
+	desiredJSON, _ := json.Marshal(accessPolicyToRuntime(desired))
+	return string(currentJSON) != string(desiredJSON)
+}
+
+func basicAuthChanged(current, desired *session.BasicAuthConfig, desiredPassword string) bool {
+	currentEnabled := current != nil && current.Enabled
+	desiredEnabled := desired != nil && desired.Enabled
+	if currentEnabled != desiredEnabled {
+		return true
+	}
+	if !currentEnabled && !desiredEnabled {
+		return false
+	}
+	if basicAuthUsername(current) != basicAuthUsername(desired) {
+		return true
+	}
+	if desiredPassword == "" {
+		return basicAuthPasswordHash(current) != basicAuthPasswordHash(desired)
+	}
+	return !publicauth.Check(publicauth.BasicAuth{
+		Username:     current.Username,
+		PasswordHash: basicAuthPasswordHash(current),
+	}, desired.Username, desiredPassword)
+}
+
+func printDiffResults(cmd *cobra.Command, results []diffResult) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "Sealtun Diff")
+	for _, result := range results {
+		fmt.Fprintf(out, "  - %s (%s): %s", result.Name, result.TunnelID, result.Action)
+		if result.DesiredPort != "" {
+			fmt.Fprintf(out, " localhost:%s", result.DesiredPort)
+		}
+		fmt.Fprintln(out)
+		for _, change := range result.Changes {
+			fmt.Fprintf(out, "    ~ %s\n", change)
+		}
+		if result.AccessPolicy {
+			fmt.Fprintln(out, "    Access policy: enabled")
+		}
+		if result.BasicAuth {
+			fmt.Fprintln(out, "    Basic Auth: enabled")
+		}
+		if result.ExpiresAt != "" {
+			fmt.Fprintf(out, "    Expires at: %s\n", result.ExpiresAt)
 		}
 		for _, warning := range result.Warnings {
 			fmt.Fprintf(out, "    Warning: %s\n", warning)

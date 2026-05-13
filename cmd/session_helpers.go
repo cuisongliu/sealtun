@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/labring/sealtun/pkg/auth"
@@ -156,5 +157,19 @@ func classifySession(sess session.TunnelSession, checkLocalPort bool) sessionSna
 }
 
 func sessionIsStale(sess session.TunnelSession, gracePeriod time.Duration) bool {
+	if sessionExpired(sess, time.Now()) {
+		return true
+	}
 	return session.IsStaleWithOwner(sess, gracePeriod, sessionOwnerAlive(sess))
+}
+
+func sessionExpired(sess session.TunnelSession, now time.Time) bool {
+	if strings.TrimSpace(sess.ExpiresAt) == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(sess.ExpiresAt))
+	if err != nil {
+		return true
+	}
+	return !now.Before(expiresAt)
 }

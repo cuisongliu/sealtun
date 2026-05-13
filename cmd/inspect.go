@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/labring/sealtun/pkg/k8s"
@@ -23,6 +24,9 @@ type inspectPayload struct {
 	CustomDomain       string                 `json:"customDomain,omitempty"`
 	LocalPort          string                 `json:"localPort,omitempty"`
 	BasicAuth          *inspectBasicAuth      `json:"basicAuth,omitempty"`
+	AccessPolicy       *inspectAccessPolicy   `json:"accessPolicy,omitempty"`
+	TTL                string                 `json:"ttl,omitempty"`
+	ExpiresAt          string                 `json:"expiresAt,omitempty"`
 	PID                int                    `json:"pid"`
 	ProcessAlive       bool                   `json:"processAlive"`
 	LocalPortReachable bool                   `json:"localPortReachable"`
@@ -36,6 +40,13 @@ type inspectPayload struct {
 type inspectBasicAuth struct {
 	Enabled  bool   `json:"enabled"`
 	Username string `json:"username,omitempty"`
+}
+
+type inspectAccessPolicy struct {
+	BearerTokens   int      `json:"bearerTokens,omitempty"`
+	IPAllowlist    []string `json:"ipAllowlist,omitempty"`
+	IPDenylist     []string `json:"ipDenylist,omitempty"`
+	TemporaryLinks int      `json:"temporaryLinks,omitempty"`
 }
 
 type remoteDiagnosticsCollector func(context.Context, session.TunnelSession) (*k8s.TunnelDiagnostics, error)
@@ -93,6 +104,9 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 		CustomDomain:       sess.CustomDomain,
 		LocalPort:          sess.LocalPort,
 		BasicAuth:          inspectBasicAuthFromSession(sess.BasicAuth),
+		AccessPolicy:       inspectAccessPolicyFromSession(sess.AccessPolicy),
+		TTL:                sess.TTL,
+		ExpiresAt:          formatAuthTime(sess.ExpiresAt),
 		PID:                sess.PID,
 		ProcessAlive:       snapshot.ProcessAlive,
 		LocalPortReachable: snapshot.LocalPortReachable,
@@ -173,6 +187,27 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		}
 		fmt.Fprintln(out)
 	}
+	if payload.AccessPolicy != nil {
+		fmt.Fprintln(out, "  Access policy: enabled")
+		if len(payload.AccessPolicy.IPAllowlist) > 0 {
+			fmt.Fprintf(out, "  IP allowlist: %s\n", strings.Join(payload.AccessPolicy.IPAllowlist, ", "))
+		}
+		if len(payload.AccessPolicy.IPDenylist) > 0 {
+			fmt.Fprintf(out, "  IP denylist: %s\n", strings.Join(payload.AccessPolicy.IPDenylist, ", "))
+		}
+		if payload.AccessPolicy.BearerTokens > 0 {
+			fmt.Fprintf(out, "  Bearer tokens: %d configured\n", payload.AccessPolicy.BearerTokens)
+		}
+		if payload.AccessPolicy.TemporaryLinks > 0 {
+			fmt.Fprintf(out, "  Temporary links: %d configured\n", payload.AccessPolicy.TemporaryLinks)
+		}
+	}
+	if payload.ExpiresAt != "" {
+		if payload.TTL != "" {
+			fmt.Fprintf(out, "  TTL: %s\n", payload.TTL)
+		}
+		fmt.Fprintf(out, "  Expires at: %s\n", payload.ExpiresAt)
+	}
 	fmt.Fprintf(out, "  Protocol: %s\n", valueOr(payload.Protocol, "unknown"))
 	fmt.Fprintf(out, "  Namespace: %s\n", valueOr(payload.Namespace, "unknown"))
 	fmt.Fprintf(out, "  Region: %s\n", valueOr(payload.Region, "unknown"))
@@ -243,4 +278,20 @@ func inspectBasicAuthFromSession(config *session.BasicAuthConfig) *inspectBasicA
 		return nil
 	}
 	return &inspectBasicAuth{Enabled: true, Username: config.Username}
+}
+
+func inspectAccessPolicyFromSession(config *session.AccessPolicy) *inspectAccessPolicy {
+	if config == nil {
+		return nil
+	}
+	payload := &inspectAccessPolicy{
+		BearerTokens:   len(config.BearerTokenHashes),
+		IPAllowlist:    append([]string(nil), config.IPAllowlist...),
+		IPDenylist:     append([]string(nil), config.IPDenylist...),
+		TemporaryLinks: len(config.TemporaryTokens),
+	}
+	if payload.BearerTokens == 0 && payload.TemporaryLinks == 0 && len(payload.IPAllowlist) == 0 && len(payload.IPDenylist) == 0 {
+		return nil
+	}
+	return payload
 }

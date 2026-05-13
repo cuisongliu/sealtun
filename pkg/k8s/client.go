@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/auth"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/publicauth"
@@ -55,6 +57,7 @@ type TunnelOptions struct {
 	CustomDomain string
 	SealosHost   string
 	BasicAuth    *BasicAuthOptions
+	AccessPolicy *accesspolicy.Policy
 }
 
 type BasicAuthOptions struct {
@@ -171,6 +174,7 @@ const (
 	tunnelAuthSecretKey   = "secret"
 	basicAuthUserKey      = "basicAuthUsername"
 	basicAuthPasswordKey  = "basicAuthPasswordHash"
+	accessPolicyKey       = "accessPolicy"
 )
 
 var reservedCustomDomainSuffixes = []string{
@@ -350,6 +354,9 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	if err := validateBasicAuthOptions(opts.BasicAuth); err != nil {
 		return TunnelHosts{}, err
 	}
+	if err := accesspolicy.Validate(opts.AccessPolicy); err != nil {
+		return TunnelHosts{}, fmt.Errorf("invalid access policy: %w", err)
+	}
 	created := []createdResource{}
 	rollback := true
 	customSnapshotsCaptured := false
@@ -368,7 +375,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		}
 	}()
 
-	authSecretCreated, err := c.ensureAuthSecret(ctx, name, secret, opts.BasicAuth)
+	authSecretCreated, err := c.ensureAuthSecret(ctx, name, secret, opts.BasicAuth, opts.AccessPolicy)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure tunnel auth secret: %w", err)
 	}
@@ -377,7 +384,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Deployment
-	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.BasicAuth)
+	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.BasicAuth, opts.AccessPolicy)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure deployment: %w", err)
 	}
@@ -477,22 +484,34 @@ func validateBasicAuthOptions(opts *BasicAuthOptions) error {
 	})
 }
 
-func serverConfigDigest(secret string, basicAuth *BasicAuthOptions) string {
+func serverConfigDigest(secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) string {
 	parts := []string{secret}
 	if basicAuth != nil {
 		parts = append(parts, strings.TrimSpace(basicAuth.Username), basicAuth.PasswordHash)
+	}
+	if policy != nil {
+		if data, err := json.Marshal(policy); err == nil {
+			parts = append(parts, string(data))
+		}
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
-func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basicAuth *BasicAuthOptions) (bool, error) {
+func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
 	data := map[string][]byte{
 		tunnelAuthSecretKey: []byte(secret),
 	}
 	if basicAuth != nil {
 		data[basicAuthUserKey] = []byte(strings.TrimSpace(basicAuth.Username))
 		data[basicAuthPasswordKey] = []byte(basicAuth.PasswordHash)
+	}
+	if !accesspolicy.Empty(policy) {
+		policyJSON, err := json.Marshal(policy)
+		if err != nil {
+			return false, fmt.Errorf("marshal access policy: %w", err)
+		}
+		data[accessPolicyKey] = policyJSON
 	}
 	authSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -519,7 +538,7 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 	return false, err
 }
 
-func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, basicAuth *BasicAuthOptions) (bool, error) {
+func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
 	replicas := int32(1)
 	labels := managedLabels(name)
 
@@ -566,7 +585,19 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 			},
 		)
 	}
-	podAnnotations[serverConfigDigestKey] = serverConfigDigest(secret, basicAuth)
+	if !accesspolicy.Empty(policy) {
+		args = append(args, "--access-policy-env", "SEALTUN_ACCESS_POLICY")
+		env = append(env, corev1.EnvVar{
+			Name: "SEALTUN_ACCESS_POLICY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName(name)},
+					Key:                  accessPolicyKey,
+				},
+			},
+		})
+	}
+	podAnnotations[serverConfigDigestKey] = serverConfigDigest(secret, basicAuth, policy)
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

@@ -37,6 +37,35 @@ tunnels:
 	if results[0].TunnelID != "web" || results[0].LocalPort != "3000" || results[0].Status != "planned" {
 		t.Fatalf("unexpected dry-run result: %+v", results[0])
 	}
+	if results[0].Protocol != "https" {
+		t.Fatalf("expected dry-run protocol to be reported, got %q", results[0].Protocol)
+	}
+}
+
+func TestRunApplyDryRunReportsSSHProtocol(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: ssh-dev
+    localPort: 22
+    protocol: ssh
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runApply(context.Background(), path, true)
+	if err != nil {
+		t.Fatalf("dry-run apply should accept ssh tunnels: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %d", len(results))
+	}
+	if results[0].Protocol != "ssh" {
+		t.Fatalf("expected ssh protocol to be reported, got %+v", results[0])
+	}
 }
 
 func TestBuildApplySessionRecordPersistsCustomDomain(t *testing.T) {
@@ -92,6 +121,39 @@ func TestNormalizeApplyTunnelDefaultsProtocol(t *testing.T) {
 	}
 	if normalized.LocalPort != "8080" {
 		t.Fatalf("expected port alias to be used, got %q", normalized.LocalPort)
+	}
+}
+
+func TestNormalizeApplyTunnelRejectsHTTPOnlyOptionsForSSH(t *testing.T) {
+	t.Setenv("SEALTUN_TEST_BEARER", "secret-token")
+
+	tests := []struct {
+		name string
+		item applyTunnel
+	}{
+		{
+			name: "domain",
+			item: applyTunnel{Name: "ssh", LocalPort: 22, Protocol: "ssh", Domain: "dev.example.com"},
+		},
+		{
+			name: "wait domain",
+			item: applyTunnel{Name: "ssh", LocalPort: 22, Protocol: "ssh", WaitDomain: true},
+		},
+		{
+			name: "basic auth",
+			item: applyTunnel{Name: "ssh", LocalPort: 22, Protocol: "ssh", BasicAuth: &applyBasicAuth{Credential: "admin:secret"}},
+		},
+		{
+			name: "access policy",
+			item: applyTunnel{Name: "ssh", LocalPort: 22, Protocol: "ssh", AccessPolicy: &applyAccessPolicy{BearerTokenEnv: "SEALTUN_TEST_BEARER"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := normalizeApplyTunnel(tt.item); err == nil {
+				t.Fatal("expected ssh tunnel with HTTP-only option to fail")
+			}
+		})
 	}
 }
 

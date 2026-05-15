@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"text/tabwriter"
@@ -15,11 +16,13 @@ type listItem struct {
 	Host         string `json:"host"`
 	SealosHost   string `json:"sealosHost,omitempty"`
 	CustomDomain string `json:"customDomain,omitempty"`
+	PublicPort   int32  `json:"publicPort,omitempty"`
 	LocalPort    string `json:"localPort"`
 	PID          int    `json:"pid"`
 	Mode         string `json:"mode"`
 	Namespace    string `json:"namespace"`
 	Protocol     string `json:"protocol"`
+	Endpoint     string `json:"endpoint"`
 	BasicAuth    bool   `json:"basicAuth"`
 	AccessPolicy bool   `json:"accessPolicy"`
 	TTL          string `json:"ttl,omitempty"`
@@ -68,6 +71,9 @@ func collectListItemsWithLocalCheck(checkLocalPort bool) ([]listItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load tunnel sessions: %w", err)
 	}
+	for i := range sessions {
+		ensureSessionPublicPort(context.Background(), &sessions[i])
+	}
 	return listItemsFromSessions(sessions, checkLocalPort), nil
 }
 
@@ -81,11 +87,13 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 			Host:         valueOr(sess.Host, "-"),
 			SealosHost:   sess.SealosHost,
 			CustomDomain: sess.CustomDomain,
+			PublicPort:   sess.PublicPort,
 			LocalPort:    valueOr(sess.LocalPort, "-"),
 			PID:          sess.PID,
 			Mode:         valueOr(sess.Mode, "foreground"),
 			Namespace:    valueOr(sess.Namespace, "-"),
 			Protocol:     valueOr(sess.Protocol, "-"),
+			Endpoint:     endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort),
 			BasicAuth:    sess.BasicAuth != nil && sess.BasicAuth.Enabled,
 			AccessPolicy: sess.AccessPolicy != nil,
 			TTL:          sess.TTL,
@@ -109,12 +117,13 @@ func printListTable(cmd *cobra.Command, items []listItem) {
 	fmt.Fprintln(out, "")
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tHOST\tPORT\tAUTH\tACCESS\tPID\tMODE\tNAMESPACE\tEXPIRES AT\tCREATED AT")
+	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tPROTOCOL\tENDPOINT\tLOCAL TARGET\tAUTH\tACCESS\tPID\tMODE\tNAMESPACE\tEXPIRES AT\tCREATED AT")
 	for _, item := range items {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\tlocalhost:%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 			item.TunnelID,
 			item.Status,
-			item.Host,
+			item.Protocol,
+			item.Endpoint,
 			item.LocalPort,
 			yesNo(item.BasicAuth),
 			yesNo(item.AccessPolicy),

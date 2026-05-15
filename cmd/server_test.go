@@ -10,7 +10,7 @@ import (
 func TestServerProtocolValidation(t *testing.T) {
 	t.Parallel()
 
-	valid := []string{"https", "HTTPS"}
+	valid := []string{"https", "HTTPS", "ssh", "SSH"}
 	for _, protocol := range valid {
 		if err := validateProtocol(protocol); err != nil {
 			t.Fatalf("expected expose protocol %s to be valid: %v", protocol, err)

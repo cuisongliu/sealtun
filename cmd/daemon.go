@@ -239,6 +239,9 @@ func runDaemonTunnel(ctx context.Context, sess session.TunnelSession) {
 				if getErr != nil {
 					return
 				}
+				if shouldPreserveStoppedSession(latest) {
+					return
+				}
 				latest.Mode = "daemon"
 				latest.PID = os.Getpid()
 				latest.ConnectionState = session.ConnectionStateConnected
@@ -255,6 +258,9 @@ func runDaemonTunnel(ctx context.Context, sess session.TunnelSession) {
 		if err != nil {
 			fmt.Printf("[!] tunnel %s disconnected: %v\n", current.TunnelID, err)
 			if latest, getErr := session.Get(sess.TunnelID); getErr == nil {
+				if shouldPreserveStoppedSession(latest) {
+					return
+				}
 				latest.Mode = "daemon"
 				latest.PID = os.Getpid()
 				latest.ConnectionState = session.ConnectionStateError
@@ -265,6 +271,9 @@ func runDaemonTunnel(ctx context.Context, sess session.TunnelSession) {
 			}
 		} else {
 			if latest, getErr := session.Get(sess.TunnelID); getErr == nil {
+				if shouldPreserveStoppedSession(latest) {
+					return
+				}
 				latest.Mode = "daemon"
 				latest.PID = os.Getpid()
 				latest.ConnectionState = session.ConnectionStateError

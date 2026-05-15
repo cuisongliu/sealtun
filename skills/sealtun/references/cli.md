@@ -1,6 +1,6 @@
 # Sealtun CLI Reference
 
-Use this for interactive Sealtun operation: install, login, expose, secure, observe, bind domains, and clean up tunnels.
+Use this for interactive Sealtun operation: install, login, expose HTTPS or SSH, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
 
 ## Install
 
@@ -42,6 +42,8 @@ sealtun expose 3000 --ready-timeout 2m
 
 `expose` defaults to `https` and daemon mode. The daemon maintains the local side in the background. Use `--foreground` when the current terminal should own the tunnel lifecycle.
 
+Use `https` when the user wants a browser URL, webhook callback URL, OAuth callback, payment callback, public preview link, Basic Auth, Bearer tokens, temporary access links, IP allowlist/denylist, or custom domain.
+
 ## Public Access Controls
 
 Access controls are enforced by the Sealtun server proxy layer, independent of Ingress annotations. They apply to public business traffic, not `/_sealtun/ws`, health checks, or internal metrics protected by the tunnel secret.
@@ -80,7 +82,7 @@ Token constraints and behavior:
 - Bearer and temporary tokens must be at least 8 characters.
 - Stored runtime policy uses SHA-256 token hashes.
 - Temporary access uses `?_sealtun_token=<token>` and strips that query parameter before forwarding upstream.
-- IP rules accept individual IPs or CIDR ranges. Sealtun reads `X-Real-IP`, then the nearest valid `X-Forwarded-For`, then `RemoteAddr`.
+- IP rules accept individual IPs or CIDR ranges. Sealtun reads `X-Real-IP`, then the last valid proxy-confirmed client IP in `X-Forwarded-For`, then `RemoteAddr`.
 - When Basic Auth and Bearer or temporary links are both configured, either authentication path can allow the request, subject to IP rules.
 
 ## Custom Domains
@@ -104,6 +106,28 @@ CNAME app.example.com -> <sealos-host>
 ```
 
 Only after CNAME ownership verification does Sealtun write the custom host to Ingress and manage cert-manager resources.
+
+## SSH Over Sealtun
+
+For regions that support public TCP NodePort, prefer direct L4 SSH:
+
+```bash
+sealtun expose 22 --protocol ssh
+ssh <user>@<public-host> -p <node-port>
+```
+
+`--protocol ssh` exposes only a public TCP NodePort for user traffic. HTTPS is kept only as the internal control channel used by the local daemon, not as a default application URL. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains are HTTP-layer features and are rejected for SSH tunnels.
+
+Use SSH mode only when the user wants to expose a local SSH server or direct TCP SSH entry. It prints `Public SSH host`, `Public SSH port`, and an `ssh <user>@<public-host> -p <node-port>` command. Do not promise a custom domain for SSH; users connect with the generated host plus NodePort.
+
+When direct NodePort is unavailable, use the WebSocket ProxyCommand fallback:
+
+```bash
+sealtun expose 22
+ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
+```
+
+`sealtun ssh connect <tunnel-id>` opens `wss://<sealos-host>/_sealtun/tcp` with the tunnel's internal secret, then bridges stdin/stdout to the remote server's active yamux session.
 
 ## Observe And Manage
 
@@ -139,10 +163,16 @@ Dashboard is local and read-only by default. `--allow-remote` allows a non-loopb
 
 ```bash
 sealtun stop <tunnel-id>
+sealtun start <tunnel-id>
+sealtun resume <tunnel-id>
 sealtun cleanup
 sealtun cleanup --all
 sealtun logout
 sealtun logout --force
 ```
+
+`stop` scales the remote tunnel Deployment to zero and keeps the domain, Service, Ingress, secrets, NodePort Service for SSH, and local session record. Use `start` or its `resume` alias to scale the same tunnel back up and reconnect it through the local daemon.
+
+`cleanup` deletes stopped, expired, or stale tunnels and removes their local session records. `cleanup --all` force deletes every locally tracked tunnel, including active ones, and should be used only when you intentionally want to remove all tracked remote resources.
 
 `logout` first tries to clean up locally tracked tunnel resources before deleting credentials. Use `--force` only when cleanup cannot complete and local credentials must be removed anyway.

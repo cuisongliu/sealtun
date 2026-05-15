@@ -67,9 +67,11 @@ type diffResult struct {
 type applyResult struct {
 	Name          string                 `json:"name"`
 	TunnelID      string                 `json:"tunnelId"`
+	Protocol      string                 `json:"protocol"`
 	Host          string                 `json:"host"`
 	SealosHost    string                 `json:"sealosHost,omitempty"`
 	CustomDomain  string                 `json:"customDomain,omitempty"`
+	PublicPort    int32                  `json:"publicPort,omitempty"`
 	LocalPort     string                 `json:"localPort"`
 	BasicAuth     bool                   `json:"basicAuth"`
 	BasicAuthUser string                 `json:"basicAuthUser,omitempty"`
@@ -183,6 +185,7 @@ func runApply(ctx context.Context, path string, dryRun bool) ([]applyResult, err
 			results = append(results, applyResult{
 				Name:          normalized.Name,
 				TunnelID:      normalized.TunnelID,
+				Protocol:      normalized.Protocol,
 				LocalPort:     normalized.LocalPort,
 				BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 				BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
@@ -296,6 +299,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result = applyResult{
 		Name:          normalized.Name,
 		TunnelID:      normalized.TunnelID,
+		Protocol:      normalized.Protocol,
 		LocalPort:     normalized.LocalPort,
 		BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
@@ -439,6 +443,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result.Host = hosts.PublicHost
 	result.SealosHost = hosts.SealosHost
 	result.CustomDomain = hosts.CustomDomain
+	result.PublicPort = hosts.PublicPort
 	result.BasicAuth = normalized.BasicAuth != nil && normalized.BasicAuth.Enabled
 	result.BasicAuthUser = basicAuthUsername(normalized.BasicAuth)
 	result.AccessPolicy = normalized.AccessPolicy != nil
@@ -463,6 +468,7 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		Host:            hosts.PublicHost,
 		SealosHost:      hosts.SealosHost,
 		CustomDomain:    hosts.CustomDomain,
+		PublicPort:      hosts.PublicPort,
 		LocalPort:       normalized.LocalPort,
 		Secret:          secret,
 		BasicAuth:       normalized.BasicAuth,
@@ -576,6 +582,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err := validateProtocol(protocol); err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
 	}
+	protocol = tunnelprotocol.Normalize(protocol)
 	customDomain, err := validateCustomDomain(item.Domain)
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
@@ -597,6 +604,17 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s accessPolicy: %w", tunnelID, err)
 	}
+	if protocol == tunnelprotocol.SSH {
+		if customDomain != "" || item.WaitDomain {
+			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: domain and waitDomain are only supported for https tunnels", tunnelID)
+		}
+		if basicAuth != nil {
+			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: basicAuth is only supported for https tunnels", tunnelID)
+		}
+		if accessPolicy != nil {
+			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: accessPolicy is only supported for https tunnels", tunnelID)
+		}
+	}
 	ttl := strings.TrimSpace(item.TTL)
 	expiresAt, err := resolveApplyTunnelExpiresAt(ttl, now)
 	if err != nil {
@@ -606,7 +624,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		Name:          item.Name,
 		TunnelID:      tunnelID,
 		LocalPort:     localPort,
-		Protocol:      tunnelprotocol.Normalize(protocol),
+		Protocol:      protocol,
 		CustomDomain:  customDomain,
 		BasicAuth:     basicAuth,
 		BasicAuthPass: basicAuthPass,
@@ -752,16 +770,35 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 		fmt.Fprintln(out, "Sealtun Apply Results")
 	}
 	for _, result := range results {
+		endpoint := endpointDisplay(result.Protocol, result.Host, result.SealosHost, result.PublicPort)
 		fmt.Fprintf(out, "  - %s (%s): %s localhost:%s", result.Name, result.TunnelID, result.Status, result.LocalPort)
-		if result.Host != "" {
-			fmt.Fprintf(out, " -> https://%s", result.Host)
+		if result.Protocol == tunnelprotocol.SSH && endpoint.Command != "" {
+			fmt.Fprintf(out, " -> %s", endpoint.Command)
+		} else if endpoint.URL != "" {
+			fmt.Fprintf(out, " -> %s", endpoint.URL)
 		}
 		fmt.Fprintln(out)
+		if result.Protocol != "" {
+			fmt.Fprintf(out, "    Protocol: %s\n", result.Protocol)
+		}
 		if result.SealosHost != "" {
 			fmt.Fprintf(out, "    Sealos host: %s\n", result.SealosHost)
 		}
 		if result.CustomDomain != "" {
 			fmt.Fprintf(out, "    Custom domain: %s\n", result.CustomDomain)
+		}
+		if result.Protocol == tunnelprotocol.SSH {
+			if endpoint.Host != "" {
+				fmt.Fprintf(out, "    Public SSH host: %s\n", endpoint.Host)
+			}
+			if endpoint.Port != 0 {
+				fmt.Fprintf(out, "    Public SSH port: %d\n", endpoint.Port)
+			}
+			if endpoint.Command != "" {
+				fmt.Fprintf(out, "    SSH command: %s\n", endpoint.Command)
+			}
+		} else if endpoint.URL != "" {
+			fmt.Fprintf(out, "    Public URL: %s\n", endpoint.URL)
 		}
 		if result.BasicAuth {
 			fmt.Fprintf(out, "    Basic Auth: enabled")

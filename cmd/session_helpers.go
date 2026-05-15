@@ -101,6 +101,24 @@ func cleanupSessionResources(ctx context.Context, sess session.TunnelSession) er
 	return client.WithNamespace(sess.Namespace).CleanupTunnel(ctx, sess.TunnelID)
 }
 
+func pauseSessionResources(ctx context.Context, sess session.TunnelSession) error {
+	client, err := k8sClientForSession(sess)
+	if err != nil {
+		return err
+	}
+
+	return client.WithNamespace(sess.Namespace).PauseTunnel(ctx, sess.TunnelID)
+}
+
+func resumeSessionResources(ctx context.Context, sess session.TunnelSession) error {
+	client, err := k8sClientForSession(sess)
+	if err != nil {
+		return err
+	}
+
+	return client.WithNamespace(sess.Namespace).ResumeTunnel(ctx, sess.TunnelID)
+}
+
 func sessionControlHost(sess session.TunnelSession) string {
 	if sess.SealosHost != "" {
 		return sess.SealosHost
@@ -163,6 +181,20 @@ func sessionIsStale(sess session.TunnelSession, gracePeriod time.Duration) bool 
 	return session.IsStaleWithOwner(sess, gracePeriod, sessionOwnerAlive(sess))
 }
 
+func sessionNeedsAutomaticRecovery(sess session.TunnelSession, gracePeriod time.Duration) bool {
+	if sessionExpired(sess, time.Now()) {
+		return true
+	}
+	if sess.ConnectionState == session.ConnectionStateStopped {
+		return false
+	}
+	return session.IsStaleWithOwner(sess, gracePeriod, sessionOwnerAlive(sess))
+}
+
+func shouldPreserveStoppedSession(sess *session.TunnelSession) bool {
+	return sess != nil && sess.ConnectionState == session.ConnectionStateStopped
+}
+
 func sessionExpired(sess session.TunnelSession, now time.Time) bool {
 	if strings.TrimSpace(sess.ExpiresAt) == "" {
 		return false
@@ -172,4 +204,20 @@ func sessionExpired(sess session.TunnelSession, now time.Time) bool {
 		return true
 	}
 	return !now.Before(expiresAt)
+}
+
+func ensureSessionPublicPort(ctx context.Context, sess *session.TunnelSession) {
+	if sess == nil || sess.Protocol != "ssh" || sess.PublicPort != 0 {
+		return
+	}
+	client, err := k8sClientForSession(*sess)
+	if err != nil {
+		return
+	}
+	port, err := client.WithNamespace(sess.Namespace).TunnelPublicPort(ctx, sess.TunnelID)
+	if err != nil || port == 0 {
+		return
+	}
+	sess.PublicPort = port
+	_ = session.Update(*sess)
 }

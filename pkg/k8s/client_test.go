@@ -251,6 +251,105 @@ func TestEnsureTunnelUsesCompactHostAndSingleIngressWithBothPaths(t *testing.T) 
 	}
 }
 
+func TestEnsureTunnelSSHCreatesNodePortService(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	clientset.PrependReactor("create", "services", func(action ktesting.Action) (bool, runtime.Object, error) {
+		create := action.(ktesting.CreateAction)
+		service := create.GetObject().(*corev1.Service)
+		for i := range service.Spec.Ports {
+			if service.Spec.Ports[i].Name == "tcp" {
+				service.Spec.Ports[i].NodePort = 32022
+			}
+		}
+		return false, nil, nil
+	})
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	hosts, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "ssh", "22", TunnelOptions{})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+	if hosts.PublicPort != 32022 {
+		t.Fatalf("expected public nodePort 32022, got %d", hosts.PublicPort)
+	}
+	if hosts.PublicHost != "sealtun-abc123-default.example.com" {
+		t.Fatalf("unexpected public host: %s", hosts.PublicHost)
+	}
+
+	service, err := clientset.CoreV1().Services("default").Get(context.Background(), "sealtun-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("expected HTTP service to remain ClusterIP, got %s", service.Spec.Type)
+	}
+	if port := servicePortByName(service, "http"); port == nil || port.Port != 80 || port.TargetPort.IntVal != 8080 {
+		t.Fatalf("expected http service port 80 -> 8080, got %#v", port)
+	}
+	if port := servicePortByName(service, "tcp"); port != nil {
+		t.Fatalf("expected HTTP service not to expose tcp NodePort, got %#v", port)
+	}
+
+	tcpService, err := clientset.CoreV1().Services("default").Get(context.Background(), "sealtun-abc123-tcp", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tcpService.Spec.Type != corev1.ServiceTypeNodePort {
+		t.Fatalf("expected TCP service to be NodePort, got %s", tcpService.Spec.Type)
+	}
+	if port := servicePortByName(tcpService, "tcp"); port == nil || port.Port != 2222 || port.TargetPort.IntVal != 2222 {
+		t.Fatalf("expected tcp service port 2222 -> 2222, got %#v", port)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), "sealtun-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containerPortByName(deployment, "tcp") == nil {
+		t.Fatalf("expected ssh deployment to expose tcp container port, got %#v", deployment.Spec.Template.Spec.Containers[0].Ports)
+	}
+
+	ingress, err := clientset.NetworkingV1().Ingresses("default").Get(context.Background(), "sealtun-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := ingress.Spec.Rules[0].HTTP.Paths
+	if len(paths) != 2 {
+		t.Fatalf("expected ssh ingress to expose control paths only, got %#v", paths)
+	}
+	if paths[0].Path != "/_sealtun/ws" || paths[1].Path != "/_sealtun/healthz" {
+		t.Fatalf("unexpected ssh ingress paths: %#v", paths)
+	}
+}
+
+func TestEnsureTunnelSSHRejectsHTTPOnlyOptions(t *testing.T) {
+	client := &Client{
+		clientset: fake.NewSimpleClientset(),
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	tests := []struct {
+		name string
+		opts TunnelOptions
+	}{
+		{name: "custom domain", opts: TunnelOptions{CustomDomain: "dev.example.com"}},
+		{name: "basic auth", opts: TunnelOptions{BasicAuth: &BasicAuthOptions{Username: "admin", PasswordHash: "hash"}}},
+		{name: "access policy", opts: TunnelOptions{AccessPolicy: &accesspolicy.Policy{IPAllowlist: []string{"203.0.113.1"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "ssh", "22", tt.opts); err == nil {
+				t.Fatal("expected ssh tunnel with HTTP-only option to fail")
+			}
+		})
+	}
+}
+
 func TestTunnelPodLogOptionsPreservesZeroTail(t *testing.T) {
 	t.Parallel()
 
@@ -1087,6 +1186,106 @@ func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
 	}
 }
 
+func TestPauseTunnelScalesManagedDeploymentAndKeepsEntryResources(t *testing.T) {
+	name := "sealtun-abc123"
+	replicas := int32(1)
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)},
+			Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)}},
+		&netv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: authSecretName(name), Namespace: "default", Labels: managedLabels(name)}},
+	)
+	issuer := customDomainIssuer(name)
+	issuer.SetNamespace("default")
+	certificate := customDomainCertificate(name, "dev.example.com")
+	certificate.SetNamespace("default")
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), issuer, certificate),
+		namespace:     "default",
+		domain:        "sealosgzg.site",
+	}
+
+	if err := client.PauseTunnel(context.Background(), "abc123"); err != nil {
+		t.Fatalf("PauseTunnel returned error: %v", err)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deployment should remain: %v", err)
+	}
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 0 {
+		t.Fatalf("expected deployment replicas to be 0, got %v", deployment.Spec.Replicas)
+	}
+	if _, err := clientset.CoreV1().Services("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("service should remain: %v", err)
+	}
+	if _, err := clientset.NetworkingV1().Ingresses("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("ingress should remain: %v", err)
+	}
+	if _, err := clientset.CoreV1().Secrets("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("tls secret should remain: %v", err)
+	}
+	if _, err := clientset.CoreV1().Secrets("default").Get(context.Background(), authSecretName(name), metav1.GetOptions{}); err != nil {
+		t.Fatalf("auth secret should remain: %v", err)
+	}
+	if _, err := client.dynamicClient.Resource(certificateGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("certificate should remain: %v", err)
+	}
+	if _, err := client.dynamicClient.Resource(issuerGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("issuer should remain: %v", err)
+	}
+}
+
+func TestResumeTunnelScalesManagedDeploymentToOne(t *testing.T) {
+	name := "sealtun-abc123"
+	replicas := int32(0)
+	clientset := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	})
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		namespace:     "default",
+	}
+
+	if err := client.ResumeTunnel(context.Background(), "abc123"); err != nil {
+		t.Fatalf("ResumeTunnel returned error: %v", err)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deployment should remain: %v", err)
+	}
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 1 {
+		t.Fatalf("expected deployment replicas to be 1, got %v", deployment.Spec.Replicas)
+	}
+}
+
+func TestPauseTunnelRejectsUnmanagedDeployment(t *testing.T) {
+	name := "sealtun-abc123"
+	replicas := int32(1)
+	clientset := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	})
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		namespace:     "default",
+	}
+
+	err := client.PauseTunnel(context.Background(), "abc123")
+	if err == nil || !strings.Contains(err.Error(), "not managed by Sealtun") {
+		t.Fatalf("expected unmanaged deployment error, got %v", err)
+	}
+}
+
 func TestCleanupTunnelSkipsUnmanagedSameNameResources(t *testing.T) {
 	name := "sealtun-abc123"
 	clientset := fake.NewSimpleClientset(
@@ -1834,6 +2033,30 @@ func int32Ptr(value int32) *int32 {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func servicePortByName(service *corev1.Service, name string) *corev1.ServicePort {
+	if service == nil {
+		return nil
+	}
+	for i := range service.Spec.Ports {
+		if service.Spec.Ports[i].Name == name {
+			return &service.Spec.Ports[i]
+		}
+	}
+	return nil
+}
+
+func containerPortByName(deployment *appsv1.Deployment, name string) *corev1.ContainerPort {
+	if deployment == nil || len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return nil
+	}
+	for i := range deployment.Spec.Template.Spec.Containers[0].Ports {
+		if deployment.Spec.Template.Spec.Containers[0].Ports[i].Name == name {
+			return &deployment.Spec.Template.Spec.Containers[0].Ports[i]
+		}
+	}
+	return nil
 }
 
 func warningsContain(warnings []string, want string) bool {

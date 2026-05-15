@@ -1205,9 +1205,17 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      return dnsHostPattern.test(host) ? host : "";
 	    };
 	    const publicHostFor = (t) => safeHost(t?.host) || safeHost(t?.sealosHost);
-	    const hostLink = (host, className) => {
+	    const publicEndpointFor = (t) => {
+	      const host = publicHostFor(t);
+	      if (!host) return "";
+	      if (t?.protocol === "ssh" && t?.publicPort) return "ssh <user>@" + host + " -p " + t.publicPort;
+	      return "https://" + host;
+	    };
+	    const hostLink = (t, className) => {
+	      const host = publicHostFor(t);
 	      const safe = safeHost(host);
 	      if (!safe) return '<span class="' + esc(className || "link") + ' muted">-</span>';
+	      if (t?.protocol === "ssh") return '<span class="' + esc(className || "link") + ' mono">' + esc(publicEndpointFor(t) || safe) + '</span>';
 	      return '<a class="' + esc(className || "link") + '" href="https://' + esc(safe) + '" target="_blank" rel="noreferrer">https://' + esc(safe) + externalIcon + '</a>';
 	    };
 	    const yes = (v) => v ? '<span class="yes">Yes</span>' : '<span class="no">No</span>';
@@ -1391,14 +1399,14 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         return;
       }
 	      document.getElementById("tunnel-table").innerHTML =
-	        '<table><thead><tr><th>Status</th><th>Tunnel ID</th><th>Public Host</th><th>Local Target</th><th>Mode</th><th>Namespace</th><th>Created At</th><th>Actions</th></tr></thead><tbody>' +
+	        '<table><thead><tr><th>Status</th><th>Tunnel ID</th><th>Public Endpoint</th><th>Local Target</th><th>Mode</th><th>Namespace</th><th>Created At</th><th>Actions</th></tr></thead><tbody>' +
 	        tunnels.map(t => {
 	          const cls = statusClass(t.status);
 	          const host = publicHostFor(t);
 	          return '<tr data-selected="' + (t.tunnelId === selectedTunnel) + '">' +
 	            '<td><button class="status ' + cls + '" data-select="' + esc(t.tunnelId) + '"><span class="dot"></span>' + esc(title(t.status)) + '</button></td>' +
 	            '<td><span class="tag">' + esc(t.tunnelId) + '</span></td>' +
-	            '<td>' + hostLink(host, "link") + '</td>' +
+	            '<td>' + hostLink(t, "link") + '</td>' +
 	            '<td class="mono muted">localhost:' + esc(t.localPort || "-") + '</td>' +
             '<td><span class="mode">' + esc(t.mode || "-") + '</span></td>' +
             '<td class="muted">' + esc(t.namespace || "-") + '</td>' +
@@ -1428,9 +1436,9 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      document.getElementById("inspect-panel").innerHTML =
 	        '<div class="inspect-head"><div class="inspect-title">Inspect <span class="tag">' + esc(t.tunnelId) + '</span></div><button class="close" type="button">x</button></div>' +
 	        '<div class="inspect-body">' +
-	          '<div class="inspect-summary"><div class="status ' + cls + '"><span class="dot"></span>' + esc(title(t.status)) + '</div>' + hostLink(host, "inspect-url") + '</div>' +
+	          '<div class="inspect-summary"><div class="status ' + cls + '"><span class="dot"></span>' + esc(title(t.status)) + '</div>' + hostLink(t, "inspect-url") + '</div>' +
 	          group("Connection", [
-	            ["Public URL", host || "-", true],
+	            [t.protocol === "ssh" ? "Public SSH" : "Public URL", publicEndpointFor(t) || "-", true],
 	            ["CNAME Target", cname || "-", true],
 	            ["Local Target", "localhost:" + (t.localPort || "-"), true]
           ]) +
@@ -1466,10 +1474,10 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     }
 
 	    function logsPanel(t) {
-	      const host = publicHostFor(t) || "-";
+	      const endpoint = publicEndpointFor(t) || publicHostFor(t) || "-";
 	      return '<div class="log-box">' +
         line("17:06:33", "INFO", "Tunnel snapshot loaded for " + t.tunnelId) +
-        line("17:07:33", "INFO", "Forwarding localhost:" + (t.localPort || "-") + " -> " + host) +
+        line("17:07:33", "INFO", "Forwarding localhost:" + (t.localPort || "-") + " -> " + endpoint) +
         line("17:08:33", "DEBUG", "Run: sealtun logs " + t.tunnelId + " --tail 200") +
         line("17:09:33", "INFO", "Run: sealtun metrics " + t.tunnelId) +
         (t.status === "degraded" ? line("17:11:33", "WARN", "Local port is not reachable") : line("17:11:33", "INFO", "Local tunnel status is " + t.status)) +
@@ -1493,6 +1501,13 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      const item = items.find(x => x.tunnelId === t.tunnelId);
 	      const host = safeHost(t.sealosHost) || publicHostFor(t) || "-";
       if (!item && !t.customDomain) {
+        if (t.protocol === "ssh") {
+          return '<div class="panel-grid">' +
+            small("Custom Domain", "HTTPS tunnels only") +
+            small("Public SSH", publicEndpointFor(t) || "-") +
+            small("Command", "sealtun expose 22 --protocol ssh") +
+          '</div>';
+        }
         return '<div class="panel-grid">' +
           small("Custom Domain", "Not configured") +
           small("CNAME Target", host) +

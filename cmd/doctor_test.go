@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,6 +117,67 @@ func TestSessionIsStaleTreatsStoppedDaemonSessionAsCleanupEligible(t *testing.T)
 		UpdatedAt:       time.Now().Format(time.RFC3339),
 	}, time.Minute) {
 		t.Fatal("expected stopped daemon session to be cleanup eligible")
+	}
+}
+
+func TestSessionNeedsAutomaticRecoverySkipsStoppedSession(t *testing.T) {
+	if sessionNeedsAutomaticRecovery(session.TunnelSession{
+		Mode:            "daemon",
+		ConnectionState: session.ConnectionStateStopped,
+		UpdatedAt:       time.Now().Add(-time.Hour).Format(time.RFC3339),
+	}, time.Minute) {
+		t.Fatal("expected stopped session to be preserved during automatic recovery")
+	}
+}
+
+func TestSessionNeedsAutomaticRecoveryIncludesExpiredStoppedSession(t *testing.T) {
+	if !sessionNeedsAutomaticRecovery(session.TunnelSession{
+		Mode:            "daemon",
+		ConnectionState: session.ConnectionStateStopped,
+		ExpiresAt:       time.Now().Add(-time.Hour).Format(time.RFC3339),
+		UpdatedAt:       time.Now().Format(time.RFC3339),
+	}, time.Minute) {
+		t.Fatal("expected expired stopped session to be automatic cleanup eligible")
+	}
+}
+
+func TestTunnelCleanupShouldPreserveStoppedSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:        "paused123",
+		ConnectionState: session.ConnectionStateStopped,
+		CreatedAt:       time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	if !tunnelCleanupShouldPreserve("paused123") {
+		t.Fatal("expected stopped session to preserve remote resources during foreground cleanup")
+	}
+	if tunnelCleanupShouldPreserve("missing") {
+		t.Fatal("expected missing session to allow cleanup")
+	}
+}
+
+func TestStartRejectsExpiredSessionBeforeRemoteMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:        "expired123",
+		Secret:          "secret",
+		ExpiresAt:       time.Now().Add(-time.Hour).Format(time.RFC3339),
+		ConnectionState: session.ConnectionStateStopped,
+		CreatedAt:       time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	err := startCmd.RunE(startCmd, []string{"expired123"})
+	if err == nil || !strings.Contains(err.Error(), "has expired") {
+		t.Fatalf("expected expired start rejection, got %v", err)
 	}
 }
 

@@ -153,6 +153,25 @@ func TestVerifySessionDomainRequiresCustomDomain(t *testing.T) {
 	}
 }
 
+func TestConfigureSessionCustomDomainRejectsSSH(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "sshdev",
+		Protocol:  "ssh",
+		Host:      "sealtun-sshdev-ns.sealosgzg.site",
+		Namespace: "ns-demo",
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	_, err := configureSessionCustomDomain(context.Background(), "sshdev", "dev.example.com")
+	if err == nil || !strings.Contains(err.Error(), "only supported for https") {
+		t.Fatalf("expected ssh custom domain rejection, got %v", err)
+	}
+}
+
 func TestCollectDomainStatusFiltersCustomDomains(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

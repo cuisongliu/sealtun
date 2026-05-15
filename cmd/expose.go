@@ -47,6 +47,17 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return err
 		}
 		protocol = tunnelprotocol.Normalize(protocol)
+		if protocol == tunnelprotocol.SSH {
+			if normalizedCustomDomain != "" || waitDomain {
+				return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
+			}
+			if basicAuthCredential != "" || basicAuthUser != "" || basicAuthPassword != "" || basicAuthPasswordEnv != "" {
+				return fmt.Errorf("basic auth flags are only supported for https tunnels")
+			}
+			if bearerToken != "" || bearerTokenEnv != "" || len(ipAllowlist) > 0 || len(ipDenylist) > 0 || temporaryAccessToken != "" || temporaryAccessTokenEnv != "" {
+				return fmt.Errorf("access policy flags are only supported for https tunnels")
+			}
+		}
 
 		// 1. Check if logged in.
 		authData, err := auth.LoadAuthData()
@@ -127,6 +138,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			Host:            hosts.PublicHost,
 			SealosHost:      hosts.SealosHost,
 			CustomDomain:    hosts.CustomDomain,
+			PublicPort:      hosts.PublicPort,
 			LocalPort:       localPort,
 			Secret:          secret,
 			BasicAuth:       basicAuthConfig,
@@ -142,7 +154,15 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return fmt.Errorf("failed to persist tunnel session: %w", err)
 		}
 
-		fmt.Printf("[+] Public URL will be: https://%s\n", hosts.PublicHost)
+		if protocol == tunnelprotocol.SSH {
+			endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
+			fmt.Printf("[+] Public SSH host: %s\n", endpoint.Host)
+			fmt.Printf("[+] Public SSH port: %d\n", endpoint.Port)
+			fmt.Printf("[+] Connect with: %s\n", endpoint.Command)
+			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
+		} else {
+			fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
+		}
 		if basicAuthConfig != nil && basicAuthConfig.Enabled {
 			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
 		}
@@ -228,6 +248,9 @@ and establishes a secure connection to forward traffic to your local port.`,
 			if err != nil {
 				return
 			}
+			if shouldPreserveStoppedSession(current) {
+				return
+			}
 			current.ConnectionState = session.ConnectionStateConnected
 			current.LastError = ""
 			current.LastConnectedAt = time.Now().Format(time.RFC3339)
@@ -260,7 +283,7 @@ const tunnelCleanupTimeout = 30 * time.Second
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel (currently only https)")
+	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https or ssh")
 	exposeCmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
 	exposeCmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
 	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
@@ -319,7 +342,7 @@ func recoverStaleSessions(ctx context.Context) error {
 	}
 
 	for _, sess := range sessions {
-		if !sessionIsStale(sess, time.Minute) {
+		if !sessionNeedsAutomaticRecovery(sess, time.Minute) {
 			continue
 		}
 
@@ -340,6 +363,11 @@ func recoverStaleSessions(ctx context.Context) error {
 }
 
 func cleanupTunnel(k8sClient *k8s.Client, tunnelID string) {
+	if tunnelCleanupShouldPreserve(tunnelID) {
+		fmt.Printf("\r[+] Tunnel %s is stopped. Preserving remote entry resources.\n", tunnelID)
+		return
+	}
+
 	fmt.Printf("\r[+] Disconnected. Cleaning up tunnel resources remotely...\n")
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), tunnelCleanupTimeout)
 	defer cancel()
@@ -351,4 +379,9 @@ func cleanupTunnel(k8sClient *k8s.Client, tunnelID string) {
 	if err := session.Delete(tunnelID); err != nil {
 		fmt.Printf("[!] Failed to remove local session record for tunnel %s: %v\n", tunnelID, err)
 	}
+}
+
+func tunnelCleanupShouldPreserve(tunnelID string) bool {
+	sess, err := session.Get(tunnelID)
+	return err == nil && shouldPreserveStoppedSession(sess)
 }

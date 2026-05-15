@@ -182,14 +182,41 @@ export SEALTUN_TEMP_TOKEN='review-link-secret'
 sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-access-ttl 1h
 ```
 
-Bearer Token 和临时链接 token 至少需要 8 个字符，只保存 SHA-256 hash，不会写入 Deployment 参数；临时链接使用 `?_sealtun_token=...` 访问，Sealtun 会在转发到本地服务前移除该查询参数。IP 规则优先使用 Ingress/代理传入的 `X-Real-IP`，再回退到最近一跳 `X-Forwarded-For`。Basic Auth 与 Bearer/临时链接同时配置时，任一认证方式通过即可访问。
+Bearer Token 和临时链接 token 至少需要 8 个字符，只保存 SHA-256 hash，不会写入 Deployment 参数；临时链接使用 `?_sealtun_token=...` 访问，Sealtun 会在转发到本地服务前移除该查询参数。IP 规则优先使用 Ingress/代理传入的 `X-Real-IP`，再回退到 `X-Forwarded-For` 中最后一个有效的代理确认客户端 IP。Basic Auth 与 Bearer/临时链接同时配置时，任一认证方式通过即可访问。
 
 Sealtun 会自动执行以下操作：
 1. 在你的 Sealos Namespace 中启动一个隧道代理 Pod。
 2. 配置 Ingress 路由规则。
 3. 建立加密 WebSocket 隧道，并将所有流量转发至 `localhost:3000`。
 
-### 3. 使用自定义域名
+### 3. SSH 公网访问
+如果 Sealos Region 支持公网 TCP NodePort，可以用四层 SSH 模式直接连接公网域名和端口：
+
+```bash
+# macOS/Linux 常见 SSH 端口是 22；也可以换成本机 sshd 监听的其他端口
+sealtun expose 22 --protocol ssh
+```
+
+命令会输出公网 SSH 入口：
+```bash
+ssh <user>@<public-host> -p <node-port>
+```
+
+也可以写进 `~/.ssh/config`，之后直接 `ssh sealtun-dev`：
+```sshconfig
+Host sealtun-dev
+  HostName <public-host>
+  User <user>
+  Port <node-port>
+```
+
+`--protocol ssh` 的公网业务入口只有 TCP NodePort，不会提供默认 HTTPS 业务 URL。Sealtun 仍会保留内部控制通道供本地 daemon 连接远端 Pod，但它不作为 SSH 隧道的用户访问入口。Basic Auth、Bearer Token、临时链接、IP 规则和自定义域名只适用于 HTTPS 隧道，不适用于 SSH 四层入口。旧的 WebSocket ProxyCommand 备用方式仍可用：
+
+```bash
+ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
+```
+
+### 4. 使用自定义域名
 新建隧道时先生成官方 Sealos 域名和 CNAME 目标：
 ```bash
 sealtun expose 3000 --domain app.example.com
@@ -311,7 +338,8 @@ basicAuth:
 
 ## 🛠️ 架构详情
 
-- **底层协议**：基于 WebSocket 的 Yamux 多路复用。
+- **HTTPS 隧道协议**：基于 WebSocket 的 Yamux 多路复用。
+- **SSH 四层入口**：`--protocol ssh` 只提供公网 TCP NodePort 直连本地 SSH；HTTPS 只作为内部控制通道，不提供默认业务 URL。
 - **Sealos 资源**：触发 `sealtun expose` 时，会在集群中创建以 `sealtun-*` 命名的 `Deployment`、`Service` 和 `Ingress`。
 - **镜像来源**：依赖于 `ghcr.io/gitlayzer/sealtun` 的原生镜像。
 
@@ -331,12 +359,13 @@ basicAuth:
 - 声明式配置支持 `sealtun diff -f`、多 tunnel 批量 apply 和 `ttl` 自动过期清理。
 - `logs` 读取远端 tunnel Pod 日志；`metrics` 聚合本地、远端和 server counters，其中 server counters 需要新版本远端镜像支持。
 - `dashboard` 是本地只读 Web 控制台，不需要额外服务端组件。
-- `apply -f sealtun.yaml` 是声明式配置 MVP，当前覆盖 HTTPS 隧道、稳定 tunnel name、自定义域名指引和 daemon 托管。
-- 提供 `status`、`list`、`inspect`、`doctor`、`stop`、`cleanup`、`logout` 等本地控制命令。
+- `apply -f sealtun.yaml` 支持 HTTPS 隧道、SSH 四层隧道、稳定 tunnel name、自定义域名指引和 daemon 托管。
+- 提供 `status`、`list`、`inspect`、`doctor`、`stop`、`start/resume`、`cleanup`、`logout` 等本地控制命令。
+- `stop` 只会把远端 tunnel Pod 副本缩容为 0，保留域名、Service、Ingress、Secret 与本地 session；可用 `sealtun start <tunnel-id>` 恢复。`cleanup` 默认删除 stopped/expired/stale 隧道，`cleanup --all` 才会强制删除所有本地跟踪的隧道资源。
 - `list` 默认只读取本地 session；需要探测本地端口健康时可使用 `list --check`。
 - `inspect` 默认展示本地状态；需要远端 Kubernetes 诊断时可使用 `inspect --remote`。
 - `logout` 会先回收本地记录中的隧道资源再删除凭据；如果只想强制清除本地凭据，可使用 `logout --force`。
-- 当前 `--protocol` 只接受 `https`。TCP、UDP 和 gRPC 泛化暂不支持，后续如果需要会以单独能力设计，而不是继续复用当前 HTTP Ingress 路径。
+- 当前 `--protocol` 支持 `https` 和专用 `ssh` 模式。`ssh` 不支持 Basic Auth、Bearer Token、临时链接、IP 规则和自定义域名。通用 TCP、UDP 和 gRPC 泛化暂不支持，后续如果需要会以单独能力设计，而不是继续复用当前 HTTP Ingress 路径。
 - `doctor` 会汇总本地 daemon、登录、session、端口健康和远端 Deployment、Service、Ingress、Pod 与 Event 状态，用于定位镜像拉取、Pod 未就绪、Ingress 缺失等问题。
 
 ## 📄 许可证

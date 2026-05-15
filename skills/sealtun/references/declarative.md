@@ -1,6 +1,6 @@
 # Sealtun Declarative Configuration
 
-Use this for `sealtun.yaml`, `apply -f`, `diff -f`, multi-tunnel management, access policy YAML, and automatic expiration.
+Use this for `sealtun.yaml`, `apply -f`, `diff -f`, multi-tunnel management, HTTPS access policy YAML, SSH tunnel declarations, and automatic expiration.
 
 ## Workflow
 
@@ -46,7 +46,7 @@ tunnels:
 - `tunnels` must contain at least one item.
 - `name` is required, lower-case DNS-compatible, and becomes the stable tunnel ID. Reapplying the same name updates `sealtun-<name>`.
 - Use `localPort`; `port` is accepted as a compatibility alias.
-- `protocol` defaults to `https`; other protocols are not currently stable.
+- `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh`.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.
 - `readyTimeout` and `domainTimeout` use Go duration syntax and must be positive.
 - Multiple tunnels are applied in one run. On an apply failure, Sealtun attempts rollback for tunnels changed earlier in the batch.
@@ -104,6 +104,20 @@ Rules:
 - `expiresAt` must be RFC3339 and in the future.
 - Token values must be at least 8 characters.
 - `sealtun apply` prints temporary URLs only when an inline `token` is present; `tokenEnv` avoids echoing the token.
+
+## SSH YAML
+
+Use this when a user wants declarative public SSH over NodePort:
+
+```yaml
+version: v1
+tunnels:
+  - name: ssh-dev
+    localPort: 22
+    protocol: ssh
+```
+
+SSH declarations cannot set `domain`, `waitDomain`, `basicAuth`, or `accessPolicy`. The apply result should show the public SSH host, public SSH port, and direct `ssh <user>@<host> -p <port>` command.
 
 ## Domains In Declarative Apply
 

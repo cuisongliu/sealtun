@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -18,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/labring/sealtun/pkg/accesspolicy"
+	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/publicauth"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -122,6 +124,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleTunnelConnection(w, r)
 		return
 	}
+	if r.URL.Path == "/_sealtun/tcp" {
+		s.handleTCPConnection(w, r)
+		return
+	}
 
 	// 2. All other requests are public traffic -> Forward to Local Client via Reverse Proxy
 	s.handlePublicTraffic(w, r)
@@ -207,7 +213,8 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, reason, http.StatusForbidden)
 		return
 	}
-	if !s.authorizedPublicTraffic(r) {
+	authKind, ok := s.authorizedPublicTraffic(r)
+	if !ok {
 		if s.basicAuth != nil {
 			w.Header().Add("WWW-Authenticate", `Basic realm="Sealtun Tunnel", charset="UTF-8"`)
 		}
@@ -218,6 +225,9 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	accesspolicy.StripTemporaryTokenQuery(r.URL)
+	if authKind == publicAuthBasic || authKind == publicAuthBearer {
+		r.Header.Del("Authorization")
+	}
 
 	start := time.Now()
 	s.totalRequests.Add(1)
@@ -238,16 +248,31 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("request method=%s path=%q status=%d bytes=%d duration=%s\n", r.Method, redactedRequestPath(r), status, recorder.bytes, time.Since(start).Round(time.Millisecond))
 }
 
-func (s *Server) authorizedPublicTraffic(r *http.Request) bool {
+type publicAuthKind int
+
+const (
+	publicAuthNone publicAuthKind = iota
+	publicAuthBasic
+	publicAuthBearer
+	publicAuthTemporary
+)
+
+func (s *Server) authorizedPublicTraffic(r *http.Request) (publicAuthKind, bool) {
 	requiresBasic := s.basicAuth != nil
 	requiresToken := accesspolicy.HasTokenAuth(s.accessPolicy)
 	if !requiresBasic && !requiresToken {
-		return true
+		return publicAuthNone, true
 	}
 	if requiresBasic && s.authorizedBasicAuth(r) {
-		return true
+		return publicAuthBasic, true
 	}
-	return requiresToken && accesspolicy.TokenAuthorized(s.accessPolicy, r, time.Now())
+	if requiresToken && accesspolicy.BearerTokenAuthorized(s.accessPolicy, r) {
+		return publicAuthBearer, true
+	}
+	if requiresToken && accesspolicy.TokenAuthorized(s.accessPolicy, r, time.Now()) {
+		return publicAuthTemporary, true
+	}
+	return publicAuthNone, false
 }
 
 type statusRecorder struct {
@@ -374,6 +399,53 @@ func (s *Server) handleTunnelConnection(w http.ResponseWriter, r *http.Request) 
 	fmt.Println("Local client disconnected.")
 }
 
+func (s *Server) handleTCPConnection(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	s.mu.RLock()
+	session := s.activeSession
+	s.mu.RUnlock()
+	if session == nil || session.IsClosed() {
+		http.Error(w, "local client is not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Printf("tcp upgrade error: %v\n", err)
+		return
+	}
+	defer conn.Close()
+
+	stream, err := session.OpenStream()
+	if err != nil {
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "local client is not connected"))
+		return
+	}
+	defer stream.Close()
+
+	relayWebSocketAndStream(conn, stream)
+}
+
+func relayWebSocketAndStream(conn *websocket.Conn, stream net.Conn) {
+	wsConn := NewWSConn(conn)
+	defer wsConn.Close()
+
+	errc := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(stream, wsConn)
+		errc <- err
+	}()
+	go func() {
+		_, err := io.Copy(wsConn, stream)
+		errc <- err
+	}()
+	<-errc
+}
+
 func (s *Server) authorized(r *http.Request) bool {
 	authHeader := r.Header.Get("Authorization")
 	expectedAuth := fmt.Sprintf("Bearer %s", s.secret)
@@ -410,6 +482,13 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	fmt.Printf("Server listening on %s (H2C enabled)\n", addr)
 
+	errc := make(chan error, 2)
+	if s.protocol == tunnelprotocol.SSH {
+		go func() {
+			errc <- s.startRawTCPListener(2222)
+		}()
+	}
+
 	h2s := &http2.Server{}
 	server := &http.Server{
 		Addr:              addr,
@@ -417,5 +496,58 @@ func (s *Server) Start() error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	return server.ListenAndServe()
+	go func() {
+		errc <- server.ListenAndServe()
+	}()
+	return <-errc
+}
+
+func (s *Server) startRawTCPListener(port int) error {
+	addr := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen raw tcp on %s: %w", addr, err)
+	}
+	defer listener.Close()
+	fmt.Printf("Raw TCP listener enabled on %s\n", addr)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return err
+		}
+		go s.handleRawTCPConnection(conn)
+	}
+}
+
+func (s *Server) handleRawTCPConnection(conn net.Conn) {
+	defer conn.Close()
+
+	s.mu.RLock()
+	session := s.activeSession
+	s.mu.RUnlock()
+	if session == nil || session.IsClosed() {
+		return
+	}
+
+	stream, err := session.OpenStream()
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	relayConns(conn, stream)
+}
+
+func relayConns(a, b net.Conn) {
+	errc := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(a, b)
+		errc <- err
+	}()
+	go func() {
+		_, err := io.Copy(b, a)
+		errc <- err
+	}()
+	<-errc
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/labring/sealtun/pkg/session"
 )
@@ -64,4 +65,42 @@ func TestOpenDaemonLogFileRejectsSymlink(t *testing.T) {
 		_ = file.Close()
 		t.Fatal("expected symlinked daemon log to be rejected")
 	}
+}
+
+func TestStoppedSessionGuardPreservesStoppedState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:        "stopped123",
+		ConnectionState: session.ConnectionStateStopped,
+		CreatedAt:       time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	latest, getErr := session.Get("stopped123")
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if shouldPreserveStoppedSession(latest) {
+		current, err := session.Get("stopped123")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.ConnectionState != session.ConnectionStateStopped {
+			t.Fatalf("expected stopped state to be preserved, got %s", current.ConnectionState)
+		}
+		return
+	}
+
+	latest.Mode = "daemon"
+	latest.PID = os.Getpid()
+	latest.ConnectionState = session.ConnectionStateConnected
+	latest.LastError = ""
+	latest.LastConnectedAt = time.Now().Format(time.RFC3339)
+	if saveErr := session.Update(*latest); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	t.Fatal("stopped session guard did not preserve stopped state")
 }

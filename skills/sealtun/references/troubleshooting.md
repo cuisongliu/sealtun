@@ -1,6 +1,6 @@
 # Sealtun Troubleshooting
 
-Use this when users report tunnel failures, auth issues, stale sessions, domain problems, missing metrics, or confusing CLI output.
+Use this when users report tunnel failures, auth issues, SSH/TCP connection failures, stale sessions, stop/start confusion, domain problems, missing metrics, or confusing CLI output.
 
 ## Fast Local Checks
 
@@ -54,7 +54,26 @@ sealtun stop <tunnel-id>
 sealtun cleanup
 ```
 
-`expose` normally starts daemon mode unless `--foreground` is used. `apply` also ensures the local daemon is running after successful cloud changes. Stale sessions can be cleaned up with `stop`, `cleanup`, or `cleanup --all` depending on scope.
+`expose` normally starts daemon mode unless `--foreground` is used. `apply` also ensures the local daemon is running after successful cloud changes. `stop` intentionally preserves remote entry resources and scales the pod to zero; `start` or `resume` reopens it. `cleanup` deletes stopped, expired, or stale tunnels; `cleanup --all` force deletes all locally tracked tunnels.
+
+## SSH Direct TCP Problems
+
+Symptoms:
+
+- `ssh <user>@<public-host> -p <node-port>` connects then closes.
+- SSH works through ProxyCommand but not direct NodePort.
+- User expects a normal HTTPS URL for an SSH tunnel.
+
+Actions:
+
+```bash
+sealtun inspect <tunnel-id> --remote
+sealtun logs <tunnel-id> --tail 200
+sealtun list --check
+ssh -vvv <user>@<public-host> -p <node-port>
+```
+
+Direct SSH uses `--protocol ssh` and a public TCP NodePort. The public host plus NodePort is the user-facing entry; HTTPS is only the internal Sealtun control channel. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains do not apply to SSH. If the SSH debug log reaches authentication and then closes, inspect the local sshd authentication policy, user, keys/password, and PAM/keyboard-interactive behavior on the machine running Sealtun.
 
 ## Local Port Unreachable
 
@@ -136,7 +155,7 @@ sealtun logs <tunnel-id> --tail 200
 sealtun metrics <tunnel-id> --json
 ```
 
-Check the session access policy. Tokens must be at least 8 characters. Temporary links expire at `expiresAt`; query parameter name is `_sealtun_token`. IP decisions use `X-Real-IP`, then nearest valid `X-Forwarded-For`, then `RemoteAddr`, so upstream proxy headers matter.
+Check the session access policy. Tokens must be at least 8 characters. Temporary links expire at `expiresAt`; query parameter name is `_sealtun_token`. IP decisions use `X-Real-IP`, then the last valid proxy-confirmed client IP in `X-Forwarded-For`, then `RemoteAddr`, so upstream proxy headers matter.
 
 ## Metrics And Dashboard
 

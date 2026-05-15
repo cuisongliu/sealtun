@@ -36,6 +36,7 @@ type TunnelSession struct {
 	Host            string           `json:"host"`
 	SealosHost      string           `json:"sealosHost,omitempty"`
 	CustomDomain    string           `json:"customDomain,omitempty"`
+	PublicPort      int32            `json:"publicPort,omitempty"`
 	LocalPort       string           `json:"localPort"`
 	Secret          string           `json:"secret,omitempty"`
 	BasicAuth       *BasicAuthConfig `json:"basicAuth,omitempty"`

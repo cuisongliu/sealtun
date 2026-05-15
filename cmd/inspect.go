@@ -22,6 +22,7 @@ type inspectPayload struct {
 	Host               string                 `json:"host,omitempty"`
 	SealosHost         string                 `json:"sealosHost,omitempty"`
 	CustomDomain       string                 `json:"customDomain,omitempty"`
+	PublicPort         int32                  `json:"publicPort,omitempty"`
 	LocalPort          string                 `json:"localPort,omitempty"`
 	BasicAuth          *inspectBasicAuth      `json:"basicAuth,omitempty"`
 	AccessPolicy       *inspectAccessPolicy   `json:"accessPolicy,omitempty"`
@@ -90,6 +91,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 	if err != nil {
 		return nil, err
 	}
+	ensureSessionPublicPort(ctx, sess)
 
 	snapshot := classifySession(*sess, true)
 	payload := &inspectPayload{
@@ -102,6 +104,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 		Host:               sess.Host,
 		SealosHost:         sess.SealosHost,
 		CustomDomain:       sess.CustomDomain,
+		PublicPort:         sess.PublicPort,
 		LocalPort:          sess.LocalPort,
 		BasicAuth:          inspectBasicAuthFromSession(sess.BasicAuth),
 		AccessPolicy:       inspectAccessPolicyFromSession(sess.AccessPolicy),
@@ -171,7 +174,21 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 	fmt.Fprintf(out, "  Tunnel ID: %s\n", payload.TunnelID)
 	fmt.Fprintf(out, "  Status: %s\n", payload.Status)
 	fmt.Fprintf(out, "  Mode: %s\n", valueOr(payload.Mode, "unknown"))
-	fmt.Fprintf(out, "  Host: %s\n", valueOr(payload.Host, "unknown"))
+	endpoint := endpointDisplay(payload.Protocol, payload.Host, payload.SealosHost, payload.PublicPort)
+	if endpoint.Kind == "ssh" {
+		fmt.Fprintf(out, "  Public SSH host: %s\n", valueOr(endpoint.Host, "unknown"))
+		if endpoint.Port != 0 {
+			fmt.Fprintf(out, "  Public SSH port: %d\n", endpoint.Port)
+		}
+		if endpoint.Command != "" {
+			fmt.Fprintf(out, "  SSH command: %s\n", endpoint.Command)
+		}
+		if endpoint.ControlHost != "" && endpoint.ControlHost != endpoint.Host {
+			fmt.Fprintf(out, "  Control host: %s\n", endpoint.ControlHost)
+		}
+	} else {
+		fmt.Fprintf(out, "  Public URL: %s\n", valueOr(endpoint.URL, "unknown"))
+	}
 	if payload.SealosHost != "" {
 		fmt.Fprintf(out, "  Sealos host: %s\n", payload.SealosHost)
 	}
@@ -179,7 +196,7 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		fmt.Fprintf(out, "  Custom domain: %s\n", payload.CustomDomain)
 		fmt.Fprintf(out, "  DNS CNAME target: %s\n", valueOr(payload.SealosHost, payload.Host))
 	}
-	fmt.Fprintf(out, "  Local port: %s\n", valueOr(payload.LocalPort, "unknown"))
+	fmt.Fprintf(out, "  Local target: localhost:%s\n", valueOr(payload.LocalPort, "unknown"))
 	if payload.BasicAuth != nil && payload.BasicAuth.Enabled {
 		fmt.Fprintf(out, "  Basic Auth: enabled")
 		if payload.BasicAuth.Username != "" {

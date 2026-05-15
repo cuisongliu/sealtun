@@ -69,6 +69,7 @@ type TunnelHosts struct {
 	PublicHost   string
 	SealosHost   string
 	CustomDomain string
+	PublicPort   int32
 }
 
 type TunnelDiagnostics struct {
@@ -161,6 +162,7 @@ type resourceKind string
 const (
 	resourceDeployment  resourceKind = "deployment"
 	resourceService     resourceKind = "service"
+	resourceTCPService  resourceKind = "tcp-service"
 	resourceIngress     resourceKind = "ingress"
 	resourceIssuer      resourceKind = "issuer"
 	resourceCertificate resourceKind = "certificate"
@@ -338,6 +340,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	if err := validateLocalPort(localPort); err != nil {
 		return TunnelHosts{}, err
 	}
+	protocol = tunnelprotocol.Normalize(protocol)
 
 	name := fmt.Sprintf("sealtun-%s", tunnelID)
 	opts.CustomDomain = normalizeHostname(opts.CustomDomain)
@@ -348,14 +351,24 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	if err := validateSealosHost(opts.SealosHost); err != nil {
 		return TunnelHosts{}, err
 	}
-	if err := validateCustomDomainTarget(opts.CustomDomain, opts.SealosHost); err != nil {
-		return TunnelHosts{}, err
-	}
 	if err := validateBasicAuthOptions(opts.BasicAuth); err != nil {
 		return TunnelHosts{}, err
 	}
 	if err := accesspolicy.Validate(opts.AccessPolicy); err != nil {
 		return TunnelHosts{}, fmt.Errorf("invalid access policy: %w", err)
+	}
+	if protocol == tunnelprotocol.SSH {
+		if opts.CustomDomain != "" {
+			return TunnelHosts{}, fmt.Errorf("custom domains are only supported for https tunnels")
+		}
+		if opts.BasicAuth != nil {
+			return TunnelHosts{}, fmt.Errorf("basic auth is only supported for https tunnels")
+		}
+		if !accesspolicy.Empty(opts.AccessPolicy) {
+			return TunnelHosts{}, fmt.Errorf("access policies are only supported for https tunnels")
+		}
+	} else if err := validateCustomDomainTarget(opts.CustomDomain, opts.SealosHost); err != nil {
+		return TunnelHosts{}, err
 	}
 	created := []createdResource{}
 	rollback := true
@@ -392,7 +405,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		created = append(created, createdResource{kind: resourceDeployment, name: name})
 	}
 
-	// Create or Update Service
+	// Create or Update HTTP control/app Service
 	serviceCreated, err := c.ensureService(ctx, name)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure service: %w", err)
@@ -401,7 +414,21 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		created = append(created, createdResource{kind: resourceService, name: name})
 	}
 
-	if opts.CustomDomain != "" {
+	if protocol == tunnelprotocol.SSH {
+		tcpServiceCreated, err := c.ensureTCPService(ctx, name)
+		if err != nil {
+			return empty, fmt.Errorf("failed to ensure ssh tcp service: %w", err)
+		}
+		if tcpServiceCreated {
+			created = append(created, createdResource{kind: resourceTCPService, name: tcpServiceName(name)})
+		}
+	} else {
+		if _, err := c.deleteServiceIfOwned(ctx, tcpServiceName(name)); err != nil {
+			return empty, fmt.Errorf("failed to remove stale tcp service: %w", err)
+		}
+	}
+
+	if protocol == tunnelprotocol.HTTPS && opts.CustomDomain != "" {
 		previousIssuer, err = c.getDynamicResource(ctx, issuerGVR, name)
 		if err != nil {
 			return empty, fmt.Errorf("snapshot issuer %s: %w", name, err)
@@ -420,11 +447,21 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Ingress only after custom-domain certificate resources are safe.
-	hosts, ingressCreated, err := c.ensureIngress(ctx, name, opts)
+	hosts, ingressCreated, err := c.ensureIngress(ctx, name, protocol, opts)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure ingress: %w", err)
 	}
 	created = append(created, ingressCreated...)
+	if protocol == tunnelprotocol.SSH {
+		service, err := c.clientset.CoreV1().Services(c.namespace).Get(ctx, tcpServiceName(name), metav1.GetOptions{})
+		if err != nil {
+			return empty, fmt.Errorf("get ssh service: %w", err)
+		}
+		hosts.PublicPort = sshNodePort(service)
+		if hosts.PublicPort == 0 {
+			return empty, fmt.Errorf("ssh service did not receive a nodePort")
+		}
+	}
 
 	rollback = false
 	return hosts, nil
@@ -619,9 +656,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 							ImagePullPolicy: corev1.PullAlways,
 							Args:            args,
 							Env:             env,
-							Ports: []corev1.ContainerPort{
-								{ContainerPort: 8080},
-							},
+							Ports:           containerPortsForProtocol(protocol),
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &f,
 								Capabilities: &corev1.Capabilities{
@@ -675,6 +710,18 @@ func imageTagForVersion(value string) string {
 	return "latest"
 }
 
+func containerPortsForProtocol(protocol string) []corev1.ContainerPort {
+	ports := []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}
+	if tunnelprotocol.Normalize(protocol) == tunnelprotocol.SSH {
+		ports = append(ports, corev1.ContainerPort{Name: "tcp", ContainerPort: 2222})
+	}
+	return ports
+}
+
+func tcpServiceName(name string) string {
+	return name + "-tcp"
+}
+
 func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {
 	labels := managedLabels(name)
 	service := &corev1.Service{
@@ -683,21 +730,34 @@ func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {
 			Namespace: c.namespace,
 			Labels:    labels,
 		},
-		Spec: corev1.ServiceSpec{
-			Selector: labels,
-			Ports: []corev1.ServicePort{
-				{Port: 80, TargetPort: intstr.FromInt32(8080)},
-			},
-		},
+		Spec: httpServiceSpec(labels),
 	}
 
+	return c.applyService(ctx, service, name)
+}
+
+func (c *Client) ensureTCPService(ctx context.Context, name string) (bool, error) {
+	labels := managedLabels(name)
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tcpServiceName(name),
+			Namespace: c.namespace,
+			Labels:    labels,
+		},
+		Spec: tcpServiceSpec(labels),
+	}
+
+	return c.applyService(ctx, service, name)
+}
+
+func (c *Client) applyService(ctx context.Context, service *corev1.Service, owner string) (bool, error) {
 	svcClient := c.clientset.CoreV1().Services(c.namespace)
-	existing, err := svcClient.Get(ctx, name, metav1.GetOptions{})
+	existing, err := svcClient.Get(ctx, service.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		_, err = svcClient.Create(ctx, service, metav1.CreateOptions{})
 		return err == nil, err
 	} else if err == nil {
-		if err := rejectUnmanagedExisting("service", name, name, existing.Labels); err != nil {
+		if err := rejectUnmanagedExisting("service", service.Name, owner, existing.Labels); err != nil {
 			return false, err
 		}
 		service.ResourceVersion = existing.ResourceVersion
@@ -708,36 +768,104 @@ func (c *Client) ensureService(ctx context.Context, name string) (bool, error) {
 		service.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort
 		service.Spec.InternalTrafficPolicy = existing.Spec.InternalTrafficPolicy
 		service.Spec.TrafficDistribution = existing.Spec.TrafficDistribution
+		preserveExistingNodePorts(&service.Spec, existing.Spec)
 		_, err = svcClient.Update(ctx, service, metav1.UpdateOptions{})
 	}
 	return false, err
 }
 
-func (c *Client) ensureIngress(ctx context.Context, name string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
+func httpServiceSpec(labels map[string]string) corev1.ServiceSpec {
+	return corev1.ServiceSpec{
+		Type:     corev1.ServiceTypeClusterIP,
+		Selector: labels,
+		Ports: []corev1.ServicePort{
+			{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)},
+		},
+	}
+}
+
+func tcpServiceSpec(labels map[string]string) corev1.ServiceSpec {
+	return corev1.ServiceSpec{
+		Type:     corev1.ServiceTypeNodePort,
+		Selector: labels,
+		Ports: []corev1.ServicePort{
+			{
+				Name:       "tcp",
+				Port:       2222,
+				TargetPort: intstr.FromInt32(2222),
+				Protocol:   corev1.ProtocolTCP,
+			},
+		},
+	}
+}
+
+func preserveExistingNodePorts(next *corev1.ServiceSpec, existing corev1.ServiceSpec) {
+	if next == nil {
+		return
+	}
+	existingByName := map[string]int32{}
+	for _, port := range existing.Ports {
+		if port.NodePort != 0 {
+			existingByName[port.Name] = port.NodePort
+		}
+	}
+	for i := range next.Ports {
+		if nodePort := existingByName[next.Ports[i].Name]; nodePort != 0 {
+			next.Ports[i].NodePort = nodePort
+		}
+	}
+}
+
+func sshNodePort(service *corev1.Service) int32 {
+	if service == nil {
+		return 0
+	}
+	for _, port := range service.Spec.Ports {
+		if port.Name == "tcp" {
+			return port.NodePort
+		}
+	}
+	return 0
+}
+
+func (c *Client) ensureIngress(ctx context.Context, name, protocol string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
 	sealosHost := normalizeHostname(opts.SealosHost)
 	if sealosHost == "" {
 		sealosHost = c.sealosHost(name)
 	}
-	return c.ensureIngressForHost(ctx, name, sealosHost, opts)
+	return c.ensureIngressForHost(ctx, name, sealosHost, protocol, opts)
 }
 
-func (c *Client) ensureIngressForHost(ctx context.Context, name, sealosHost string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
+func (c *Client) ensureIngressForHost(ctx context.Context, name, sealosHost, protocol string, opts TunnelOptions) (TunnelHosts, []createdResource, error) {
+	protocol = tunnelprotocol.Normalize(protocol)
 	sealosHost = normalizeHostname(sealosHost)
 	opts.CustomDomain = normalizeHostname(opts.CustomDomain)
 	if err := validateSealosHost(sealosHost); err != nil {
 		return TunnelHosts{}, nil, err
 	}
-	if err := validateCustomDomainTarget(opts.CustomDomain, sealosHost); err != nil {
-		return TunnelHosts{}, nil, err
+	switch protocol {
+	case tunnelprotocol.SSH:
+		if opts.CustomDomain != "" {
+			return TunnelHosts{}, nil, fmt.Errorf("custom domains are only supported for https tunnels")
+		}
+	case tunnelprotocol.HTTPS:
+		if err := validateCustomDomainTarget(opts.CustomDomain, sealosHost); err != nil {
+			return TunnelHosts{}, nil, err
+		}
+	default:
+		return TunnelHosts{}, nil, fmt.Errorf("unsupported protocol %q", protocol)
 	}
-
 	publicHost := sealosHost
-	if opts.CustomDomain != "" {
+	if protocol == tunnelprotocol.HTTPS && opts.CustomDomain != "" {
 		publicHost = opts.CustomDomain
 	}
 	pathType := netv1.PathTypePrefix
 	ingressClass := "nginx"
-	ingress := c.generateIngress(name, sealosHost, opts.CustomDomain, []string{"/_sealtun/ws", "/_sealtun/healthz", "/"}, &pathType, &ingressClass)
+	paths := []string{"/_sealtun/ws", "/_sealtun/healthz"}
+	if protocol == tunnelprotocol.HTTPS {
+		paths = append(paths, "/")
+	}
+	ingress := c.generateIngress(name, sealosHost, opts.CustomDomain, paths, &pathType, &ingressClass)
 	ingressCreated, err := c.applyIngress(ctx, ingress)
 	if err != nil {
 		return TunnelHosts{}, nil, fmt.Errorf("failed to apply ingress: %w", err)
@@ -760,6 +888,28 @@ func (c *Client) sealosHost(name string) string {
 
 func (c *Client) SealosHost(tunnelID string) string {
 	return c.sealosHost(fmt.Sprintf("sealtun-%s", tunnelID))
+}
+
+func (c *Client) TunnelPublicPort(ctx context.Context, tunnelID string) (int32, error) {
+	if err := validateTunnelID(tunnelID); err != nil {
+		return 0, err
+	}
+	name := fmt.Sprintf("sealtun-%s", tunnelID)
+	service, err := c.clientset.CoreV1().Services(c.namespace).Get(ctx, tcpServiceName(name), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return 0, fmt.Errorf("remote service %s is missing", tcpServiceName(name))
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get service %s: %w", tcpServiceName(name), err)
+	}
+	if err := rejectUnmanagedExisting("service", tcpServiceName(name), name, service.Labels); err != nil {
+		return 0, err
+	}
+	port := sshNodePort(service)
+	if port == 0 {
+		return 0, fmt.Errorf("service %s has no ssh nodePort", tcpServiceName(name))
+	}
+	return port, nil
 }
 
 func validateCustomDomainTarget(customDomain, sealosHost string) error {
@@ -1155,7 +1305,7 @@ func (c *Client) ConfigureCustomDomain(ctx context.Context, tunnelID, sealosHost
 	}
 	created = append(created, customCreated...)
 
-	hosts, ingressCreated, err := c.ensureIngressForHost(ctx, name, sealosHost, TunnelOptions{CustomDomain: customDomain})
+	hosts, ingressCreated, err := c.ensureIngressForHost(ctx, name, sealosHost, tunnelprotocol.HTTPS, TunnelOptions{CustomDomain: customDomain})
 	if err != nil {
 		return TunnelHosts{}, err
 	}
@@ -1178,7 +1328,7 @@ func (c *Client) ClearCustomDomain(ctx context.Context, tunnelID, sealosHost str
 	if err := c.validateTunnelCoreResources(ctx, name); err != nil {
 		return TunnelHosts{}, err
 	}
-	hosts, _, err := c.ensureIngressForHost(ctx, name, sealosHost, TunnelOptions{})
+	hosts, _, err := c.ensureIngressForHost(ctx, name, sealosHost, tunnelprotocol.HTTPS, TunnelOptions{})
 	if err != nil {
 		return TunnelHosts{}, err
 	}
@@ -1348,6 +1498,11 @@ func (c *Client) deleteDeploymentIfOwned(ctx context.Context, name string) (bool
 }
 
 func (c *Client) deleteServiceIfOwned(ctx context.Context, name string) (bool, error) {
+	owner := strings.TrimSuffix(name, "-tcp")
+	return c.deleteNamedServiceIfOwned(ctx, name, owner)
+}
+
+func (c *Client) deleteNamedServiceIfOwned(ctx context.Context, name, owner string) (bool, error) {
 	client := c.clientset.CoreV1().Services(c.namespace)
 	resource, err := client.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -1356,7 +1511,7 @@ func (c *Client) deleteServiceIfOwned(ctx context.Context, name string) (bool, e
 	if err != nil {
 		return false, err
 	}
-	if !managedLabelMatches(resource.Labels, name) {
+	if !managedLabelMatches(resource.Labels, owner) {
 		return false, nil
 	}
 	if err := client.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -1406,6 +1561,11 @@ func (c *Client) cleanupCoreResources(ctx context.Context, name string, summary 
 	} else if summary != nil && deleted {
 		summary.Services++
 	}
+	if deleted, err := c.deleteServiceIfOwned(ctx, tcpServiceName(name)); err != nil {
+		recordFirstErr(&firstErr, err)
+	} else if summary != nil && deleted {
+		summary.Services++
+	}
 	for _, ingressName := range []string{name, name + "-app"} {
 		if deleted, err := c.deleteIngressIfOwned(ctx, ingressName, name); err != nil {
 			recordFirstErr(&firstErr, err)
@@ -1419,6 +1579,43 @@ func (c *Client) cleanupCoreResources(ctx context.Context, name string, summary 
 // Cleanup resources
 func (c *Client) Cleanup(ctx context.Context, tunnelID string) error {
 	return c.CleanupTunnel(ctx, tunnelID)
+}
+
+func (c *Client) PauseTunnel(ctx context.Context, tunnelID string) error {
+	return c.ScaleTunnel(ctx, tunnelID, 0)
+}
+
+func (c *Client) ResumeTunnel(ctx context.Context, tunnelID string) error {
+	return c.ScaleTunnel(ctx, tunnelID, 1)
+}
+
+func (c *Client) ScaleTunnel(ctx context.Context, tunnelID string, replicas int32) error {
+	if err := validateTunnelID(tunnelID); err != nil {
+		return err
+	}
+	if replicas < 0 {
+		return fmt.Errorf("replicas must be >= 0")
+	}
+	name := fmt.Sprintf("sealtun-%s", tunnelID)
+
+	deployClient := c.clientset.AppsV1().Deployments(c.namespace)
+	existing, err := deployClient.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("remote deployment %s is missing", name)
+	}
+	if err != nil {
+		return fmt.Errorf("get deployment %s: %w", name, err)
+	}
+	if err := rejectUnmanagedExisting("deployment", name, name, existing.Labels); err != nil {
+		return err
+	}
+
+	next := existing.DeepCopy()
+	next.Spec.Replicas = &replicas
+	if _, err := deployClient.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("scale deployment %s to %d: %w", name, replicas, err)
+	}
+	return nil
 }
 
 func (c *Client) CleanupTunnel(ctx context.Context, tunnelID string) error {
@@ -1446,6 +1643,8 @@ func (c *Client) cleanupCreated(ctx context.Context, resources []createdResource
 		case resourceDeployment:
 			_, err = c.deleteDeploymentIfOwned(ctx, resource.name)
 		case resourceService:
+			_, err = c.deleteServiceIfOwned(ctx, resource.name)
+		case resourceTCPService:
 			_, err = c.deleteServiceIfOwned(ctx, resource.name)
 		case resourceIngress:
 			owner := strings.TrimSuffix(resource.name, "-app")

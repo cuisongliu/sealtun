@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod, copyFile, readdir, stat } from 'node:fs/promises';
@@ -206,6 +207,33 @@ async function download(url, destination) {
   writeFileSync(destination, bytes);
 }
 
+function parseChecksums(data) {
+  const checksums = new Map();
+  for (const line of data.split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value) {
+      continue;
+    }
+    const match = value.match(/^([a-fA-F0-9]{64})\s+\*?(.+)$/);
+    if (!match) {
+      continue;
+    }
+    checksums.set(path.basename(match[2].trim()), match[1].toLowerCase());
+  }
+  return checksums;
+}
+
+function verifyChecksum(filePath, assetName, checksums) {
+  const expected = checksums.get(assetName);
+  if (!expected) {
+    throw new Error(`checksums.txt does not include ${assetName}`);
+  }
+  const actual = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+  if (actual !== expected) {
+    throw new Error(`checksum mismatch for ${assetName}: expected ${expected}, got ${actual}`);
+  }
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
@@ -357,6 +385,15 @@ This package installs the Sealtun CLI by selecting one of the optional platform-
 
   const downloadDir = mkdtempSync(path.join(tmpdir(), 'sealtun-npm-assets-'));
   try {
+    const checksumsPath = path.join(downloadDir, 'checksums.txt');
+    const checksumsUrl = `https://github.com/${args.repo}/releases/download/${args.tag}/checksums.txt`;
+    console.log('Downloading checksums.txt');
+    await download(checksumsUrl, checksumsPath);
+    const checksums = parseChecksums(readFileSync(checksumsPath, 'utf8'));
+    if (checksums.size === 0) {
+      throw new Error('checksums.txt did not contain any SHA-256 entries');
+    }
+
     for (const target of targets) {
       const packageName = binaryPackageName(args.packageName, target.id);
       const packageDir = path.join(args.outDir, target.id);
@@ -367,6 +404,7 @@ This package installs the Sealtun CLI by selecting one of the optional platform-
 
       console.log(`Downloading ${assetName}`);
       await download(assetUrl, archivePath);
+      verifyChecksum(archivePath, assetName, checksums);
 
       mkdirSync(packageBinDir, { recursive: true });
       await extractBinary(archivePath, target, path.join(packageBinDir, target.binary));

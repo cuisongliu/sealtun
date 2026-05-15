@@ -23,7 +23,7 @@ func TestValidateLocalPort(t *testing.T) {
 func TestValidateProtocol(t *testing.T) {
 	t.Parallel()
 
-	validProtocols := []string{"https", "HTTPS"}
+	validProtocols := []string{"https", "HTTPS", "ssh", "SSH"}
 	for _, protocol := range validProtocols {
 		if err := validateProtocol(protocol); err != nil {
 			t.Fatalf("expected protocol %s to be valid, got error: %v", protocol, err)

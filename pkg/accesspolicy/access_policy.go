@@ -122,7 +122,7 @@ func TokenAuthorized(policy *Policy, r *http.Request, now time.Time) bool {
 	if policy == nil {
 		return false
 	}
-	if token := bearerTokenFromRequest(r); token != "" && tokenMatchesAny(token, policy.BearerTokenHashes) {
+	if BearerTokenAuthorized(policy, r) {
 		return true
 	}
 	queryToken := ""
@@ -142,6 +142,14 @@ func TokenAuthorized(policy *Policy, r *http.Request, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+func BearerTokenAuthorized(policy *Policy, r *http.Request) bool {
+	if policy == nil {
+		return false
+	}
+	token := bearerTokenFromRequest(r)
+	return token != "" && tokenMatchesAny(token, policy.BearerTokenHashes)
 }
 
 func StripTemporaryTokenQuery(rawURL *url.URL) {

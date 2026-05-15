@@ -136,6 +136,35 @@ func TestServerMetricsRejectsUnsupportedMethods(t *testing.T) {
 	}
 }
 
+func TestServerTCPEndpointRequiresAuthorization(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer("secret", 8080, "https", "22")
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/_sealtun/tcp", nil)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 status, got %d", rec.Code)
+	}
+}
+
+func TestServerTCPEndpointRequiresConnectedClient(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer("secret", 8080, "https", "22")
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/_sealtun/tcp", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 status, got %d", rec.Code)
+	}
+}
+
 func TestServerBasicAuthProtectsPublicTrafficOnly(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +209,9 @@ func TestServerBasicAuthAcceptsMatchingCredentials(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected authenticated request to reach proxy path, got %d", rec.Code)
 	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("basic auth header should be consumed before proxying, got %q", got)
+	}
 }
 
 func TestServerBearerTokenProtectsPublicTraffic(t *testing.T) {
@@ -205,6 +237,9 @@ func TestServerBearerTokenProtectsPublicTraffic(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected bearer-authenticated request to reach proxy, got %d", rec.Code)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("bearer auth header should be consumed before proxying, got %q", got)
 	}
 }
 

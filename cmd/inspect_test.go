@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,43 @@ func TestFindSessionPreservesInvalidSessionIDError(t *testing.T) {
 	_, err := findSession("../auth")
 	if err == nil || !strings.Contains(err.Error(), "invalid session tunnel id") {
 		t.Fatalf("expected invalid session id error, got %v", err)
+	}
+}
+
+func TestPrintInspectShowsSSHEndpoint(t *testing.T) {
+	payload := &inspectPayload{
+		TunnelID:           "sshdev",
+		Status:             "active",
+		Mode:               "daemon",
+		Protocol:           "ssh",
+		Host:               "ssh.example.com",
+		SealosHost:         "control.example.com",
+		PublicPort:         32022,
+		LocalPort:          "22",
+		Namespace:          "ns-demo",
+		Region:             "https://gzg.sealos.run",
+		LocalPortReachable: true,
+		CreatedAt:          "2026-05-15T10:00:00+08:00",
+	}
+
+	var output bytes.Buffer
+	inspectCmd.SetOut(&output)
+	t.Cleanup(func() { inspectCmd.SetOut(nil) })
+
+	printInspect(inspectCmd, payload)
+	text := output.String()
+	for _, want := range []string{
+		"Public SSH host: ssh.example.com",
+		"Public SSH port: 32022",
+		"SSH command: ssh <user>@ssh.example.com -p 32022",
+		"Control host: control.example.com",
+		"Local target: localhost:22",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected inspect output to contain %q, got:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Public URL") {
+		t.Fatalf("ssh inspect output should not show Public URL, got:\n%s", text)
 	}
 }

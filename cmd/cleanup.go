@@ -14,7 +14,7 @@ var cleanupAll bool
 
 var cleanupCmd = &cobra.Command{
 	Use:   "cleanup",
-	Short: "Clean up stale or managed Sealtun tunnel resources",
+	Short: "Clean up stopped, expired, stale, or managed Sealtun tunnel resources",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sessions, err := session.List()
 		if err != nil {
@@ -60,10 +60,10 @@ var cleanupCmd = &cobra.Command{
 				cancel()
 				failed++
 				if errors.Is(err, errMissingSessionKubeconfig) {
-					fmt.Fprintf(cmd.ErrOrStderr(), "[!] Skipped stale tunnel %s: %v\n", sess.TunnelID, err)
+					fmt.Fprintf(cmd.ErrOrStderr(), "[!] Skipped cleanup-eligible tunnel %s: %v\n", sess.TunnelID, err)
 					continue
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Failed to clean up stale tunnel %s: %v\n", sess.TunnelID, err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Failed to clean up cleanup-eligible tunnel %s: %v\n", sess.TunnelID, err)
 				continue
 			}
 			cancel()
@@ -73,9 +73,9 @@ var cleanupCmd = &cobra.Command{
 			cleaned++
 		}
 
-		fmt.Printf("Cleanup complete. Removed %d stale tunnels, skipped %d active session records.\n", cleaned, skipped)
+		fmt.Printf("Cleanup complete. Removed %d stopped, expired, or stale tunnels; skipped %d active session records.\n", cleaned, skipped)
 		if failed > 0 {
-			return fmt.Errorf("failed to clean up %d stale tunnel session(s); local records were kept", failed)
+			return fmt.Errorf("failed to clean up %d cleanup-eligible tunnel session(s); local records were kept", failed)
 		}
 		return nil
 	},
@@ -83,5 +83,5 @@ var cleanupCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(cleanupCmd)
-	cleanupCmd.Flags().BoolVar(&cleanupAll, "all", false, "Delete all locally tracked Sealtun tunnel resources and remove matching local session records")
+	cleanupCmd.Flags().BoolVar(&cleanupAll, "all", false, "Force delete all locally tracked Sealtun tunnel resources and remove matching local session records")
 }

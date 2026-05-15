@@ -56,6 +56,38 @@ func TestCollectListItems(t *testing.T) {
 	if items[1].Status != "running" {
 		t.Fatalf("expected running status, got %s", items[1].Status)
 	}
+	if items[0].Endpoint != "https://active.example.com" {
+		t.Fatalf("unexpected https endpoint: %s", items[0].Endpoint)
+	}
+}
+
+func TestCollectListItemsShowsSSHEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:   "sshdev",
+		Host:       "ssh.example.com",
+		SealosHost: "control.example.com",
+		PublicPort: 32022,
+		LocalPort:  "22",
+		Namespace:  "ns-demo",
+		Protocol:   "ssh",
+		CreatedAt:  time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save ssh session: %v", err)
+	}
+
+	items, err := collectListItems()
+	if err != nil {
+		t.Fatalf("collectListItems returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Endpoint != "ssh <user>@ssh.example.com -p 32022" {
+		t.Fatalf("unexpected ssh endpoint: %s", items[0].Endpoint)
+	}
 }
 
 func TestCollectListItemsWithLocalCheckDegradesForegroundTunnelWhenLocalPortIsDown(t *testing.T) {
@@ -149,6 +181,7 @@ func TestListJSONShape(t *testing.T) {
 		Mode:         "foreground",
 		Namespace:    "ns-demo",
 		Protocol:     "https",
+		Endpoint:     "https://abc.example.com",
 		CreatedAt:    "2026-04-23T10:00:00+08:00",
 	}}
 
@@ -168,6 +201,9 @@ func TestListJSONShape(t *testing.T) {
 	}
 	if !strings.Contains(jsonText, `"customDomain":"abc.example.com"`) {
 		t.Fatalf("missing customDomain field: %s", jsonText)
+	}
+	if !strings.Contains(jsonText, `"endpoint":"https://abc.example.com"`) {
+		t.Fatalf("missing endpoint field: %s", jsonText)
 	}
 }
 

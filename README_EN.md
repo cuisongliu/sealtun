@@ -182,14 +182,41 @@ export SEALTUN_TEMP_TOKEN='review-link-secret'
 sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-access-ttl 1h
 ```
 
-Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the nearest `X-Forwarded-For` hop. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access.
+Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the last valid proxy-confirmed client IP in `X-Forwarded-For`. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access.
 
 Sealtun will:
 1. Spin up a tunnel proxy Pod in your Sealos namespace.
 2. Establish the Ingress routes.
 3. Automatically connect via WebSockets and proxy all L7 connections back to `localhost:3000`.
 
-### 3. Use a custom domain
+### 3. Public SSH access
+If the Sealos region supports public TCP NodePort, use the L4 SSH mode to connect directly to the public host and port:
+
+```bash
+# macOS/Linux commonly use port 22; replace it if your local sshd listens elsewhere
+sealtun expose 22 --protocol ssh
+```
+
+The command prints a public SSH endpoint:
+```bash
+ssh <user>@<public-host> -p <node-port>
+```
+
+Or add an SSH config entry and then run `ssh sealtun-dev`:
+```sshconfig
+Host sealtun-dev
+  HostName <public-host>
+  User <user>
+  Port <node-port>
+```
+
+`--protocol ssh` exposes only a public TCP NodePort for user traffic and does not provide a default HTTPS application URL. Sealtun still keeps an internal control channel so the local daemon can connect to the remote pod, but that channel is not a user-facing SSH entry. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains apply only to HTTPS tunnels, not to the L4 SSH entry. The older WebSocket ProxyCommand fallback remains available:
+
+```bash
+ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
+```
+
+### 4. Use a custom domain
 Create the tunnel first and print the Sealos-managed CNAME target:
 ```bash
 sealtun expose 3000 --domain app.example.com
@@ -311,14 +338,15 @@ basicAuth:
 
 ## Architecture Details
 
-- **Protocol**: Yamux over Websocket.
+- **HTTPS tunnel protocol**: Yamux over WebSocket.
+- **SSH L4 entry**: `--protocol ssh` exposes only a public TCP NodePort that connects directly to local SSH; HTTPS is kept only as an internal control channel, not as a default application URL.
 - **Sealos Resources**: When you trigger `sealtun expose`, it creates `sealtun-*` variants of `Deployment`, `Service`, and `Ingress` in the active cluster context.
 - **Images**: Relies on a single Docker image built natively targeting `ghcr.io/gitlayzer/sealtun`.
 
 ## Hardening Notes
 
 - `expose` now validates port and protocol inputs before provisioning remote resources.
-- `--protocol` currently supports only `https`. TCP, UDP, and gRPC are intentionally out of scope until there is a dedicated transport design for them.
+- `--protocol` currently supports `https` and the dedicated `ssh` mode. `ssh` does not support Basic Auth, Bearer tokens, temporary links, IP policies, or custom domains. Generic TCP, UDP, and gRPC are intentionally out of scope until there is a dedicated transport design for them.
 - `profile` supports named login bundles for multiple accounts, regions, and workspaces; `profile use` switches the active kubeconfig used by later `expose`, `status`, and `region current` commands.
 - Ingress host generation prefers the `SEALOS_DOMAIN` returned by Sealos Launchpad instead of guessing from the region host.
 - Custom domains must pass CNAME ownership verification before Sealtun writes the custom host to Ingress, preventing unverified host preemption on shared Ingress controllers.
@@ -329,7 +357,9 @@ basicAuth:
 - Declarative config supports `sealtun diff -f`, multi-tunnel batch apply, and `ttl` automatic expiry cleanup.
 - `logs` reads remote tunnel pod logs; `metrics` aggregates local state, remote readiness, and server counters when the remote image supports them.
 - `dashboard` is a local read-only web console and does not require any additional hosted backend.
-- `apply -f sealtun.yaml` is the declarative config MVP for HTTPS tunnels, stable tunnel names, custom domain guidance, and daemon-managed sessions.
+- `apply -f sealtun.yaml` supports HTTPS tunnels, SSH L4 tunnels, stable tunnel names, custom domain guidance, and daemon-managed sessions.
+- Local controls include `status`, `list`, `inspect`, `doctor`, `stop`, `start/resume`, `cleanup`, and `logout`.
+- `stop` only scales the remote tunnel pod Deployment to zero, preserving the domain, Service, Ingress, secrets, and local session. Use `sealtun start <tunnel-id>` to reopen it. `cleanup` deletes stopped, expired, or stale tunnels by default; `cleanup --all` is the force path for deleting every locally tracked tunnel.
 - `list` reads local session records by default; use `list --check` to probe local target ports and report degraded sessions.
 - `inspect` shows local session state by default; use `inspect --remote` to include best-effort Kubernetes diagnostics.
 - `doctor` summarizes daemon, login, session, local port, and remote Deployment, Service, Ingress, Pod, and Event diagnostics.

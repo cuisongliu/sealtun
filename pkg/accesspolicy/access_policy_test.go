@@ -35,13 +35,13 @@ func TestClientIPPrefersRealIPHeader(t *testing.T) {
 	}
 }
 
-func TestClientIPUsesNearestForwardedForFallback(t *testing.T) {
+func TestClientIPUsesProxyForwardedForFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
 	req.RemoteAddr = "192.0.2.1:1234"
 	req.Header.Set("X-Forwarded-For", "203.0.113.200, 10.0.0.9")
 
 	if got := ClientIP(req).String(); got != "10.0.0.9" {
-		t.Fatalf("expected nearest X-Forwarded-For IP to win, got %s", got)
+		t.Fatalf("expected proxy-reported X-Forwarded-For IP to win, got %s", got)
 	}
 }
 

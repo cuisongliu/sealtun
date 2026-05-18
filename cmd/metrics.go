@@ -221,7 +221,7 @@ func printMetrics(cmd *cobra.Command, payload *metricsPayload) {
 	if len(payload.Server) > 0 {
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "Server counters")
-		for _, key := range []string{"clientConnected", "totalRequests", "activeRequests", "totalResponseBytes", "total5xx", "lastStatus", "lastRequestAt", "averageDurationMs"} {
+		for _, key := range []string{"clientConnected", "totalRequests", "activeRequests", "totalResponseBytes", "total5xx", "lastStatus", "lastRequestAt", "averageDurationMs", "totalTCPConnections", "activeTCPConnections", "totalTCPBytes", "totalTCPErrors", "lastTCPConnectedAt"} {
 			if value, ok := payload.Server[key]; ok {
 				fmt.Fprintf(out, "  %s: %v\n", key, value)
 			}

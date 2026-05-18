@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -177,9 +178,21 @@ func daemonTunnelFingerprint(sess session.TunnelSession) string {
 		basicAuthEnabled,
 		basicAuthUsername,
 		basicAuthHash,
+		daemonAccessPolicyFingerprint(sess.AccessPolicy),
 		sess.TTL,
 		sess.ExpiresAt,
 	}, "\x00")
+}
+
+func daemonAccessPolicyFingerprint(policy *session.AccessPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	data, err := json.Marshal(policy)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func runDaemonHeartbeat(ctx context.Context) {

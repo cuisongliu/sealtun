@@ -90,6 +90,35 @@ func TestCollectListItemsShowsSSHEndpoint(t *testing.T) {
 	}
 }
 
+func TestCollectListItemsShowsTCPEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:   "postgres",
+		Host:       "db.example.com",
+		SealosHost: "control.example.com",
+		PublicPort: 35432,
+		LocalPort:  "5432",
+		Namespace:  "ns-demo",
+		Protocol:   "tcp",
+		CreatedAt:  time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("save tcp session: %v", err)
+	}
+
+	items, err := collectListItems()
+	if err != nil {
+		t.Fatalf("collectListItems returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Endpoint != "db.example.com:35432" {
+		t.Fatalf("unexpected tcp endpoint: %s", items[0].Endpoint)
+	}
+}
+
 func TestCollectListItemsWithLocalCheckDegradesForegroundTunnelWhenLocalPortIsDown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

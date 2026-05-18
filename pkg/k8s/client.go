@@ -145,10 +145,13 @@ type ConditionDiagnostic struct {
 }
 
 type EventDiagnostic struct {
-	Type    string `json:"type,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Message string `json:"message,omitempty"`
-	Object  string `json:"object,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Object         string `json:"object,omitempty"`
+	Count          int32  `json:"count,omitempty"`
+	FirstTimestamp string `json:"firstTimestamp,omitempty"`
+	LastTimestamp  string `json:"lastTimestamp,omitempty"`
 }
 
 type TunnelLogOptions struct {
@@ -357,7 +360,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	if err := accesspolicy.Validate(opts.AccessPolicy); err != nil {
 		return TunnelHosts{}, fmt.Errorf("invalid access policy: %w", err)
 	}
-	if protocol == tunnelprotocol.SSH {
+	if !tunnelprotocol.IsHTTP(protocol) {
 		if opts.CustomDomain != "" {
 			return TunnelHosts{}, fmt.Errorf("custom domains are only supported for https tunnels")
 		}
@@ -414,10 +417,10 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		created = append(created, createdResource{kind: resourceService, name: name})
 	}
 
-	if protocol == tunnelprotocol.SSH {
+	if tunnelprotocol.UsesRawTCP(protocol) {
 		tcpServiceCreated, err := c.ensureTCPService(ctx, name)
 		if err != nil {
-			return empty, fmt.Errorf("failed to ensure ssh tcp service: %w", err)
+			return empty, fmt.Errorf("failed to ensure public tcp service: %w", err)
 		}
 		if tcpServiceCreated {
 			created = append(created, createdResource{kind: resourceTCPService, name: tcpServiceName(name)})
@@ -452,14 +455,14 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		return empty, fmt.Errorf("failed to ensure ingress: %w", err)
 	}
 	created = append(created, ingressCreated...)
-	if protocol == tunnelprotocol.SSH {
+	if tunnelprotocol.UsesRawTCP(protocol) {
 		service, err := c.clientset.CoreV1().Services(c.namespace).Get(ctx, tcpServiceName(name), metav1.GetOptions{})
 		if err != nil {
-			return empty, fmt.Errorf("get ssh service: %w", err)
+			return empty, fmt.Errorf("get public tcp service: %w", err)
 		}
-		hosts.PublicPort = sshNodePort(service)
+		hosts.PublicPort = publicTCPNodePort(service)
 		if hosts.PublicPort == 0 {
-			return empty, fmt.Errorf("ssh service did not receive a nodePort")
+			return empty, fmt.Errorf("public tcp service did not receive a nodePort")
 		}
 	}
 
@@ -712,7 +715,7 @@ func imageTagForVersion(value string) string {
 
 func containerPortsForProtocol(protocol string) []corev1.ContainerPort {
 	ports := []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}
-	if tunnelprotocol.Normalize(protocol) == tunnelprotocol.SSH {
+	if tunnelprotocol.UsesRawTCP(protocol) {
 		ports = append(ports, corev1.ContainerPort{Name: "tcp", ContainerPort: 2222})
 	}
 	return ports
@@ -816,7 +819,7 @@ func preserveExistingNodePorts(next *corev1.ServiceSpec, existing corev1.Service
 	}
 }
 
-func sshNodePort(service *corev1.Service) int32 {
+func publicTCPNodePort(service *corev1.Service) int32 {
 	if service == nil {
 		return 0
 	}
@@ -844,7 +847,7 @@ func (c *Client) ensureIngressForHost(ctx context.Context, name, sealosHost, pro
 		return TunnelHosts{}, nil, err
 	}
 	switch protocol {
-	case tunnelprotocol.SSH:
+	case tunnelprotocol.SSH, tunnelprotocol.TCP:
 		if opts.CustomDomain != "" {
 			return TunnelHosts{}, nil, fmt.Errorf("custom domains are only supported for https tunnels")
 		}
@@ -861,7 +864,10 @@ func (c *Client) ensureIngressForHost(ctx context.Context, name, sealosHost, pro
 	}
 	pathType := netv1.PathTypePrefix
 	ingressClass := "nginx"
-	paths := []string{"/_sealtun/ws", "/_sealtun/healthz"}
+	paths := []string{"/_sealtun/ws", "/_sealtun/healthz", "/_sealtun/metrics"}
+	if tunnelprotocol.UsesRawTCP(protocol) {
+		paths = append(paths, "/_sealtun/tcp")
+	}
 	if protocol == tunnelprotocol.HTTPS {
 		paths = append(paths, "/")
 	}
@@ -905,9 +911,9 @@ func (c *Client) TunnelPublicPort(ctx context.Context, tunnelID string) (int32, 
 	if err := rejectUnmanagedExisting("service", tcpServiceName(name), name, service.Labels); err != nil {
 		return 0, err
 	}
-	port := sshNodePort(service)
+	port := publicTCPNodePort(service)
 	if port == 0 {
-		return 0, fmt.Errorf("service %s has no ssh nodePort", tcpServiceName(name))
+		return 0, fmt.Errorf("service %s has no public tcp nodePort", tcpServiceName(name))
 	}
 	return port, nil
 }
@@ -2095,22 +2101,54 @@ func filterEventDiagnostics(events []corev1.Event, names []string, limit int) []
 		}
 	}
 	result := []EventDiagnostic{}
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
+	sort.SliceStable(events, func(i, j int) bool {
+		return eventLastTimestamp(events[i]).After(eventLastTimestamp(events[j]))
+	})
+	for _, event := range events {
 		if _, ok := allowedNames[event.InvolvedObject.Name]; !ok {
 			continue
 		}
 		result = append(result, EventDiagnostic{
-			Type:    event.Type,
-			Reason:  event.Reason,
-			Message: event.Message,
-			Object:  fmt.Sprintf("%s/%s", event.InvolvedObject.Kind, event.InvolvedObject.Name),
+			Type:           event.Type,
+			Reason:         event.Reason,
+			Message:        event.Message,
+			Object:         fmt.Sprintf("%s/%s", event.InvolvedObject.Kind, event.InvolvedObject.Name),
+			Count:          event.Count,
+			FirstTimestamp: formatEventTime(event.FirstTimestamp),
+			LastTimestamp:  formatEventTimeValue(eventLastTimestamp(event)),
 		})
 		if len(result) >= limit {
 			break
 		}
 	}
 	return result
+}
+
+func eventLastTimestamp(event corev1.Event) time.Time {
+	if !event.LastTimestamp.IsZero() {
+		return event.LastTimestamp.Time
+	}
+	if !event.EventTime.IsZero() {
+		return event.EventTime.Time
+	}
+	if !event.FirstTimestamp.IsZero() {
+		return event.FirstTimestamp.Time
+	}
+	return event.CreationTimestamp.Time
+}
+
+func formatEventTime(value metav1.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Time.Format(time.RFC3339)
+}
+
+func formatEventTimeValue(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339)
 }
 
 // WaitForReady waits for the deployment to become fully ready

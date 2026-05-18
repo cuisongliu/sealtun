@@ -34,6 +34,11 @@ func TestDaemonTunnelFingerprintChangesForForwardingInputs(t *testing.T) {
 				PasswordHash: "hash",
 			}
 		}},
+		{name: "access policy", mut: func(sess *session.TunnelSession) {
+			sess.AccessPolicy = &session.AccessPolicy{
+				BearerTokenHashes: []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+			}
+		}},
 		{name: "ttl", mut: func(sess *session.TunnelSession) { sess.TTL = "2h" }},
 		{name: "expires at", mut: func(sess *session.TunnelSession) { sess.ExpiresAt = "2026-05-13T10:00:00Z" }},
 	}

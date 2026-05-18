@@ -8,6 +8,7 @@ import (
 const (
 	HTTPS = "https"
 	SSH   = "ssh"
+	TCP   = "tcp"
 )
 
 func Normalize(value string) string {
@@ -17,23 +18,36 @@ func Normalize(value string) string {
 func ValidateExpose(value string) error {
 	value = Normalize(value)
 	switch value {
-	case HTTPS, SSH:
+	case HTTPS, SSH, TCP:
 		return nil
 	case "":
 		return fmt.Errorf("protocol is required")
 	default:
-		return fmt.Errorf("unsupported protocol %q: supported protocols are https and ssh", value)
+		return fmt.Errorf("unsupported protocol %q: supported protocols are https, ssh, and tcp", value)
 	}
 }
 
 func ValidateServer(value string) error {
 	value = Normalize(value)
 	switch value {
-	case HTTPS, SSH:
+	case HTTPS, SSH, TCP:
 		return nil
 	case "":
 		return fmt.Errorf("protocol is required")
 	default:
-		return fmt.Errorf("unsupported server protocol %q: supported protocols are https and ssh", value)
+		return fmt.Errorf("unsupported server protocol %q: supported protocols are https, ssh, and tcp", value)
 	}
+}
+
+func UsesRawTCP(value string) bool {
+	switch Normalize(value) {
+	case SSH, TCP:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsHTTP(value string) bool {
+	return Normalize(value) == HTTPS
 }

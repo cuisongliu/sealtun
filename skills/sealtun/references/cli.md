@@ -1,6 +1,6 @@
 # Sealtun CLI Reference
 
-Use this for interactive Sealtun operation: install, login, expose HTTPS or SSH, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
+Use this for interactive Sealtun operation: install, shell completion, login, expose HTTPS, SSH, or generic TCP, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
 
 ## Install
 
@@ -14,10 +14,22 @@ npx sealtun@latest login
 
 Direct binaries are published on GitHub Releases. The npm package installs a platform-specific optional binary package for macOS, Linux, or Windows on x64/amd64 and arm64.
 
+## Shell Completion
+
+```bash
+sealtun completion bash
+sealtun completion zsh
+sealtun completion fish
+sealtun completion powershell
+```
+
+Use the generated script according to the user's shell. If the user only asks whether completion exists, show the matching command instead of editing shell startup files.
+
 ## Login, Regions, Profiles
 
 ```bash
 sealtun login
+sealtun status
 sealtun region list
 sealtun region current
 sealtun region use hzh
@@ -31,6 +43,14 @@ sealtun profile delete hzh-dev
 ```
 
 Known regions include `gzg`, `hzh`, `bja`, `cloud`, and `usw`. Login state, kubeconfig, and profiles live under `~/.sealtun`.
+
+First-use behavior:
+
+- Before creating cloud resources, check `sealtun status` when feasible.
+- If the user is not logged in, explain that `sealtun login` opens a Sealos authorization flow and stores the resulting auth/kubeconfig under `~/.sealtun`.
+- If a browser/device authorization flow opens, wait for the user to finish it. Do not retry repeatedly while the user is authorizing.
+- After login, verify with `sealtun status`, `sealtun region current`, and `sealtun profile current` when profiles are involved.
+- For multiple accounts, regions, or workspaces, prefer `sealtun login <region> --profile <name>` and `sealtun profile use <name>` instead of overwriting the active login without explanation.
 
 ## Expose A Port
 
@@ -129,6 +149,16 @@ ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
 
 `sealtun ssh connect <tunnel-id>` opens `wss://<sealos-host>/_sealtun/tcp` with the tunnel's internal secret, then bridges stdin/stdout to the remote server's active yamux session.
 
+## Generic TCP Over Sealtun
+
+For non-HTTP protocols such as databases, queues, or debugging services, use generic L4 TCP:
+
+```bash
+sealtun expose 5432 --protocol tcp
+```
+
+The command prints `Public TCP host`, `Public TCP port`, and `Public TCP endpoint` as `<public-host>:<node-port>`. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains are HTTPS proxy-layer features and are rejected for TCP tunnels.
+
 ## Observe And Manage
 
 ```bash
@@ -149,6 +179,9 @@ sealtun logs <tunnel-id> --since 10m
 
 sealtun metrics <tunnel-id>
 sealtun metrics <tunnel-id> --json
+
+sealtun events <tunnel-id>
+sealtun events <tunnel-id> --json
 
 sealtun dashboard
 sealtun dashboard --addr 127.0.0.1 --port 19777

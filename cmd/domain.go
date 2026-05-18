@@ -211,7 +211,7 @@ func configureSessionCustomDomain(parent context.Context, tunnelID, customDomain
 	if err != nil {
 		return nil, err
 	}
-	if sess.Protocol == "ssh" {
+	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
 	original := *sess
@@ -250,7 +250,7 @@ func clearSessionCustomDomain(parent context.Context, tunnelID string) (*domainP
 	if err != nil {
 		return nil, err
 	}
-	if sess.Protocol == "ssh" {
+	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
 	original := *sess
@@ -283,6 +283,11 @@ func clearSessionCustomDomain(parent context.Context, tunnelID string) (*domainP
 		return payload, fmt.Errorf("clear custom domain for tunnel %s: %w", sess.TunnelID, err)
 	}
 	return payload, nil
+}
+
+func sessionSupportsCustomDomain(sess session.TunnelSession) bool {
+	protocol := strings.TrimSpace(sess.Protocol)
+	return protocol == "" || protocol == "https"
 }
 
 func restoreRemoteCustomDomain(parent context.Context, client *k8s.Client, sess session.TunnelSession) error {

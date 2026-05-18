@@ -12,6 +12,18 @@ sealtun apply -f sealtun.yaml
 
 `--dry-run` validates and prints planned tunnels without login or cloud mutation. `diff` compares desired YAML with local sessions. Real `apply` requires login and creates or updates remote Kubernetes resources and local daemon sessions.
 
+For first-time users, run or recommend:
+
+```bash
+sealtun status
+sealtun login
+sealtun apply -f sealtun.yaml --dry-run
+sealtun diff -f sealtun.yaml
+sealtun apply -f sealtun.yaml
+```
+
+If login opens an authorization flow, explain that the user must complete it before `apply` can create remote resources. Keep `--dry-run` and `diff` as the safe preview path before real cloud mutation.
+
 ## Example
 
 ```yaml
@@ -46,7 +58,7 @@ tunnels:
 - `tunnels` must contain at least one item.
 - `name` is required, lower-case DNS-compatible, and becomes the stable tunnel ID. Reapplying the same name updates `sealtun-<name>`.
 - Use `localPort`; `port` is accepted as a compatibility alias.
-- `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh`.
+- `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH, and `tcp` is supported for generic direct TCP NodePort tunnels. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh` and `tcp`.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.
 - `readyTimeout` and `domainTimeout` use Go duration syntax and must be positive.
 - Multiple tunnels are applied in one run. On an apply failure, Sealtun attempts rollback for tunnels changed earlier in the batch.
@@ -118,6 +130,18 @@ tunnels:
 ```
 
 SSH declarations cannot set `domain`, `waitDomain`, `basicAuth`, or `accessPolicy`. The apply result should show the public SSH host, public SSH port, and direct `ssh <user>@<host> -p <port>` command.
+
+Use this when a user wants declarative generic TCP:
+
+```yaml
+version: v1
+tunnels:
+  - name: postgres
+    localPort: 5432
+    protocol: tcp
+```
+
+TCP declarations cannot set `domain`, `waitDomain`, `basicAuth`, or `accessPolicy`. The apply result should show the public TCP host, public TCP port, and `<host>:<port>` endpoint.
 
 ## Domains In Declarative Apply
 

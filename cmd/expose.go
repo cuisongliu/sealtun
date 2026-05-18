@@ -47,7 +47,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return err
 		}
 		protocol = tunnelprotocol.Normalize(protocol)
-		if protocol == tunnelprotocol.SSH {
+		if !tunnelprotocol.IsHTTP(protocol) {
 			if normalizedCustomDomain != "" || waitDomain {
 				return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
 			}
@@ -159,6 +159,12 @@ and establishes a secure connection to forward traffic to your local port.`,
 			fmt.Printf("[+] Public SSH host: %s\n", endpoint.Host)
 			fmt.Printf("[+] Public SSH port: %d\n", endpoint.Port)
 			fmt.Printf("[+] Connect with: %s\n", endpoint.Command)
+			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
+		} else if protocol == tunnelprotocol.TCP {
+			endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
+			fmt.Printf("[+] Public TCP host: %s\n", endpoint.Host)
+			fmt.Printf("[+] Public TCP port: %d\n", endpoint.Port)
+			fmt.Printf("[+] Public TCP endpoint: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
 			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
 		} else {
 			fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
@@ -283,7 +289,7 @@ const tunnelCleanupTimeout = 30 * time.Second
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https or ssh")
+	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https, ssh, or tcp")
 	exposeCmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
 	exposeCmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
 	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")

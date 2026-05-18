@@ -7,11 +7,13 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +54,12 @@ type Server struct {
 	lastStatus         atomic.Int64
 	lastRequestAt      atomic.Int64
 	totalDurationMs    atomic.Int64
+
+	totalTCPConnections  atomic.Int64
+	activeTCPConnections atomic.Int64
+	totalTCPBytes        atomic.Int64
+	totalTCPErrors       atomic.Int64
+	lastTCPConnectedAt   atomic.Int64
 }
 
 func NewServer(secret string, port int, protocol string, localPort string) *Server {
@@ -192,6 +200,17 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"lastRequestAt":       lastRequestAt,
 		"averageDurationMs":   avgDurationMs,
 		"totalDurationMillis": s.totalDurationMs.Load(),
+	}
+	if tunnelprotocol.UsesRawTCP(s.protocol) {
+		lastTCPConnectedAt := ""
+		if value := s.lastTCPConnectedAt.Load(); value > 0 {
+			lastTCPConnectedAt = time.Unix(value, 0).Format(time.RFC3339)
+		}
+		payload["totalTCPConnections"] = s.totalTCPConnections.Load()
+		payload["activeTCPConnections"] = s.activeTCPConnections.Load()
+		payload["totalTCPBytes"] = s.totalTCPBytes.Load()
+		payload["totalTCPErrors"] = s.totalTCPErrors.Load()
+		payload["lastTCPConnectedAt"] = lastTCPConnectedAt
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -483,7 +502,7 @@ func (s *Server) Start() error {
 	fmt.Printf("Server listening on %s (H2C enabled)\n", addr)
 
 	errc := make(chan error, 2)
-	if s.protocol == tunnelprotocol.SSH {
+	if tunnelprotocol.UsesRawTCP(s.protocol) {
 		go func() {
 			errc <- s.startRawTCPListener(2222)
 		}()
@@ -522,21 +541,29 @@ func (s *Server) startRawTCPListener(port int) error {
 
 func (s *Server) handleRawTCPConnection(conn net.Conn) {
 	defer conn.Close()
+	s.totalTCPConnections.Add(1)
+	s.activeTCPConnections.Add(1)
+	s.lastTCPConnectedAt.Store(time.Now().Unix())
+	defer s.activeTCPConnections.Add(-1)
 
 	s.mu.RLock()
 	session := s.activeSession
 	s.mu.RUnlock()
 	if session == nil || session.IsClosed() {
+		s.totalTCPErrors.Add(1)
 		return
 	}
 
 	stream, err := session.OpenStream()
 	if err != nil {
+		s.totalTCPErrors.Add(1)
 		return
 	}
 	defer stream.Close()
 
-	relayConns(conn, stream)
+	if err := s.relayRawTCPConns(conn, stream); err != nil && !expectedRelayClose(err) {
+		s.totalTCPErrors.Add(1)
+	}
 }
 
 func relayConns(a, b net.Conn) {
@@ -550,4 +577,27 @@ func relayConns(a, b net.Conn) {
 		errc <- err
 	}()
 	<-errc
+}
+
+func (s *Server) relayRawTCPConns(a, b net.Conn) error {
+	errc := make(chan error, 2)
+	go func() {
+		n, err := io.Copy(a, b)
+		s.totalTCPBytes.Add(n)
+		errc <- err
+	}()
+	go func() {
+		n, err := io.Copy(b, a)
+		s.totalTCPBytes.Add(n)
+		errc <- err
+	}()
+	return <-errc
+}
+
+func expectedRelayClose(err error) bool {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	return strings.Contains(err.Error(), "use of closed network connection") ||
+		strings.Contains(err.Error(), "websocket: close")
 }

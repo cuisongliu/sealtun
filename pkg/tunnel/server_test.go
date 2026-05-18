@@ -2,6 +2,8 @@ package tunnel
 
 import (
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,6 +105,66 @@ func TestServerMetricsCountsPublicTraffic(t *testing.T) {
 		t.Fatalf("expected last status 502, got %v", payload["lastStatus"])
 	}
 }
+
+func TestServerMetricsIncludesRawTCPCounters(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer("secret", 8080, "tcp", "5432")
+	server.totalTCPConnections.Store(2)
+	server.activeTCPConnections.Store(1)
+	server.totalTCPBytes.Store(128)
+	server.totalTCPErrors.Store(1)
+	server.lastTCPConnectedAt.Store(1779098400)
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "https://example.test/_sealtun/metrics", nil)
+	metricsReq.Header.Set("Authorization", "Bearer secret")
+	metricsRec := httptest.NewRecorder()
+	server.ServeHTTP(metricsRec, metricsReq)
+
+	if metricsRec.Code != http.StatusOK {
+		t.Fatalf("expected metrics status 200, got %d", metricsRec.Code)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(metricsRec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["totalTCPConnections"].(float64) != 2 {
+		t.Fatalf("expected tcp connection counter, got %v", payload["totalTCPConnections"])
+	}
+	if payload["activeTCPConnections"].(float64) != 1 {
+		t.Fatalf("expected active tcp connection counter, got %v", payload["activeTCPConnections"])
+	}
+	if payload["totalTCPBytes"].(float64) != 128 {
+		t.Fatalf("expected tcp bytes counter, got %v", payload["totalTCPBytes"])
+	}
+	if payload["totalTCPErrors"].(float64) != 1 {
+		t.Fatalf("expected tcp errors counter, got %v", payload["totalTCPErrors"])
+	}
+	if payload["lastTCPConnectedAt"] == "" {
+		t.Fatalf("expected last tcp connected timestamp, got %#v", payload)
+	}
+}
+
+func TestExpectedRelayClose(t *testing.T) {
+	t.Parallel()
+
+	if !expectedRelayClose(io.EOF) {
+		t.Fatal("io.EOF should be treated as a normal relay close")
+	}
+	if !expectedRelayClose(net.ErrClosed) {
+		t.Fatal("net.ErrClosed should be treated as a normal relay close")
+	}
+	if !expectedRelayClose(assertErr("use of closed network connection")) {
+		t.Fatal("closed network connection should be treated as a normal relay close")
+	}
+	if expectedRelayClose(assertErr("permission denied")) {
+		t.Fatal("unexpected relay errors should not be treated as normal closes")
+	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
 
 func TestServerMetricsRequiresAuthorization(t *testing.T) {
 	t.Parallel()

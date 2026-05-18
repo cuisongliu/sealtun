@@ -13,7 +13,7 @@ Sealtun 是一款功能强大、设计优雅的 CLI 工具，旨在为 **Sealos 
 - 👤 **Profile 多账号管理**：可把不同 Sealos 账号、region、workspace 和 kubeconfig 保存为命名 profile，按需切换。
 - 🚀 **一键暴露服务**：执行 `sealtun expose 8080`，即可获得一个受信任的 HTTPS URL，将流量安全地路由到本地。
 - 🌐 **自定义域名**：新建隧道时可用 `--domain` 生成 CNAME 指引，并通过 `domain status/doctor` 检查 DNS、Ingress 与证书状态。
-- 📊 **本地控制台与观测**：`dashboard` 提供本地 Web 控制台，`logs` 和 `metrics` 可查看远端 Pod 日志、请求计数与运行状态。
+- 📊 **本地控制台与观测**：`dashboard` 提供本地 Web 控制台，`logs`、`events` 和 `metrics` 可查看远端 Pod 日志、Kubernetes 事件、请求计数与运行状态。
 - 🧾 **声明式配置**：`apply -f sealtun.yaml` 可用 YAML 声明隧道，并以稳定名称幂等创建或更新。
 - 🌐 **深度适配 Sealos**：原生使用 Sealos Cloud 的 Kubernetes、Service 与 Ingress 能力，当前稳定支持 HTTPS 入口和 WebSocket 隧道。
 - 🐳 **全能二进制文件**：客户端和服务器代理共用同一个精简的二进制文件和 Docker 镜像。
@@ -105,11 +105,17 @@ NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
 
 ## 🤖 Codex Skill
 
-仓库内置了 `skills/sealtun`，用于让 Codex 类 AI agent 更准确地理解和操作 Sealtun。这个 skill 会在用户提到 `sealtun`、`sealtun.yaml`、内网穿透、本地端口暴露、临时公网预览链接、第三方回调到本地、隧道访问控制、发版或 npm 发布等场景时被动匹配。
+仓库内置了 `skills/sealtun`，用于让 Codex 类 AI agent 更准确地理解和使用 Sealtun CLI。这个 skill 会在用户提到 `sealtun`、`sealtun.yaml`、内网穿透、本地端口暴露、临时公网预览链接、第三方回调到本地、隧道访问控制、公网 SSH 或 TCP 隧道等场景时被动匹配。
 
-skill 触发后会先判断是否真的属于“本地/dev 服务通过 Sealtun 暴露到公网”的范围，再按用法指导、实际操作、仓库修改、排障或发版流程执行；没有明确要求时，不会擅自运行 `sealtun expose/apply/domain set/stop/cleanup/logout`、`git tag/push` 或 `npm publish` 这类会改变本地、云端或远端状态的命令。
+skill 触发后会先判断是否真的属于“本地/dev 服务通过 Sealtun 暴露到公网”的范围，再按用法指导、实际操作或排障流程执行；没有明确要求时，不会擅自运行 `sealtun expose/apply/domain set/stop/cleanup/logout` 这类会改变本地或云端状态的命令。
 
-如果希望在当前机器全局启用，可以把该目录同步到 Codex 的全局技能目录：
+推荐直接从仓库安装 skill：
+
+```bash
+npx skills add https://github.com/gitlayzer/sealtun
+```
+
+如果是在本仓库本地开发，也可以把该目录同步到 Codex 的全局技能目录：
 
 ```bash
 mkdir -p ~/.codex/skills
@@ -216,7 +222,21 @@ Host sealtun-dev
 ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
 ```
 
-### 4. 使用自定义域名
+### 4. 通用 TCP 公网访问
+除 SSH 外，也可以用通用四层 TCP 暴露本地数据库、调试服务或其他非 HTTP 协议：
+
+```bash
+sealtun expose 5432 --protocol tcp
+```
+
+命令会输出公网 TCP 入口：
+```bash
+<public-host>:<node-port>
+```
+
+`--protocol tcp` 和 `--protocol ssh` 一样走公网 TCP NodePort，只保留 HTTPS 控制通道供本地 daemon 连接远端 Pod，不提供默认 HTTPS 业务 URL。Basic Auth、Bearer Token、临时链接、IP 规则和自定义域名属于 HTTPS 代理层能力，不适用于 TCP 四层入口。
+
+### 5. 使用自定义域名
 新建隧道时先生成官方 Sealos 域名和 CNAME 目标：
 ```bash
 sealtun expose 3000 --domain app.example.com
@@ -254,7 +274,7 @@ sealtun domain doctor <tunnel-id>
 sealtun domain clear <tunnel-id>
 ```
 
-### 4. 观测和本地控制台
+### 6. 观测和本地控制台
 查看远端隧道 Pod 日志：
 ```bash
 sealtun logs <tunnel-id>
@@ -268,7 +288,13 @@ sealtun metrics <tunnel-id>
 sealtun metrics <tunnel-id> --json
 ```
 
-`metrics` 会聚合本地 session 状态、远端 Deployment/Pod/Ingress 状态，并在远端 Pod 支持时读取受 Bearer secret 保护的 `/_sealtun/metrics` 请求计数。
+查看远端 Kubernetes 事件：
+```bash
+sealtun events <tunnel-id>
+sealtun events <tunnel-id> --json
+```
+
+`metrics` 会聚合本地 session 状态、远端 Deployment/Pod/Ingress 状态，并在远端 Pod 支持时读取受 Bearer secret 保护的 `/_sealtun/metrics` 请求计数。TCP/SSH 四层隧道还会暴露 TCP 连接数、活跃连接数、字节数和错误数。
 
 启动本地只读控制台：
 ```bash
@@ -280,7 +306,7 @@ sealtun dashboard --addr 127.0.0.1 --port 19777
 
 Dashboard 仅监听本地地址，数据来自当前 CLI 进程读取到的本地 session、登录状态、远端诊断和自定义域名状态。
 
-### 5. 声明式配置
+### 7. 声明式配置
 创建 `sealtun.yaml`：
 ```yaml
 version: v1
@@ -340,33 +366,9 @@ basicAuth:
 
 - **HTTPS 隧道协议**：基于 WebSocket 的 Yamux 多路复用。
 - **SSH 四层入口**：`--protocol ssh` 只提供公网 TCP NodePort 直连本地 SSH；HTTPS 只作为内部控制通道，不提供默认业务 URL。
+- **通用 TCP 四层入口**：`--protocol tcp` 提供公网 TCP NodePort，可暴露本地数据库、消息队列、调试服务等非 HTTP 协议。
 - **Sealos 资源**：触发 `sealtun expose` 时，会在集群中创建以 `sealtun-*` 命名的 `Deployment`、`Service` 和 `Ingress`。
 - **镜像来源**：依赖于 `ghcr.io/gitlayzer/sealtun` 的原生镜像。
-
-## 🔧 当前已补强
-
-- `expose` 现在会校验端口与协议参数，非法输入会在本地直接报错。
-- `expose` 默认交给本地 daemon 后台维护；需要阻塞在当前终端时可使用 `--foreground`。
-- 远端隧道 Pod 等待阶段增加了默认 `90s` 超时，可通过 `--ready-timeout` 调整。
-- 配置目录统一为 `~/.sealtun`，首次运行只会迁移旧 `~/.sealos` 下的登录凭据和 kubeconfig，不会迁移旧 session 记录。
-- `profile` 支持把多账号、多 region、多 workspace 登录状态保存为命名配置；`profile use` 会切换后续 `expose/status/region current` 使用的 active kubeconfig。
-- Ingress 域名优先使用 Sealos Launchpad 返回的 `SEALOS_DOMAIN`，避免按 region 猜测公网域名。
-- 自定义域名必须先通过 CNAME 归属验证，Sealtun 不会把未验证域名提前写入 Ingress，避免在共享 Ingress 中预占任意 Host。
-- 绑定后会同时保留 Sealos 官方 host 和用户域名：daemon 始终使用 Sealos host 连接控制面，用户访问域名可通过 CNAME 指向该 Sealos host。
-- `--wait-domain` 只在同时提供 `--domain` 时等待 DNS CNAME、绑定 Ingress 与 cert-manager 证书就绪；超时不会删除隧道，可稍后用 `sealtun domain set` 或 `sealtun domain verify` 复查。
-- `domain status` 可批量查看所有自定义域名的 DNS、Ingress、证书是否就绪；`domain doctor` 会输出每个域名的详细诊断和告警。
-- 访问策略支持 Basic Auth、Bearer Token、IP allowlist/denylist 与临时访问链接，均由 Sealtun server 代理层执行，不依赖 Ingress annotation。
-- 声明式配置支持 `sealtun diff -f`、多 tunnel 批量 apply 和 `ttl` 自动过期清理。
-- `logs` 读取远端 tunnel Pod 日志；`metrics` 聚合本地、远端和 server counters，其中 server counters 需要新版本远端镜像支持。
-- `dashboard` 是本地只读 Web 控制台，不需要额外服务端组件。
-- `apply -f sealtun.yaml` 支持 HTTPS 隧道、SSH 四层隧道、稳定 tunnel name、自定义域名指引和 daemon 托管。
-- 提供 `status`、`list`、`inspect`、`doctor`、`stop`、`start/resume`、`cleanup`、`logout` 等本地控制命令。
-- `stop` 只会把远端 tunnel Pod 副本缩容为 0，保留域名、Service、Ingress、Secret 与本地 session；可用 `sealtun start <tunnel-id>` 恢复。`cleanup` 默认删除 stopped/expired/stale 隧道，`cleanup --all` 才会强制删除所有本地跟踪的隧道资源。
-- `list` 默认只读取本地 session；需要探测本地端口健康时可使用 `list --check`。
-- `inspect` 默认展示本地状态；需要远端 Kubernetes 诊断时可使用 `inspect --remote`。
-- `logout` 会先回收本地记录中的隧道资源再删除凭据；如果只想强制清除本地凭据，可使用 `logout --force`。
-- 当前 `--protocol` 支持 `https` 和专用 `ssh` 模式。`ssh` 不支持 Basic Auth、Bearer Token、临时链接、IP 规则和自定义域名。通用 TCP、UDP 和 gRPC 泛化暂不支持，后续如果需要会以单独能力设计，而不是继续复用当前 HTTP Ingress 路径。
-- `doctor` 会汇总本地 daemon、登录、session、端口健康和远端 Deployment、Service、Ingress、Pod 与 Event 状态，用于定位镜像拉取、Pod 未就绪、Ingress 缺失等问题。
 
 ## 📄 许可证
 

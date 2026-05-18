@@ -49,12 +49,18 @@ var startCmd = &cobra.Command{
 		}
 		ensureSessionPublicPort(cmd.Context(), sess)
 
-		if sess.Protocol == "ssh" && sess.PublicPort != 0 {
+		if sess.PublicPort != 0 && (sess.Protocol == "ssh" || sess.Protocol == "tcp") {
 			endpoint := endpointDisplay(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort)
 			fmt.Fprintf(cmd.OutOrStdout(), "Started tunnel %s.\n", sess.TunnelID)
-			fmt.Fprintf(cmd.OutOrStdout(), "  Public SSH host: %s\n", endpoint.Host)
-			fmt.Fprintf(cmd.OutOrStdout(), "  Public SSH port: %d\n", endpoint.Port)
-			fmt.Fprintf(cmd.OutOrStdout(), "  SSH command: %s\n", endpoint.Command)
+			if sess.Protocol == "ssh" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  Public SSH host: %s\n", endpoint.Host)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Public SSH port: %d\n", endpoint.Port)
+				fmt.Fprintf(cmd.OutOrStdout(), "  SSH command: %s\n", endpoint.Command)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "  Public TCP host: %s\n", endpoint.Host)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Public TCP port: %d\n", endpoint.Port)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Public TCP endpoint: %s\n", endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort))
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  Local target: localhost:%s\n", valueOr(sess.LocalPort, "unknown"))
 			return nil
 		}

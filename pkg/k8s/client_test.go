@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/auth"
@@ -243,10 +244,10 @@ func TestEnsureTunnelUsesCompactHostAndSingleIngressWithBothPaths(t *testing.T) 
 	}
 
 	paths := ingresses.Items[0].Spec.Rules[0].HTTP.Paths
-	if len(paths) != 3 {
+	if len(paths) != 4 {
 		t.Fatalf("expected tunnel and app paths in one ingress, got %d", len(paths))
 	}
-	if paths[0].Path != "/_sealtun/ws" || paths[1].Path != "/_sealtun/healthz" || paths[2].Path != "/" {
+	if paths[0].Path != "/_sealtun/ws" || paths[1].Path != "/_sealtun/healthz" || paths[2].Path != "/_sealtun/metrics" || paths[3].Path != "/" {
 		t.Fatalf("unexpected ingress paths: %#v", paths)
 	}
 }
@@ -318,11 +319,56 @@ func TestEnsureTunnelSSHCreatesNodePortService(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := ingress.Spec.Rules[0].HTTP.Paths
-	if len(paths) != 2 {
+	if len(paths) != 4 {
 		t.Fatalf("expected ssh ingress to expose control paths only, got %#v", paths)
 	}
-	if paths[0].Path != "/_sealtun/ws" || paths[1].Path != "/_sealtun/healthz" {
+	if paths[0].Path != "/_sealtun/ws" || paths[1].Path != "/_sealtun/healthz" || paths[2].Path != "/_sealtun/metrics" || paths[3].Path != "/_sealtun/tcp" {
 		t.Fatalf("unexpected ssh ingress paths: %#v", paths)
+	}
+}
+
+func TestEnsureTunnelTCPCreatesNodePortService(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	clientset.PrependReactor("create", "services", func(action ktesting.Action) (bool, runtime.Object, error) {
+		create := action.(ktesting.CreateAction)
+		service := create.GetObject().(*corev1.Service)
+		for i := range service.Spec.Ports {
+			if service.Spec.Ports[i].Name == "tcp" {
+				service.Spec.Ports[i].NodePort = 35432
+			}
+		}
+		return false, nil, nil
+	})
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	hosts, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "tcp", "5432", TunnelOptions{})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+	if hosts.PublicPort != 35432 {
+		t.Fatalf("expected public nodePort 35432, got %d", hosts.PublicPort)
+	}
+	if hosts.PublicHost != "sealtun-abc123-default.example.com" {
+		t.Fatalf("unexpected public host: %s", hosts.PublicHost)
+	}
+
+	tcpService, err := clientset.CoreV1().Services("default").Get(context.Background(), "sealtun-abc123-tcp", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tcpService.Spec.Type != corev1.ServiceTypeNodePort {
+		t.Fatalf("expected TCP service to be NodePort, got %s", tcpService.Spec.Type)
+	}
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), "sealtun-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containerPortByName(deployment, "tcp") == nil {
+		t.Fatalf("expected tcp deployment to expose tcp container port, got %#v", deployment.Spec.Template.Spec.Containers[0].Ports)
 	}
 }
 
@@ -345,6 +391,30 @@ func TestEnsureTunnelSSHRejectsHTTPOnlyOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "ssh", "22", tt.opts); err == nil {
 				t.Fatal("expected ssh tunnel with HTTP-only option to fail")
+			}
+		})
+	}
+}
+
+func TestEnsureTunnelTCPRejectsHTTPOnlyOptions(t *testing.T) {
+	client := &Client{
+		clientset: fake.NewSimpleClientset(),
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	tests := []struct {
+		name string
+		opts TunnelOptions
+	}{
+		{name: "custom domain", opts: TunnelOptions{CustomDomain: "dev.example.com"}},
+		{name: "basic auth", opts: TunnelOptions{BasicAuth: &BasicAuthOptions{Username: "admin", PasswordHash: "hash"}}},
+		{name: "access policy", opts: TunnelOptions{AccessPolicy: &accesspolicy.Policy{IPAllowlist: []string{"203.0.113.1"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "tcp", "5432", tt.opts); err == nil {
+				t.Fatal("expected tcp tunnel with HTTP-only option to fail")
 			}
 		})
 	}
@@ -1935,9 +2005,11 @@ func TestDiagnoseTunnelTreatsPodListFailureAsWarning(t *testing.T) {
 }
 
 func TestFilterEventDiagnosticsMatchesExactObjectName(t *testing.T) {
+	old := metav1.NewTime(time.Date(2026, 5, 18, 9, 0, 0, 0, time.UTC))
+	recent := metav1.NewTime(time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC))
 	events := []corev1.Event{
-		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123"}, Reason: "Exact"},
-		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123-pod"}, Reason: "PodExact"},
+		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123"}, Reason: "Exact", LastTimestamp: old},
+		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "sealtun-abc123-pod"}, Reason: "PodExact", LastTimestamp: recent, Count: 3},
 		{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "prefix-sealtun-abc123-suffix"}, Reason: "Substring"},
 	}
 
@@ -1947,6 +2019,9 @@ func TestFilterEventDiagnosticsMatchesExactObjectName(t *testing.T) {
 	}
 	if result[0].Reason != "PodExact" || result[1].Reason != "Exact" {
 		t.Fatalf("unexpected matched event: %#v", result[0])
+	}
+	if result[0].Count != 3 || result[0].LastTimestamp != "2026-05-18T10:00:00Z" {
+		t.Fatalf("expected event count and last timestamp, got %#v", result[0])
 	}
 }
 

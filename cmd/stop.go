@@ -33,8 +33,8 @@ var stopCmd = &cobra.Command{
 			return fmt.Errorf("update local session %s: %w", sess.TunnelID, err)
 		}
 
-		if sess.Protocol == "ssh" {
-			fmt.Fprintf(cmd.OutOrStdout(), "Stopped SSH tunnel %s. TCP NodePort, control resources, and local session were preserved.\n", sess.TunnelID)
+		if sess.Protocol == "ssh" || sess.Protocol == "tcp" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Stopped %s tunnel %s. TCP NodePort, control resources, and local session were preserved.\n", sess.Protocol, sess.TunnelID)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Stopped tunnel %s. Domain, Service, Ingress, and local session were preserved.\n", sess.TunnelID)
 		}

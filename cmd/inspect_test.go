@@ -156,3 +156,41 @@ func TestPrintInspectShowsSSHEndpoint(t *testing.T) {
 		t.Fatalf("ssh inspect output should not show Public URL, got:\n%s", text)
 	}
 }
+
+func TestPrintInspectShowsTCPEndpoint(t *testing.T) {
+	payload := &inspectPayload{
+		TunnelID:           "postgres",
+		Status:             "active",
+		Mode:               "daemon",
+		Protocol:           "tcp",
+		Host:               "db.example.com",
+		SealosHost:         "control.example.com",
+		PublicPort:         35432,
+		LocalPort:          "5432",
+		Namespace:          "ns-demo",
+		Region:             "https://gzg.sealos.run",
+		LocalPortReachable: true,
+		CreatedAt:          "2026-05-15T10:00:00+08:00",
+	}
+
+	var output bytes.Buffer
+	inspectCmd.SetOut(&output)
+	t.Cleanup(func() { inspectCmd.SetOut(nil) })
+
+	printInspect(inspectCmd, payload)
+	text := output.String()
+	for _, want := range []string{
+		"Public TCP host: db.example.com",
+		"Public TCP port: 35432",
+		"Public TCP endpoint: db.example.com:35432",
+		"Control host: control.example.com",
+		"Local target: localhost:5432",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected inspect output to contain %q, got:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Public URL") || strings.Contains(text, "SSH command") {
+		t.Fatalf("tcp inspect output should not show HTTPS or SSH endpoint fields, got:\n%s", text)
+	}
+}

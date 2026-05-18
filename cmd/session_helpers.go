@@ -207,7 +207,7 @@ func sessionExpired(sess session.TunnelSession, now time.Time) bool {
 }
 
 func ensureSessionPublicPort(ctx context.Context, sess *session.TunnelSession) {
-	if sess == nil || sess.Protocol != "ssh" || sess.PublicPort != 0 {
+	if sess == nil || (sess.Protocol != "ssh" && sess.Protocol != "tcp") || sess.PublicPort != 0 {
 		return
 	}
 	client, err := k8sClientForSession(*sess)

@@ -30,3 +30,19 @@ func TestEndpointDisplayHTTPS(t *testing.T) {
 		t.Fatalf("https endpoint should not include ssh fields: %#v", got)
 	}
 }
+
+func TestEndpointDisplayTCP(t *testing.T) {
+	got := endpointDisplay("tcp", "db.example.com", "control.example.com", 35432)
+	if got.Kind != "tcp" {
+		t.Fatalf("expected tcp kind, got %q", got.Kind)
+	}
+	if got.Host != "db.example.com" || got.Port != 35432 {
+		t.Fatalf("unexpected tcp endpoint: %#v", got)
+	}
+	if got.Command != "" {
+		t.Fatalf("tcp endpoint should not include ssh command: %#v", got)
+	}
+	if label := endpointLabel("tcp", "db.example.com", "control.example.com", 35432); label != "db.example.com:35432" {
+		t.Fatalf("unexpected tcp endpoint label: %q", label)
+	}
+}

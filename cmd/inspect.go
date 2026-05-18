@@ -186,6 +186,15 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		if endpoint.ControlHost != "" && endpoint.ControlHost != endpoint.Host {
 			fmt.Fprintf(out, "  Control host: %s\n", endpoint.ControlHost)
 		}
+	} else if endpoint.Kind == "tcp" {
+		fmt.Fprintf(out, "  Public TCP host: %s\n", valueOr(endpoint.Host, "unknown"))
+		if endpoint.Port != 0 {
+			fmt.Fprintf(out, "  Public TCP port: %d\n", endpoint.Port)
+			fmt.Fprintf(out, "  Public TCP endpoint: %s\n", endpointLabel(payload.Protocol, payload.Host, payload.SealosHost, payload.PublicPort))
+		}
+		if endpoint.ControlHost != "" && endpoint.ControlHost != endpoint.Host {
+			fmt.Fprintf(out, "  Control host: %s\n", endpoint.ControlHost)
+		}
 	} else {
 		fmt.Fprintf(out, "  Public URL: %s\n", valueOr(endpoint.URL, "unknown"))
 	}
@@ -276,7 +285,12 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		if len(payload.Remote.Events) > 0 {
 			fmt.Fprintln(out, "  Recent events:")
 			for _, event := range payload.Remote.Events {
-				fmt.Fprintf(out, "    - %s %s: %s\n", valueOr(event.Type, "-"), valueOr(event.Reason, "-"), valueOr(event.Message, "-"))
+				when := valueOr(event.LastTimestamp, event.FirstTimestamp)
+				if when != "" {
+					fmt.Fprintf(out, "    - %s %s %s: %s\n", when, valueOr(event.Type, "-"), valueOr(event.Reason, "-"), valueOr(event.Message, "-"))
+				} else {
+					fmt.Fprintf(out, "    - %s %s: %s\n", valueOr(event.Type, "-"), valueOr(event.Reason, "-"), valueOr(event.Message, "-"))
+				}
 			}
 		}
 	}

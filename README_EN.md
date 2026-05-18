@@ -13,7 +13,7 @@ It connects your local development machine straight to the internet by dynamical
 - 👤 **Named Profiles**: Save different Sealos accounts, regions, workspaces, and kubeconfigs as named profiles and switch between them.
 - 🚀 **One-Command Expose**: Execute `sealtun expose 8080`, and get a fully trusted HTTPS URL for your localhost securely routed.
 - 🌐 **Custom Domains**: Use `--domain` to print the required CNAME target and `domain status/doctor` to diagnose DNS, Ingress, and certificate readiness.
-- 📊 **Local Console and Observability**: Use `dashboard` for a local web console, and `logs` / `metrics` for remote pod logs, request counters, and runtime state.
+- 📊 **Local Console and Observability**: Use `dashboard` for a local web console, and `logs` / `events` / `metrics` for remote pod logs, Kubernetes events, request counters, and runtime state.
 - 🧾 **Declarative Config**: Use `apply -f sealtun.yaml` to declare tunnels in YAML and create or update them with stable names.
 - 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, HTTPS traffic, and WebSocket tunnels.
 - 🐳 **All-in-One Binary**: The client and the server agent live comfortably in the exact same compact binary and Docker image.
@@ -105,11 +105,17 @@ NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
 
 ## Codex Skill
 
-This repository includes `skills/sealtun` so Codex-like AI agents can understand and operate Sealtun more accurately. The skill is designed to passively match requests about `sealtun`, `sealtun.yaml`, local tunneling, exposing a local port, temporary public preview links, third-party callbacks to a local service, tunnel access control, releases, and npm publishing.
+This repository includes `skills/sealtun` so Codex-like AI agents can understand and use the Sealtun CLI more accurately. The skill is designed to passively match requests about `sealtun`, `sealtun.yaml`, local tunneling, exposing a local port, temporary public preview links, third-party callbacks to a local service, tunnel access control, public SSH, or generic TCP tunnels.
 
-After the skill triggers, it first checks whether the request is actually about making a local/dev service public through Sealtun. It then follows a fixed guidance, live operation, repository-change, troubleshooting, or release workflow. Unless the user explicitly asks for execution, it will not run state-changing commands such as `sealtun expose/apply/domain set/stop/cleanup/logout`, `git tag/push`, or `npm publish`.
+After the skill triggers, it first checks whether the request is actually about making a local/dev service public through Sealtun. It then follows a fixed guidance, live operation, or troubleshooting workflow. Unless the user explicitly asks for execution, it will not run state-changing commands such as `sealtun expose/apply/domain set/stop/cleanup/logout`.
 
-To enable it globally on the current machine, sync the directory into Codex's global skills directory:
+Install the skill directly from the repository:
+
+```bash
+npx skills add https://github.com/gitlayzer/sealtun
+```
+
+For local development in this repository, you can also sync the directory into Codex's global skills directory:
 
 ```bash
 mkdir -p ~/.codex/skills
@@ -216,7 +222,21 @@ Host sealtun-dev
 ssh -o ProxyCommand='sealtun ssh connect <tunnel-id>' <user>@sealtun
 ```
 
-### 4. Use a custom domain
+### 4. Public generic TCP access
+Generic L4 TCP tunnels can expose local databases, debugging services, or other non-HTTP protocols:
+
+```bash
+sealtun expose 5432 --protocol tcp
+```
+
+The command prints a public TCP endpoint:
+```bash
+<public-host>:<node-port>
+```
+
+`--protocol tcp` uses the same public TCP NodePort model as `--protocol ssh`. HTTPS remains only as the internal control channel for the local daemon and is not a default public application URL. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains are HTTPS proxy-layer features and do not apply to L4 TCP entries.
+
+### 5. Use a custom domain
 Create the tunnel first and print the Sealos-managed CNAME target:
 ```bash
 sealtun expose 3000 --domain app.example.com
@@ -254,7 +274,7 @@ Remove the custom domain:
 sealtun domain clear <tunnel-id>
 ```
 
-### 4. Observe tunnels and run the local dashboard
+### 6. Observe tunnels and run the local dashboard
 Show remote tunnel pod logs:
 ```bash
 sealtun logs <tunnel-id>
@@ -268,7 +288,13 @@ sealtun metrics <tunnel-id>
 sealtun metrics <tunnel-id> --json
 ```
 
-`metrics` combines local session state, remote Deployment/Pod/Ingress readiness, and server-side request counters when the remote pod supports the Bearer-secret-protected `/_sealtun/metrics` endpoint.
+Show recent Kubernetes events:
+```bash
+sealtun events <tunnel-id>
+sealtun events <tunnel-id> --json
+```
+
+`metrics` combines local session state, remote Deployment/Pod/Ingress readiness, and server-side request counters when the remote pod supports the Bearer-secret-protected `/_sealtun/metrics` endpoint. TCP/SSH tunnels also expose TCP connection, active connection, byte, and error counters.
 
 Run the local read-only dashboard:
 ```bash
@@ -280,7 +306,7 @@ sealtun dashboard --addr 127.0.0.1 --port 19777
 
 The dashboard listens locally and reads the same data as the CLI: local sessions, login state, remote diagnostics, and custom domain readiness.
 
-### 5. Declarative config
+### 7. Declarative config
 Create `sealtun.yaml`:
 ```yaml
 version: v1
@@ -340,31 +366,9 @@ basicAuth:
 
 - **HTTPS tunnel protocol**: Yamux over WebSocket.
 - **SSH L4 entry**: `--protocol ssh` exposes only a public TCP NodePort that connects directly to local SSH; HTTPS is kept only as an internal control channel, not as a default application URL.
+- **Generic TCP L4 entry**: `--protocol tcp` exposes a public TCP NodePort for local databases, queues, debugging services, and other non-HTTP protocols.
 - **Sealos Resources**: When you trigger `sealtun expose`, it creates `sealtun-*` variants of `Deployment`, `Service`, and `Ingress` in the active cluster context.
 - **Images**: Relies on a single Docker image built natively targeting `ghcr.io/gitlayzer/sealtun`.
-
-## Hardening Notes
-
-- `expose` now validates port and protocol inputs before provisioning remote resources.
-- `--protocol` currently supports `https` and the dedicated `ssh` mode. `ssh` does not support Basic Auth, Bearer tokens, temporary links, IP policies, or custom domains. Generic TCP, UDP, and gRPC are intentionally out of scope until there is a dedicated transport design for them.
-- `profile` supports named login bundles for multiple accounts, regions, and workspaces; `profile use` switches the active kubeconfig used by later `expose`, `status`, and `region current` commands.
-- Ingress host generation prefers the `SEALOS_DOMAIN` returned by Sealos Launchpad instead of guessing from the region host.
-- Custom domains must pass CNAME ownership verification before Sealtun writes the custom host to Ingress, preventing unverified host preemption on shared Ingress controllers.
-- After attachment, custom domains keep both hosts on the Ingress: the daemon uses the Sealos host for the control tunnel, while user traffic can use the CNAME-backed custom domain.
-- `--wait-domain` waits for DNS CNAME, Ingress attachment, and cert-manager certificate readiness only when `--domain` is also provided; timeout does not delete the tunnel, and you can retry with `sealtun domain set` or recheck with `sealtun domain verify`.
-- `domain status` summarizes DNS, Ingress, and certificate readiness for every custom domain; `domain doctor` prints detailed per-domain diagnostics and warnings.
-- Access policies support Basic Auth, Bearer Token, IP allowlist/denylist, and temporary access links at the Sealtun server proxy layer without relying on Ingress annotations.
-- Declarative config supports `sealtun diff -f`, multi-tunnel batch apply, and `ttl` automatic expiry cleanup.
-- `logs` reads remote tunnel pod logs; `metrics` aggregates local state, remote readiness, and server counters when the remote image supports them.
-- `dashboard` is a local read-only web console and does not require any additional hosted backend.
-- `apply -f sealtun.yaml` supports HTTPS tunnels, SSH L4 tunnels, stable tunnel names, custom domain guidance, and daemon-managed sessions.
-- Local controls include `status`, `list`, `inspect`, `doctor`, `stop`, `start/resume`, `cleanup`, and `logout`.
-- `stop` only scales the remote tunnel pod Deployment to zero, preserving the domain, Service, Ingress, secrets, and local session. Use `sealtun start <tunnel-id>` to reopen it. `cleanup` deletes stopped, expired, or stale tunnels by default; `cleanup --all` is the force path for deleting every locally tracked tunnel.
-- `list` reads local session records by default; use `list --check` to probe local target ports and report degraded sessions.
-- `inspect` shows local session state by default; use `inspect --remote` to include best-effort Kubernetes diagnostics.
-- `doctor` summarizes daemon, login, session, local port, and remote Deployment, Service, Ingress, Pod, and Event diagnostics.
-- Tunnel pod readiness now has a default `90s` timeout, configurable via `--ready-timeout`.
-- Configuration is stored in `~/.sealtun`; first run only migrates legacy auth and kubeconfig files from `~/.sealos`, not old tunnel session records.
 
 ## License
 

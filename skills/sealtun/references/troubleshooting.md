@@ -22,6 +22,7 @@ Symptoms:
 - `not logged in. Please run 'sealtun login' first`
 - A tunnel appears in the wrong namespace or region.
 - `apply` refuses to update a tunnel because region or namespace differs.
+- First-time setup pauses while waiting for browser/device authorization.
 
 Actions:
 
@@ -35,6 +36,8 @@ sealtun login <region> --profile <name>
 ```
 
 Profiles are stored under `~/.sealtun/profiles/<name>`. Switching a profile updates the active auth and kubeconfig used by later commands.
+
+For first-time authorization, make the flow explicit: Sealtun needs Sealos authorization to obtain Kubernetes credentials for the active workspace. Ask the user to complete the browser/device flow, then verify with `sealtun status` before running `expose`, real `apply`, `domain set`, or cleanup operations.
 
 ## Daemon And Session Issues
 
@@ -75,6 +78,8 @@ ssh -vvv <user>@<public-host> -p <node-port>
 
 Direct SSH uses `--protocol ssh` and a public TCP NodePort. The public host plus NodePort is the user-facing entry; HTTPS is only the internal Sealtun control channel. Basic Auth, Bearer tokens, temporary links, IP policies, and custom domains do not apply to SSH. If the SSH debug log reaches authentication and then closes, inspect the local sshd authentication policy, user, keys/password, and PAM/keyboard-interactive behavior on the machine running Sealtun.
 
+For generic TCP, use `--protocol tcp` and connect to `<public-host>:<node-port>` with the protocol-specific client, for example `psql -h <public-host> -p <node-port>`. If the connection opens and closes, inspect the local target service logs and authentication settings on the machine running Sealtun.
+
 ## Local Port Unreachable
 
 Symptoms:
@@ -108,6 +113,7 @@ Actions:
 sealtun inspect <tunnel-id> --remote
 sealtun logs <tunnel-id> --tail 200
 sealtun metrics <tunnel-id> --json
+sealtun events <tunnel-id>
 sealtun doctor --json
 ```
 

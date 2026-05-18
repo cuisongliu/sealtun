@@ -172,6 +172,21 @@ func TestConfigureSessionCustomDomainRejectsSSH(t *testing.T) {
 	}
 }
 
+func TestSessionSupportsCustomDomainAllowsLegacyHTTPS(t *testing.T) {
+	if !sessionSupportsCustomDomain(session.TunnelSession{}) {
+		t.Fatal("legacy sessions without protocol should be treated as HTTPS")
+	}
+	if !sessionSupportsCustomDomain(session.TunnelSession{Protocol: "https"}) {
+		t.Fatal("https sessions should support custom domains")
+	}
+	if sessionSupportsCustomDomain(session.TunnelSession{Protocol: "ssh"}) {
+		t.Fatal("ssh sessions should not support custom domains")
+	}
+	if sessionSupportsCustomDomain(session.TunnelSession{Protocol: "tcp"}) {
+		t.Fatal("tcp sessions should not support custom domains")
+	}
+}
+
 func TestCollectDomainStatusFiltersCustomDomains(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

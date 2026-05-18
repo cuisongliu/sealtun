@@ -604,7 +604,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s accessPolicy: %w", tunnelID, err)
 	}
-	if protocol == tunnelprotocol.SSH {
+	if !tunnelprotocol.IsHTTP(protocol) {
 		if customDomain != "" || item.WaitDomain {
 			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: domain and waitDomain are only supported for https tunnels", tunnelID)
 		}
@@ -774,6 +774,8 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 		fmt.Fprintf(out, "  - %s (%s): %s localhost:%s", result.Name, result.TunnelID, result.Status, result.LocalPort)
 		if result.Protocol == tunnelprotocol.SSH && endpoint.Command != "" {
 			fmt.Fprintf(out, " -> %s", endpoint.Command)
+		} else if result.Protocol == tunnelprotocol.TCP && endpoint.Port != 0 {
+			fmt.Fprintf(out, " -> %s", endpointLabel(result.Protocol, result.Host, result.SealosHost, result.PublicPort))
 		} else if endpoint.URL != "" {
 			fmt.Fprintf(out, " -> %s", endpoint.URL)
 		}
@@ -796,6 +798,14 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 			}
 			if endpoint.Command != "" {
 				fmt.Fprintf(out, "    SSH command: %s\n", endpoint.Command)
+			}
+		} else if result.Protocol == tunnelprotocol.TCP {
+			if endpoint.Host != "" {
+				fmt.Fprintf(out, "    Public TCP host: %s\n", endpoint.Host)
+			}
+			if endpoint.Port != 0 {
+				fmt.Fprintf(out, "    Public TCP port: %d\n", endpoint.Port)
+				fmt.Fprintf(out, "    Public TCP endpoint: %s\n", endpointLabel(result.Protocol, result.Host, result.SealosHost, result.PublicPort))
 			}
 		} else if endpoint.URL != "" {
 			fmt.Fprintf(out, "    Public URL: %s\n", endpoint.URL)

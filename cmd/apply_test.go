@@ -68,6 +68,32 @@ tunnels:
 	}
 }
 
+func TestRunApplyDryRunReportsTCPProtocol(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sealtun.yaml")
+	data := []byte(`version: v1
+tunnels:
+  - name: postgres
+    localPort: 5432
+    protocol: tcp
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := runApply(context.Background(), path, true)
+	if err != nil {
+		t.Fatalf("dry-run apply should accept tcp tunnels: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %d", len(results))
+	}
+	if results[0].Protocol != "tcp" {
+		t.Fatalf("expected tcp protocol to be reported, got %+v", results[0])
+	}
+}
+
 func TestBuildApplySessionRecordPersistsCustomDomain(t *testing.T) {
 	basicAuth, err := newSessionBasicAuth("admin", "secret")
 	if err != nil {
@@ -152,6 +178,39 @@ func TestNormalizeApplyTunnelRejectsHTTPOnlyOptionsForSSH(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := normalizeApplyTunnel(tt.item); err == nil {
 				t.Fatal("expected ssh tunnel with HTTP-only option to fail")
+			}
+		})
+	}
+}
+
+func TestNormalizeApplyTunnelRejectsHTTPOnlyOptionsForTCP(t *testing.T) {
+	t.Setenv("SEALTUN_TEST_BEARER", "secret-token")
+
+	tests := []struct {
+		name string
+		item applyTunnel
+	}{
+		{
+			name: "domain",
+			item: applyTunnel{Name: "postgres", LocalPort: 5432, Protocol: "tcp", Domain: "db.example.com"},
+		},
+		{
+			name: "wait domain",
+			item: applyTunnel{Name: "postgres", LocalPort: 5432, Protocol: "tcp", WaitDomain: true},
+		},
+		{
+			name: "basic auth",
+			item: applyTunnel{Name: "postgres", LocalPort: 5432, Protocol: "tcp", BasicAuth: &applyBasicAuth{Credential: "admin:secret"}},
+		},
+		{
+			name: "access policy",
+			item: applyTunnel{Name: "postgres", LocalPort: 5432, Protocol: "tcp", AccessPolicy: &applyAccessPolicy{BearerTokenEnv: "SEALTUN_TEST_BEARER"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := normalizeApplyTunnel(tt.item); err == nil {
+				t.Fatal("expected tcp tunnel with HTTP-only option to fail")
 			}
 		})
 	}

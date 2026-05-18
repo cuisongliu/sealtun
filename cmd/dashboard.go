@@ -1209,13 +1209,14 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      const host = publicHostFor(t);
 	      if (!host) return "";
 	      if (t?.protocol === "ssh" && t?.publicPort) return "ssh <user>@" + host + " -p " + t.publicPort;
+	      if (t?.protocol === "tcp" && t?.publicPort) return host + ":" + t.publicPort;
 	      return "https://" + host;
 	    };
 	    const hostLink = (t, className) => {
 	      const host = publicHostFor(t);
 	      const safe = safeHost(host);
 	      if (!safe) return '<span class="' + esc(className || "link") + ' muted">-</span>';
-	      if (t?.protocol === "ssh") return '<span class="' + esc(className || "link") + ' mono">' + esc(publicEndpointFor(t) || safe) + '</span>';
+	      if (t?.protocol === "ssh" || t?.protocol === "tcp") return '<span class="' + esc(className || "link") + ' mono">' + esc(publicEndpointFor(t) || safe) + '</span>';
 	      return '<a class="' + esc(className || "link") + '" href="https://' + esc(safe) + '" target="_blank" rel="noreferrer">https://' + esc(safe) + externalIcon + '</a>';
 	    };
 	    const yes = (v) => v ? '<span class="yes">Yes</span>' : '<span class="no">No</span>';
@@ -1438,7 +1439,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	        '<div class="inspect-body">' +
 	          '<div class="inspect-summary"><div class="status ' + cls + '"><span class="dot"></span>' + esc(title(t.status)) + '</div>' + hostLink(t, "inspect-url") + '</div>' +
 	          group("Connection", [
-	            [t.protocol === "ssh" ? "Public SSH" : "Public URL", publicEndpointFor(t) || "-", true],
+	            [t.protocol === "ssh" ? "Public SSH" : (t.protocol === "tcp" ? "Public TCP" : "Public URL"), publicEndpointFor(t) || "-", true],
 	            ["CNAME Target", cname || "-", true],
 	            ["Local Target", "localhost:" + (t.localPort || "-"), true]
           ]) +
@@ -1501,11 +1502,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      const item = items.find(x => x.tunnelId === t.tunnelId);
 	      const host = safeHost(t.sealosHost) || publicHostFor(t) || "-";
       if (!item && !t.customDomain) {
-        if (t.protocol === "ssh") {
+        if (t.protocol === "ssh" || t.protocol === "tcp") {
           return '<div class="panel-grid">' +
             small("Custom Domain", "HTTPS tunnels only") +
-            small("Public SSH", publicEndpointFor(t) || "-") +
-            small("Command", "sealtun expose 22 --protocol ssh") +
+            small(t.protocol === "ssh" ? "Public SSH" : "Public TCP", publicEndpointFor(t) || "-") +
+            small("Command", "sealtun expose " + (t.localPort || (t.protocol === "ssh" ? "22" : "5432")) + " --protocol " + t.protocol) +
           '</div>';
         }
         return '<div class="panel-grid">' +
@@ -1522,7 +1523,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     }
 
     function configPanel(t) {
-      return '<pre class="yaml">version: v1\ntunnels:\n  - name: ' + esc(t.tunnelId) + '\n    localPort: ' + esc(t.localPort || "3000") + '\n    protocol: https' + (t.customDomain ? '\n    domain: ' + esc(t.customDomain) : '') + '\n    readyTimeout: 90s</pre>';
+      return '<pre class="yaml">version: v1\ntunnels:\n  - name: ' + esc(t.tunnelId) + '\n    localPort: ' + esc(t.localPort || "3000") + '\n    protocol: ' + esc(t.protocol || "https") + (t.customDomain ? '\n    domain: ' + esc(t.customDomain) : '') + '\n    readyTimeout: 90s</pre>';
     }
 
     function group(titleText, rows) {

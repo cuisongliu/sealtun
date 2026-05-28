@@ -204,7 +204,9 @@ sealtun events <tunnel-id> --json
 
 sealtun dashboard
 sealtun dashboard --addr 127.0.0.1 --port 19777
+sealtun dashboard --open
 sealtun dashboard --addr 0.0.0.0 --allow-remote
+sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-auth-password-env SEALTUN_DASHBOARD_PASSWORD
 
 sealtun doctor
 sealtun doctor <tunnel-id>
@@ -214,9 +216,30 @@ sealtun doctor <tunnel-id> --json
 
 Dashboard is a local workbench by default. It can create HTTPS/SSH/TCP tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events, and run domain plan/add/verify/clear. It uses only the current active profile/region/namespace and does not switch login scope.
 
-Every dashboard API request requires the dashboard token. Mutating actions require a confirmation in the page and a backend `confirm` value such as `stop:<tunnel-id>` or `apply:dashboard-yaml`. `--allow-remote` allows a non-loopback dashboard address and should be treated as a security-sensitive choice; remote mode does not embed the token in HTML.
+Every dashboard API request requires the dashboard token. Mutating actions require a confirmation in the page and a backend `confirm` value such as `stop:<tunnel-id>` or `apply:dashboard-yaml`. `--allow-remote` allows a non-loopback dashboard address and should be treated as a security-sensitive choice; remote mode does not embed the token in HTML. For remote dashboards, recommend adding dashboard Basic Auth with `--basic-auth-user` and `--basic-auth-password-env`. `--open` opens the dashboard URL for local workflows.
 
 Use `doctor <tunnel-id>` for "why can't I connect" issues. It checks the local session, owner process or daemon, local target port, remote resources where credentials are available, and prints next-step suggestions.
+
+## Share Links
+
+```bash
+sealtun share create <tunnel-id> --name review --ttl 1h
+sealtun share create <tunnel-id> --name qa --ttl 2h --open
+sealtun share list <tunnel-id>
+sealtun share revoke <tunnel-id> review
+```
+
+Temporary share links only apply to HTTPS tunnels. `share create` updates the tunnel access policy and prints a URL with `?_sealtun_token=...`; the URL is shown only once because Sealtun stores only a token hash. `share list` shows names and expiry metadata without tokens. `share revoke` removes the token by name.
+
+## Export YAML
+
+```bash
+sealtun export <tunnel-id>
+sealtun export --all -o sealtun.yaml
+sealtun export --all --include-secret-placeholders
+```
+
+`export` converts local session records back into `sealtun.yaml`. It can safely export protocol, local port, custom domain, TTL, and IP allowlist/denylist. It cannot recover Basic Auth passwords, bearer tokens, or temporary link tokens because Sealtun stores only hashes; use `--include-secret-placeholders` when the user wants `passwordEnv`, `bearerTokenEnv`, and `tokenEnv` placeholders to fill manually.
 
 ## Stop And Clean Up
 

@@ -13,9 +13,10 @@ Sealtun 是一款功能强大、设计优雅的 CLI 工具，旨在为 **Sealos 
 - 👤 **Profile 多账号管理**：可把不同 Sealos 账号、region、workspace 和 kubeconfig 保存为命名 profile，按需切换。
 - 🚀 **一键暴露服务**：执行 `sealtun expose 8080`，即可获得一个受信任的 HTTPS URL，将流量安全地路由到本地。
 - 🌐 **自定义域名自动化**：可用 `domain plan/add/verify/status/doctor` 生成 CNAME 指引、等待 DNS、绑定域名并检查证书状态。
+- 🔗 **临时分享链接**：可用 `share create/list/revoke` 为 HTTPS 隧道生成 1 小时、2 小时等自动失效的访问链接。
 - 📊 **状态、诊断与工作台**：`doctor <tunnel-id>`、`inspect --remote`、`logs`、`events`、`metrics` 和 `dashboard` 可定位本地端口、daemon、远端 Pod、Service、Ingress 与证书问题，也可在本地工作台中管理隧道。
 - 🧩 **协议模板**：`template https|ssh|tcp|mysql|postgres|redis|mqtt` 可生成直接命令和 `sealtun.yaml` 示例。
-- 🧾 **声明式配置**：`apply -f sealtun.yaml` 可用 YAML 声明隧道，并以稳定名称幂等创建或更新。
+- 🧾 **声明式配置**：`apply -f sealtun.yaml` 可用 YAML 声明隧道，并以稳定名称幂等创建或更新；`export` 可把本地 session 导出回 YAML。
 - 🌐 **深度适配 Sealos**：原生使用 Sealos Cloud 的 Kubernetes、Service 与 Ingress 能力，当前稳定支持 HTTPS 入口和 WebSocket 隧道。
 - 🐳 **全能二进制文件**：客户端和服务器代理共用同一个精简的二进制文件和 Docker 镜像。
 - ☸️ **云原生设计**：完全使用标准的 Kubernetes API 管理资源，无需额外的复杂中间件。
@@ -191,6 +192,20 @@ sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-
 
 Bearer Token 和临时链接 token 至少需要 8 个字符，只保存 SHA-256 hash，不会写入 Deployment 参数；临时链接使用 `?_sealtun_token=...` 访问，Sealtun 会在转发到本地服务前移除该查询参数。IP 规则优先使用 Ingress/代理传入的 `X-Real-IP`，再回退到 `X-Forwarded-For` 中最后一个有效的代理确认客户端 IP。Basic Auth 与 Bearer/临时链接同时配置时，任一认证方式通过即可访问。
 
+为已有 HTTPS 隧道创建、查看和撤销临时分享链接：
+```bash
+# 自动生成 token，默认 1 小时失效；URL 只会在创建时显示一次
+sealtun share create <tunnel-id> --name review --ttl 1h
+
+# 查看链接元数据，不会泄漏 token 明文
+sealtun share list <tunnel-id>
+
+# 撤销指定名称的分享链接
+sealtun share revoke <tunnel-id> review
+```
+
+`share` 只适用于 HTTPS 隧道。SSH/TCP 四层入口没有 HTTP query token 认证层，因此不支持临时分享链接。
+
 Sealtun 会自动执行以下操作：
 1. 在你的 Sealos Namespace 中启动一个隧道代理 Pod。
 2. 配置 Ingress 路由规则。
@@ -320,16 +335,23 @@ sealtun dashboard
 
 # 自定义监听地址
 sealtun dashboard --addr 127.0.0.1 --port 19777
+
+# 启动后自动打开浏览器
+sealtun dashboard --open
 ```
 
 Dashboard 默认仅监听本地地址，数据来自当前 active profile/region/namespace 的本地 session、登录状态、远端诊断和自定义域名状态。页面可以创建 HTTPS/SSH/TCP 隧道、执行 `sealtun.yaml` 的 dry-run/diff/apply、stop/start/cleanup 隧道、查看 logs/metrics/events，并执行 domain plan/add/verify/clear。
 
 ```bash
 # 允许远程访问工作台，仅建议在可信网络临时使用
-sealtun dashboard --addr 0.0.0.0 --allow-remote
+sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth admin:change-me
+
+# 更推荐从环境变量读取 dashboard Basic Auth 密码
+export SEALTUN_DASHBOARD_PASSWORD='change-me'
+sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-auth-password-env SEALTUN_DASHBOARD_PASSWORD
 ```
 
-远程模式不会把 dashboard token 写进 HTML；访问者需要 URL fragment 或请求头中的 token。所有写操作都要求页面确认，并由后端再次校验 `confirm` 字段，避免误触或脚本误调用。
+远程模式不会把 dashboard token 写进 HTML；访问者需要 URL fragment 或请求头中的 token。启用 dashboard Basic Auth 后，HTML、静态资源和 API 都会先经过 Basic Auth。所有写操作仍要求页面确认，并由后端再次校验 `confirm` 字段，避免误触或脚本误调用。
 
 ### 7. 协议模板
 不确定该怎么写命令或声明式配置时，可以先生成模板：
@@ -382,6 +404,20 @@ sealtun diff -f sealtun.yaml
 # 创建或更新隧道
 sealtun apply -f sealtun.yaml
 ```
+
+从本地 session 反向导出声明式配置：
+```bash
+# 导出单条隧道到 stdout
+sealtun export <tunnel-id>
+
+# 导出所有本地 session
+sealtun export --all -o sealtun.yaml
+
+# 为已经启用 Basic Auth/Bearer/临时链接的隧道生成环境变量占位
+sealtun export --all --include-secret-placeholders
+```
+
+`export` 不会输出已经 hash 后的密码或 token 明文。默认会保留可安全还原的字段，例如协议、本地端口、自定义域名、TTL、IP allowlist/denylist；如果需要把认证配置也写进 YAML，可以使用 `--include-secret-placeholders` 生成 `passwordEnv`、`bearerTokenEnv` 或 `tokenEnv` 占位，再由用户自己填入对应环境变量。
 
 也可以使用展开的明文写法：
 ```yaml

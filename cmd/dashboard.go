@@ -19,6 +19,7 @@ import (
 	brandassets "github.com/labring/sealtun/assets"
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/labring/sealtun/pkg/k8s"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/spf13/cobra"
 )
@@ -43,8 +44,9 @@ type dashboardPageData struct {
 }
 
 type dashboardServer struct {
-	token      string
-	embedToken bool
+	token         string
+	embedToken    bool
+	pageBasicAuth *publicauth.BasicAuth
 }
 
 type dashboardScope struct {
@@ -56,6 +58,11 @@ type dashboardScope struct {
 var dashboardAddr string
 var dashboardPort int
 var dashboardAllowRemote bool
+var dashboardBasicAuth string
+var dashboardBasicAuthUser string
+var dashboardBasicAuthPassword string
+var dashboardBasicAuthPasswordEnv string
+var dashboardOpen bool
 
 var dashboardCmd = &cobra.Command{
 	Use:          "dashboard",
@@ -65,7 +72,11 @@ var dashboardCmd = &cobra.Command{
 		if dashboardPort < 1 || dashboardPort > 65535 {
 			return fmt.Errorf("invalid dashboard port %d", dashboardPort)
 		}
-		return runDashboard(cmd.Context(), dashboardAddr, dashboardPort, dashboardAllowRemote)
+		pageBasicAuth, err := dashboardBasicAuthConfig()
+		if err != nil {
+			return err
+		}
+		return runDashboard(cmd.Context(), dashboardAddr, dashboardPort, dashboardAllowRemote, pageBasicAuth)
 	},
 }
 
@@ -74,9 +85,38 @@ func init() {
 	dashboardCmd.Flags().StringVar(&dashboardAddr, "addr", "127.0.0.1", "Dashboard listen address")
 	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 19777, "Dashboard listen port")
 	dashboardCmd.Flags().BoolVar(&dashboardAllowRemote, "allow-remote", false, "Allow dashboard to listen on a non-loopback address")
+	dashboardCmd.Flags().StringVar(&dashboardBasicAuth, "basic-auth", "", "Protect dashboard pages and APIs with Basic Auth using username:password")
+	dashboardCmd.Flags().StringVar(&dashboardBasicAuthUser, "basic-auth-user", "", "Dashboard Basic Auth username")
+	dashboardCmd.Flags().StringVar(&dashboardBasicAuthPassword, "basic-auth-password", "", "Dashboard Basic Auth password")
+	dashboardCmd.Flags().StringVar(&dashboardBasicAuthPasswordEnv, "basic-auth-password-env", "", "Read dashboard Basic Auth password from an environment variable")
+	dashboardCmd.Flags().BoolVar(&dashboardOpen, "open", false, "Open the dashboard URL in the browser")
 }
 
-func runDashboard(ctx context.Context, addr string, port int, allowRemote bool) error {
+func dashboardBasicAuthConfig() (*publicauth.BasicAuth, error) {
+	if dashboardBasicAuth == "" && dashboardBasicAuthUser == "" && dashboardBasicAuthPassword == "" && dashboardBasicAuthPasswordEnv == "" {
+		return nil, nil
+	}
+	basicAuth, err := resolveBasicAuth(basicAuthInput{
+		Credential:  dashboardBasicAuth,
+		Username:    dashboardBasicAuthUser,
+		Password:    dashboardBasicAuthPassword,
+		PasswordEnv: dashboardBasicAuthPasswordEnv,
+	}, getenv)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard basic auth: %w", err)
+	}
+	return &publicauth.BasicAuth{
+		Username:     basicAuth.Username,
+		PasswordHash: basicAuthPasswordHash(basicAuth),
+	}, nil
+}
+
+func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, pageBasicAuth *publicauth.BasicAuth) error {
+	if pageBasicAuth != nil {
+		if err := publicauth.Validate(*pageBasicAuth); err != nil {
+			return fmt.Errorf("dashboard basic auth: %w", err)
+		}
+	}
 	loopback, err := validateDashboardListen(addr, allowRemote)
 	if err != nil {
 		return err
@@ -88,8 +128,9 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool) 
 		return err
 	}
 	handler := dashboardServer{
-		token:      token,
-		embedToken: loopback,
+		token:         token,
+		embedToken:    loopback,
+		pageBasicAuth: pageBasicAuth,
 	}
 	mux.HandleFunc("/", handler.serveHome)
 	mux.HandleFunc("/favicon.svg", serveDashboardFavicon)
@@ -100,7 +141,7 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool) 
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(addr, strconv.Itoa(port)),
-		Handler:           mux,
+		Handler:           handler.withPageAuth(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -112,11 +153,19 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool) 
 	}
 	errc := make(chan error, 1)
 	go func() {
+		displayURL := fmt.Sprintf("http://%s", server.Addr)
 		if loopback {
-			fmt.Printf("Sealtun dashboard listening on http://%s\n", server.Addr)
+			fmt.Printf("Sealtun dashboard listening on %s\n", displayURL)
 		} else {
-			fmt.Printf("Sealtun dashboard listening on http://%s/#token=%s\n", server.Addr, token)
+			displayURL = fmt.Sprintf("%s/#token=%s", displayURL, token)
+			fmt.Printf("Sealtun dashboard listening on %s\n", displayURL)
 			fmt.Println("Remote dashboard access requires the token in the URL fragment; keep it private.")
+		}
+		if pageBasicAuth != nil {
+			fmt.Println("Dashboard Basic Auth is enabled.")
+		}
+		if dashboardOpen {
+			openBrowser(displayURL)
 		}
 		errc <- server.Serve(listener)
 	}()
@@ -133,6 +182,21 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool) 
 		}
 		return err
 	}
+}
+
+func (s dashboardServer) withPageAuth(next http.Handler) http.Handler {
+	if s.pageBasicAuth == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || !publicauth.Check(*s.pageBasicAuth, username, password) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Sealtun Dashboard"`)
+			http.Error(w, "dashboard authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s dashboardServer) serveHome(w http.ResponseWriter, r *http.Request) {

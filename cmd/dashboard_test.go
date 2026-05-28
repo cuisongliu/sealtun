@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/labring/sealtun/pkg/auth"
+	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/session"
 )
 
@@ -90,6 +91,35 @@ func TestDashboardAPIRequiresToken(t *testing.T) {
 	}
 	if payload.OK || payload.Error == "" {
 		t.Fatalf("expected JSON error payload, got %#v", payload)
+	}
+}
+
+func TestDashboardPageBasicAuthProtectsHomeAndAPI(t *testing.T) {
+	t.Parallel()
+
+	authConfig, err := publicauth.NewBasicAuth("admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := dashboardServer{token: "secret", pageBasicAuth: authConfig}
+	handler := server.withPageAuth(http.HandlerFunc(server.serveHome))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without basic auth, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Sealtun Dashboard") {
+		t.Fatalf("expected dashboard auth challenge, got %q", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("admin", "secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with valid basic auth, got %d", rec.Code)
 	}
 }
 

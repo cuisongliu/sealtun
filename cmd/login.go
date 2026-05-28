@@ -227,7 +227,7 @@ func isSafeBrowserURL(value string) bool {
 }
 
 func openBrowser(url string) {
-	if !isSafeBrowserURL(url) {
+	if !isSafeBrowserURL(url) && !isSafeLocalBrowserURL(url) {
 		fmt.Printf("Skipped opening unsafe browser URL: %s\n", url)
 		return
 	}
@@ -252,4 +252,16 @@ func openBrowser(url string) {
 	} else {
 		fmt.Println("Browser opened automatically.")
 	}
+}
+
+func isSafeLocalBrowserURL(value string) bool {
+	u, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

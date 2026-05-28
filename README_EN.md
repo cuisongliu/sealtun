@@ -13,9 +13,10 @@ It connects your local development machine straight to the internet by dynamical
 - 👤 **Named Profiles**: Save different Sealos accounts, regions, workspaces, and kubeconfigs as named profiles and switch between them.
 - 🚀 **One-Command Expose**: Execute `sealtun expose 8080`, and get a fully trusted HTTPS URL for your localhost securely routed.
 - 🌐 **Custom Domain Automation**: Use `domain plan/add/verify/status/doctor` to generate CNAME guidance, wait for DNS, attach domains, and inspect certificate readiness.
+- 🔗 **Temporary Share Links**: Use `share create/list/revoke` to generate expiring links for HTTPS tunnels.
 - 📊 **Status, Diagnostics, and Workbench**: Use `doctor <tunnel-id>`, `inspect --remote`, `logs`, `events`, `metrics`, and `dashboard` to diagnose local ports, daemon state, remote Pods, Services, Ingresses, and certificates, or manage tunnels from the local workbench.
 - 🧩 **Protocol Templates**: Use `template https|ssh|tcp|mysql|postgres|redis|mqtt` to generate commands and `sealtun.yaml` examples.
-- 🧾 **Declarative Config**: Use `apply -f sealtun.yaml` to declare tunnels in YAML and create or update them with stable names.
+- 🧾 **Declarative Config**: Use `apply -f sealtun.yaml` to declare tunnels in YAML and create or update them with stable names; use `export` to turn local sessions back into YAML.
 - 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, HTTPS traffic, and WebSocket tunnels.
 - 🐳 **All-in-One Binary**: The client and the server agent live comfortably in the exact same compact binary and Docker image.
 - ☸️ **Cloud-Native by Design**: Resources on Sealos are natively managed using standard Kubernetes API constructs.
@@ -191,6 +192,20 @@ sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-
 
 Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the last valid proxy-confirmed client IP in `X-Forwarded-For`. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access.
 
+Create, list, and revoke temporary share links for an existing HTTPS tunnel:
+```bash
+# Generate a token automatically. The URL is shown only once.
+sealtun share create <tunnel-id> --name review --ttl 1h
+
+# List metadata without revealing tokens
+sealtun share list <tunnel-id>
+
+# Revoke a named share link
+sealtun share revoke <tunnel-id> review
+```
+
+`share` only applies to HTTPS tunnels. SSH/TCP L4 entries do not have an HTTP query-token layer and therefore do not support temporary share links.
+
 Sealtun will:
 1. Spin up a tunnel proxy Pod in your Sealos namespace.
 2. Establish the Ingress routes.
@@ -320,16 +335,23 @@ sealtun dashboard
 
 # Custom listen address
 sealtun dashboard --addr 127.0.0.1 --port 19777
+
+# Open the browser after startup
+sealtun dashboard --open
 ```
 
 The dashboard listens locally by default and uses only the current active profile/region/namespace. It reads local sessions, login state, remote diagnostics, and custom domain readiness. The page can create HTTPS/SSH/TCP tunnels, run `sealtun.yaml` dry-run/diff/apply, stop/start/cleanup tunnels, view logs/metrics/events, and run domain plan/add/verify/clear.
 
 ```bash
 # Allow remote access to the workbench; use only on trusted networks
-sealtun dashboard --addr 0.0.0.0 --allow-remote
+sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth admin:change-me
+
+# Prefer reading the dashboard Basic Auth password from the environment
+export SEALTUN_DASHBOARD_PASSWORD='change-me'
+sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-auth-password-env SEALTUN_DASHBOARD_PASSWORD
 ```
 
-Remote mode does not embed the dashboard token in HTML; callers need the URL fragment token or request header. Every mutating action requires a page confirmation and a backend-validated `confirm` field to avoid accidental clicks or scripted misuse.
+Remote mode does not embed the dashboard token in HTML; callers need the URL fragment token or request header. When dashboard Basic Auth is enabled, HTML, static assets, and APIs are all protected before the dashboard token layer. Every mutating action still requires a page confirmation and a backend-validated `confirm` field to avoid accidental clicks or scripted misuse.
 
 ### 7. Protocol templates
 When you are unsure which command or declarative config to use, generate a template first:
@@ -382,6 +404,20 @@ sealtun diff -f sealtun.yaml
 # Create or update tunnels
 sealtun apply -f sealtun.yaml
 ```
+
+Export local sessions back to declarative config:
+```bash
+# Export one tunnel to stdout
+sealtun export <tunnel-id>
+
+# Export every local session
+sealtun export --all -o sealtun.yaml
+
+# Include env var placeholders for configured auth secrets
+sealtun export --all --include-secret-placeholders
+```
+
+`export` never prints already-hashed passwords or tokens. By default it preserves safely recoverable fields such as protocol, local port, custom domain, TTL, and IP allowlist/denylist. Use `--include-secret-placeholders` to emit `passwordEnv`, `bearerTokenEnv`, or `tokenEnv` placeholders that you can fill manually.
 
 You can also use the expanded inline form:
 ```yaml

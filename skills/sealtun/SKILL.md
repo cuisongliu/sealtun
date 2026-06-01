@@ -1,6 +1,6 @@
 ---
 name: sealtun
-description: "Use this skill for Sealtun CLI usage, local-to-public tunnels, and Sealtun troubleshooting. Trigger for sealtun, sealtun.yaml, Sealos tunnel, ngrok/cloudflared-style tunnel, expose localhost/local port/local dev server, public HTTPS URL/domain for local app, public SSH/TCP tunnel, NodePort SSH, ProxyCommand fallback, webhook/payment/OAuth/bot callback to local service, preview/demo link, custom domain/CNAME, domain plan/add/verify/status/doctor, Basic Auth, Bearer token, IP allowlist/denylist, temporary access links/share links, ttl auto-expire, apply/diff/export multi-tunnel config, protocol templates for https/ssh/tcp/mysql/postgres/redis/mqtt, stop/start/resume, cleanup, daemon/session/logs/events/metrics/dashboard/dashboard basic auth/dashboard live/resources/discover local ports/doctor. Chinese triggers: 内网穿透, 本地服务公网访问, 本地端口暴露, 本地端口发现, localhost 暴露到公网, 公网预览链接, 临时分享链接, 公网域名, 自定义域名绑定, CNAME 指引, 公网 SSH, SSH 隧道, TCP 隧道, MySQL/Postgres/Redis/MQTT 公网访问, 第三方回调到本地, 隧道认证, 访问控制, 声明式配置, 导出 sealtun.yaml, 协议模板, 停止隧道, 清理隧道, 隧道诊断, 隧道日志, 隧道指标, 隧道事件, 资源清单, 资源占用, 实时状态. Do not use for generic Kubernetes/Ingress/DNS/SSH unless Sealtun is involved."
+description: "Use for Sealtun CLI help or Sealtun/Sealos local-to-public tunnels: install/login, expose localhost, HTTPS/SSH/TCP, sealtun.yaml apply/diff/export, dashboard, domains, access, logs/metrics/events, discover, stop/start/cleanup. Avoid generic Kubernetes, DNS, domain buying, prod deploy, ordinary SSH."
 ---
 
 # Sealtun
@@ -12,8 +12,24 @@ Classify the request before answering or editing:
 - User operation: install, shell completion, login, discover local ports, expose HTTPS, SSH, or generic TCP, generate protocol templates, secure public HTTP traffic, create/list/revoke temporary share links, plan/add/verify a custom domain, inspect state, stop/start/resume, clean up, export YAML, or use the dashboard. Read `references/cli.md`.
 - Declarative configuration: `sealtun.yaml`, `apply -f`, `diff -f`, `export`, multi-tunnel management, stable names, `ttl`, HTTPS access policies, SSH tunnel declarations, or generic TCP tunnel declarations. Read `references/declarative.md`.
 - Troubleshooting: login/profile mismatch, daemon/session issues, local port discovery/failures, SSH/TCP direct NodePort problems, remote Kubernetes problems, resource lists/resource occupancy, DNS, Ingress, certificate, logs, metrics, events, dashboard live updates, or dashboard behavior. Read `references/troubleshooting.md`.
+- Skill maintenance or quality review: trigger precision, workflow scoring, or regression prompts for this skill. Read `references/evals.md`.
 
 If the request is inside the Sealtun repository, prefer the current source tree and README over these references when they conflict. Use `rg` to inspect Cobra commands and flags before changing CLI usage guidance.
+
+## Intent Routing
+
+Use the user's intent to choose the shortest safe path:
+
+| User intent | Primary path | Verify with |
+| --- | --- | --- |
+| Make a local web app, dev server, callback, preview, or webhook public | `status` -> `discover` when port is unclear -> `expose <port>` | URL from output, `list --check`, `inspect <id>` |
+| Add Basic Auth, Bearer token, IP rules, or temporary links | HTTPS `expose` or YAML access policy | `inspect <id>`, protected request behavior, `metrics <id>` when relevant |
+| Expose SSH directly | `expose 22 --protocol ssh` | printed SSH host/port, `inspect <id> --remote`, user SSH client output |
+| Expose database, queue, MQTT, or arbitrary TCP | `template <protocol>` for guidance, then `expose <port> --protocol tcp` | printed `<host>:<node-port>`, protocol client, `list --check` |
+| Manage many tunnels or stable config | edit `sealtun.yaml`, then `apply --dry-run`, `diff`, real `apply` only when requested | apply output, `list`, `inspect` |
+| Custom domain | `domain plan` first; `domain add --wait` only when mutation is requested | `domain verify/status`, DNS CNAME, certificate status |
+| Debug connectivity or unclear state | non-mutating checks first: `status`, `list --check`, `inspect`, `doctor`, `logs/events/metrics` | layer-specific finding and next action |
+| Use dashboard | local dashboard by default; remote dashboard only with `--allow-remote` and Basic Auth guidance | page opens, live badge/resources tab, token/confirm behavior |
 
 ## Required Execution Flow
 
@@ -27,7 +43,17 @@ Follow this flow after the skill triggers:
 3. Gather minimum context. Inside this repo, inspect current code/README before relying on references. Outside the repo, use the references as the command source. Prefer non-mutating checks such as `sealtun --version`, `sealtun status`, `sealtun profile current`, `sealtun region current`, `sealtun discover`, `sealtun list`, `sealtun inspect`, and `sealtun doctor`.
 4. Handle first-use authorization gently. If `status` shows no login, explain that Sealtun needs Sealos authorization and kubeconfig before creating cloud resources. Guide the user through `sealtun login`, or `sealtun login <region> --profile <name>` when region/profile matters. If a browser/device authorization flow opens, tell the user to complete it in the browser and wait; do not treat the pause as a failure. After login, verify with `sealtun status`, `sealtun region current`, and optionally `sealtun profile current`.
 5. Control mutations. Do not run `sealtun expose`, real `sealtun apply`, `sealtun share create/revoke`, `sealtun domain add/set/clear`, `sealtun stop`, `sealtun cleanup`, `sealtun logout`, or dashboard write actions unless the user explicitly asked for that operation in the current task. `sealtun template`, `sealtun domain plan`, `sealtun share list`, `sealtun export`, dashboard viewing, `apply --dry-run`, `diff`, and read-only diagnostics are safe guidance steps. For declarative changes, prefer `apply --dry-run` and `diff` before real `apply`.
-6. Verify completion. After live operations, inspect the resulting tunnel/session/domain state. Report the exact command sequence and final state, without printing secrets.
+6. Verify completion. After live operations, use the contract below, then report the exact command sequence and final state without printing secrets.
+
+## Verification Contracts
+
+- `expose`: capture tunnel ID, public endpoint, and protocol-specific output; verify with `sealtun list --check` and `sealtun inspect <tunnel-id>`.
+- `apply`: run or recommend `apply --dry-run` and `diff` first; after real apply, verify every intended tunnel with `list` and `inspect`.
+- `domain add/set/clear`: verify with `domain status` or `domain verify`; for `add --wait`, report DNS/CNAME and certificate readiness separately.
+- `share create/revoke`: verify with `share list`; never repeat a one-time share token unless it is the command's immediate output.
+- `stop/start/cleanup`: verify with `list` or `inspect`; remember `stop` preserves entry resources while `cleanup` removes stopped, expired, or stale tunnel resources.
+- `dashboard`: confirm local or remote bind address, token/basic-auth posture, and whether write actions require page confirmation plus backend `confirm`.
+- Troubleshooting: name the failing layer before proposing a mutation: local login/profile, local port, daemon/session, remote resource, DNS/certificate, access policy, or user protocol/auth.
 
 ## Operating Rules
 

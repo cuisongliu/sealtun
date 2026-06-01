@@ -1,4 +1,4 @@
 interface:
   display_name: "Sealtun"
-  short_description: "Use and troubleshoot Sealtun CLI workflows"
-  default_prompt: "Use $sealtun to expose, secure, inspect, or troubleshoot a Sealtun tunnel."
+  short_description: "Expose local services, manage tunnels, and troubleshoot Sealtun"
+  default_prompt: "Use $sealtun for localhost-to-public URLs, HTTPS/SSH/TCP tunnels, sealtun.yaml, dashboard, domains, access control, and diagnostics."

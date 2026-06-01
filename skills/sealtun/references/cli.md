@@ -2,6 +2,21 @@
 
 Use this for interactive Sealtun operation: install, shell completion, login, expose HTTPS, SSH, or generic TCP, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
 
+## Quick Recipes
+
+Use these paths before listing every available flag:
+
+| Request | Commands | Notes |
+| --- | --- | --- |
+| "I want my local app on the internet" / "让本地项目跑在公网" | `sealtun status`; `sealtun discover` if the port is unclear; `sealtun expose <port>` | Defaults to HTTPS and daemon mode. Return the public URL and tunnel ID. |
+| "Give my local app a public domain" / "给本地服务一个公网域名" | `sealtun expose <port> --domain <domain>` or `sealtun domain plan <id> <domain>` | If the tunnel already exists, plan first, then add/set only when mutation is requested. |
+| "Expose SSH publicly" / "公网 SSH" | `sealtun expose 22 --protocol ssh` | Return `ssh <user>@<public-host> -p <node-port>`. Do not add HTTPS auth/domain features. |
+| "Expose Postgres/MySQL/Redis/MQTT" | `sealtun template postgres`; `sealtun expose 5432 --protocol tcp` | Common protocol templates map to generic TCP. Return `<host>:<node-port>`. |
+| "Secure this public URL" | HTTPS `expose` with Basic Auth, Bearer token, IP rules, or temporary links | Prefer env-backed secrets. HTTP access controls do not protect SSH/TCP NodePort. |
+| "Show or operate everything in a UI" | `sealtun dashboard --open` | Remote dashboard needs `--allow-remote` and should use dashboard Basic Auth. |
+
+After any live operation, verify using the matching command: `list --check`, `inspect <id>`, `domain status/verify`, `share list`, or `doctor <id>`.
+
 ## Install
 
 ```bash

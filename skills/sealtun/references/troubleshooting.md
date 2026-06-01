@@ -2,6 +2,22 @@
 
 Use this when users report tunnel failures, auth issues, SSH/TCP connection failures, stale sessions, stop/start confusion, domain problems, missing metrics, or confusing CLI output.
 
+## Fault Signature Map
+
+Start with the symptom, then confirm the layer before changing anything:
+
+| Symptom | Likely layer | First checks | Typical fix |
+| --- | --- | --- | --- |
+| Public URL shows offline/degraded | Local app or daemon | `list --check`, `inspect <id>`, `curl 127.0.0.1:<port>` | Start the local app, fix port, or restart/resume tunnel |
+| `ssh` connects then closes after auth starts | Local sshd/user auth | `ssh -vvv`, `logs <id>`, local sshd logs | Fix user/key/password/PAM on the machine running Sealtun |
+| TCP connection opens then closes | Local target protocol/auth | `inspect <id> --remote`, protocol client logs | Fix database/service bind/auth/TLS expectations |
+| Custom domain not ready | DNS/CNAME or certificate | `domain plan`, `domain verify`, `domain doctor` | Correct CNAME, then wait/verify certificate |
+| Dashboard live status disconnects | Dashboard stream/network | page live badge, manual Refresh, dashboard logs | It should fall back to polling; debug only if polling also fails |
+| Resources tab shows missing or warning resources | Remote Kubernetes | `doctor <id>`, `events <id>`, `inspect <id> --remote` | Fix image/pod/service/ingress/cert issue named by diagnostics |
+| Basic Auth/Bearer/link fails | HTTPS access policy | `inspect <id>`, `logs <id>`, token length/expiry/IP | Fix credential source, token, temporary link expiry, or IP rules |
+
+Do not jump straight to `cleanup --all`; it is destructive and only appropriate when the user intentionally wants all tracked remote resources removed.
+
 ## Fast Local Checks
 
 ```bash
@@ -183,3 +199,12 @@ sealtun dashboard --addr 127.0.0.1 --port 19777
 ```
 
 It can create tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events, and manage custom domains for the current active profile/region/namespace. Mutating actions require both the dashboard token and a confirmation value. Treat `dashboard --allow-remote` as exposing local operational control, not just read-only data; remote mode does not embed the token in HTML.
+
+## Troubleshooting Response Shape
+
+Answer in this order:
+
+1. State the suspected layer and why.
+2. Run or recommend the lowest-cost read-only checks.
+3. Interpret the result in Sealtun terms: local port, daemon/session, remote pod/service/ingress, DNS/certificate, access policy, or user protocol/auth.
+4. Only then suggest a mutation such as `start`, `stop`, `domain add`, or `cleanup`.

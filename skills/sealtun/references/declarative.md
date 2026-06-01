@@ -24,6 +24,20 @@ sealtun apply -f sealtun.yaml
 
 If login opens an authorization flow, explain that the user must complete it before `apply` can create remote resources. Keep `--dry-run` and `diff` as the safe preview path before real cloud mutation.
 
+## Declarative Decision Path
+
+Use declarative config when the user wants repeatability, multiple tunnels, stable names, reviewable changes, TTL, or config they can keep in a project. Use one-shot `expose` when they only need a quick temporary tunnel.
+
+| Need | YAML choice | Check |
+| --- | --- | --- |
+| Stable HTTPS tunnel | `protocol: https`, `name`, `localPort` | `apply --dry-run`, `diff`, then `inspect` |
+| Public SSH | `protocol: ssh`, `localPort: 22` | output must show SSH host and port |
+| Generic TCP/database | `protocol: tcp`, protocol-specific port | output must show `<host>:<port>` |
+| Auto-expire | `ttl: 2h` or similar Go duration | verify `expiresAt` behavior in output/session |
+| Secure HTTPS | `basicAuth` and/or `accessPolicy` | prefer env-backed secrets unless local-only inline config is intentional |
+
+Never add `domain`, `basicAuth`, or `accessPolicy` to `ssh` or `tcp` tunnels; those are HTTPS-layer features.
+
 ## Example
 
 ```yaml

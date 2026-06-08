@@ -315,7 +315,12 @@ func TestServerIPAllowlistAndDenylist(t *testing.T) {
 		},
 	})
 
+	// Simulate the in-cluster ingress as the immediate (trusted, private) peer
+	// so that X-Forwarded-For is honored.
+	const trustedPeer = "10.244.0.1:54321"
+
 	deniedReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	deniedReq.RemoteAddr = trustedPeer
 	deniedReq.Header.Set("X-Forwarded-For", "10.0.0.5")
 	deniedRec := httptest.NewRecorder()
 	server.ServeHTTP(deniedRec, deniedReq)
@@ -324,11 +329,22 @@ func TestServerIPAllowlistAndDenylist(t *testing.T) {
 	}
 
 	allowedReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	allowedReq.RemoteAddr = trustedPeer
 	allowedReq.Header.Set("X-Forwarded-For", "10.0.0.6")
 	allowedRec := httptest.NewRecorder()
 	server.ServeHTTP(allowedRec, allowedReq)
 	if allowedRec.Code != http.StatusBadGateway {
 		t.Fatalf("expected allowed IP to reach proxy path, got %d", allowedRec.Code)
+	}
+
+	// An untrusted (public) peer must not be able to spoof an allowlisted IP.
+	spoofReq := httptest.NewRequest(http.MethodGet, "https://example.test/app", nil)
+	spoofReq.RemoteAddr = "203.0.113.7:40000"
+	spoofReq.Header.Set("X-Forwarded-For", "10.0.0.6")
+	spoofRec := httptest.NewRecorder()
+	server.ServeHTTP(spoofRec, spoofReq)
+	if spoofRec.Code != http.StatusForbidden {
+		t.Fatalf("expected spoofed forwarded header from untrusted peer to be rejected, got %d", spoofRec.Code)
 	}
 }
 

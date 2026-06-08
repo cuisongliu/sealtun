@@ -40,6 +40,7 @@ type Server struct {
 	basicAuth                  *publicauth.BasicAuth
 	accessPolicy               *accesspolicy.Policy
 	basicAuthAuthorizedHeaders sync.Map
+	basicAuthCacheCount        atomic.Int64
 
 	mu            sync.RWMutex
 	activeSession *yamux.Session
@@ -402,14 +403,21 @@ func (s *Server) handleTunnelConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Replace active session
+	// Replace active session. Close the previous session after a short grace
+	// period instead of immediately, so in-flight requests on the old session
+	// can drain rather than being abruptly cut to a 502. This also makes
+	// reconnection storms less disruptive to active traffic.
 	s.mu.Lock()
-	if s.activeSession != nil && !s.activeSession.IsClosed() {
-		_ = s.activeSession.Close() // Disconnect old client to prevent leaks
-	}
+	old := s.activeSession
 	s.activeSession = session
 	s.connectedAt.Store(time.Now().Unix())
 	s.mu.Unlock()
+	if old != nil && !old.IsClosed() {
+		go func() {
+			time.Sleep(sessionDrainGrace)
+			_ = old.Close()
+		}()
+	}
 
 	fmt.Println("Local client connected successfully to the server pod.")
 
@@ -487,9 +495,34 @@ func (s *Server) authorizedBasicAuth(r *http.Request) bool {
 	}
 	authorized := publicauth.Check(*s.basicAuth, username, password)
 	if authorized && authHeader != "" {
-		s.basicAuthAuthorizedHeaders.Store(basicAuthHeaderDigest(authHeader), struct{}{})
+		s.cacheBasicAuthHeader(authHeader)
 	}
 	return authorized
+}
+
+// maxBasicAuthCacheEntries bounds the positive-auth header cache so a client
+// cannot exhaust memory by sending many distinct-but-valid Authorization
+// headers (Base64 has multiple encodings/padding for the same credentials).
+const maxBasicAuthCacheEntries = 1024
+
+// sessionDrainGrace is how long a superseded tunnel session is kept open after
+// a new client connects, so in-flight requests can finish instead of being cut.
+const sessionDrainGrace = 5 * time.Second
+
+func (s *Server) cacheBasicAuthHeader(authHeader string) {
+	if s.basicAuthCacheCount.Load() >= maxBasicAuthCacheEntries {
+		// Simple bounded-cache eviction: drop everything and start over once
+		// the cap is reached. The cost is at most one extra bcrypt verification
+		// per still-active client after a flush, which is acceptable.
+		s.basicAuthAuthorizedHeaders.Range(func(key, _ any) bool {
+			s.basicAuthAuthorizedHeaders.Delete(key)
+			return true
+		})
+		s.basicAuthCacheCount.Store(0)
+	}
+	if _, loaded := s.basicAuthAuthorizedHeaders.LoadOrStore(basicAuthHeaderDigest(authHeader), struct{}{}); !loaded {
+		s.basicAuthCacheCount.Add(1)
+	}
 }
 
 func basicAuthHeaderDigest(value string) string {

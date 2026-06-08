@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -199,6 +201,7 @@ const (
 	basicAuthUserKey      = "basicAuthUsername"
 	basicAuthPasswordKey  = "basicAuthPasswordHash"
 	accessPolicyKey       = "accessPolicy"
+	configDigestSaltKey   = "configDigestSalt"
 )
 
 var reservedCustomDomainSuffixes = []string{
@@ -410,7 +413,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 		}
 	}()
 
-	authSecretCreated, err := c.ensureAuthSecret(ctx, name, secret, opts.BasicAuth, opts.AccessPolicy)
+	authSecretCreated, digestSalt, err := c.ensureAuthSecret(ctx, name, secret, opts.BasicAuth, opts.AccessPolicy)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure tunnel auth secret: %w", err)
 	}
@@ -419,7 +422,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Deployment
-	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.BasicAuth, opts.AccessPolicy)
+	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, digestSalt, opts.BasicAuth, opts.AccessPolicy)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure deployment: %w", err)
 	}
@@ -543,7 +546,11 @@ func validateBasicAuthOptions(opts *BasicAuthOptions) error {
 	})
 }
 
-func serverConfigDigest(secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) string {
+// serverConfigDigest produces a change-detection digest for the server config.
+// It is HMAC-keyed with a per-tunnel random salt (stored only in the auth
+// Secret, never in the public pod annotation) so the annotation cannot be used
+// as an offline brute-force oracle to recover the tunnel secret or auth config.
+func serverConfigDigest(salt []byte, secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) string {
 	parts := []string{secret}
 	if basicAuth != nil {
 		parts = append(parts, strings.TrimSpace(basicAuth.Username), basicAuth.PasswordHash)
@@ -553,13 +560,32 @@ func serverConfigDigest(secret string, basicAuth *BasicAuthOptions, policy *acce
 			parts = append(parts, string(data))
 		}
 	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(sum[:])
+	mac := hmac.New(sha256.New, salt)
+	mac.Write([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
+func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, []byte, error) {
+	secretClient := c.clientset.CoreV1().Secrets(c.namespace)
+	existing, getErr := secretClient.Get(ctx, authSecretName(name), metav1.GetOptions{})
+
+	// Preserve an existing config-digest salt across updates so the digest
+	// stays stable when the config is unchanged; generate a fresh one on first
+	// create.
+	var salt []byte
+	if getErr == nil {
+		salt = existing.Data[configDigestSaltKey]
+	}
+	if len(salt) == 0 {
+		salt = make([]byte, 32)
+		if _, err := rand.Read(salt); err != nil {
+			return false, nil, fmt.Errorf("generate config digest salt: %w", err)
+		}
+	}
+
 	data := map[string][]byte{
 		tunnelAuthSecretKey: []byte(secret),
+		configDigestSaltKey: salt,
 	}
 	if basicAuth != nil {
 		data[basicAuthUserKey] = []byte(strings.TrimSpace(basicAuth.Username))
@@ -568,7 +594,7 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 	if !accesspolicy.Empty(policy) {
 		policyJSON, err := json.Marshal(policy)
 		if err != nil {
-			return false, fmt.Errorf("marshal access policy: %w", err)
+			return false, nil, fmt.Errorf("marshal access policy: %w", err)
 		}
 		data[accessPolicyKey] = policyJSON
 	}
@@ -582,22 +608,21 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 		Data: data,
 	}
 
-	secretClient := c.clientset.CoreV1().Secrets(c.namespace)
-	existing, err := secretClient.Get(ctx, authSecret.Name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		_, err = secretClient.Create(ctx, authSecret, metav1.CreateOptions{})
-		return err == nil, err
-	} else if err == nil {
+	if apierrors.IsNotFound(getErr) {
+		_, err := secretClient.Create(ctx, authSecret, metav1.CreateOptions{})
+		return err == nil, salt, err
+	} else if getErr == nil {
 		if err := rejectUnmanagedExisting("secret", authSecret.Name, name, existing.Labels); err != nil {
-			return false, err
+			return false, nil, err
 		}
 		authSecret.ResourceVersion = existing.ResourceVersion
-		_, err = secretClient.Update(ctx, authSecret, metav1.UpdateOptions{})
+		_, err := secretClient.Update(ctx, authSecret, metav1.UpdateOptions{})
+		return false, salt, err
 	}
-	return false, err
+	return false, nil, getErr
 }
 
-func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
+func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, salt []byte, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
 	replicas := int32(1)
 	labels := managedLabels(name)
 
@@ -656,7 +681,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 			},
 		})
 	}
-	podAnnotations[serverConfigDigestKey] = serverConfigDigest(secret, basicAuth, policy)
+	podAnnotations[serverConfigDigestKey] = serverConfigDigest(salt, secret, basicAuth, policy)
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

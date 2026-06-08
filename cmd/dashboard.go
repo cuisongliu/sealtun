@@ -1889,7 +1889,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     }
 
     function configPanel(t) {
-      const yaml = 'version: v1\ntunnels:\n  - name: ' + (t.tunnelId || "web") + '\n    localPort: ' + (t.localPort || "3000") + '\n    protocol: ' + (t.protocol || "https") + (t.customDomain ? '\n    domain: ' + t.customDomain : '') + '\n    readyTimeout: 90s';
+      const cfgDomain = safeHost(t.customDomain);
+      const yaml = 'version: v1\ntunnels:\n  - name: ' + (t.tunnelId || "web") + '\n    localPort: ' + (t.localPort || "3000") + '\n    protocol: ' + (t.protocol || "https") + (cfgDomain ? '\n    domain: ' + cfgDomain : '') + '\n    readyTimeout: 90s';
       return '<pre class="yaml">' + esc(yaml) + '</pre><div class="modal-actions"><button class="btn" data-copy="' + esc(yaml) + '">Copy YAML</button><button class="btn primary" data-open-apply="' + esc(t.tunnelId) + '">Open in Apply YAML</button></div>';
     }
 
@@ -2163,7 +2164,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 
     function configYAMLFor(t) {
       if (!t) return "version: v1\ntunnels:\n  - name: web\n    localPort: 3000\n    protocol: https\n";
-      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + "\n    localPort: " + (t.localPort || "3000") + "\n    protocol: " + (t.protocol || "https") + (t.customDomain ? "\n    domain: " + t.customDomain : "") + "\n    readyTimeout: 90s\n";
+      const cfgDomain = safeHost(t.customDomain);
+      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + "\n    localPort: " + (t.localPort || "3000") + "\n    protocol: " + (t.protocol || "https") + (cfgDomain ? "\n    domain: " + cfgDomain : "") + "\n    readyTimeout: 90s\n";
     }
 
     function modal(titleText, bodyHTML, actionsHTML) {

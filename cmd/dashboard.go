@@ -171,8 +171,11 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, 
 			displayURL = fmt.Sprintf("%s/#token=%s", displayURL, token)
 			// Print the tokenized URL to stderr (not stdout) so it is not
 			// captured by output redirection/pipes, and is less likely to end
-			// up in logs. Basic Auth is also required in this mode.
-			fmt.Fprintf(os.Stderr, "Sealtun dashboard listening on http://%s\n", server.Addr)
+			// up in logs. The token must be included here, otherwise a remote
+			// user who does not pass --open has no way to obtain it (the HTML
+			// does not embed the token in remote mode). Basic Auth is also
+			// required in this mode.
+			fmt.Fprintf(os.Stderr, "Sealtun dashboard listening on %s\n", displayURL)
 			fmt.Fprintln(os.Stderr, "Remote dashboard access requires the token in the URL fragment and Basic Auth; keep the URL private.")
 		}
 		if pageBasicAuth != nil {

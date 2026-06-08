@@ -126,10 +126,18 @@ func sessionEncryptionKey() ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- fixed path under the user-owned config directory.
 	if err != nil {
 		if os.IsExist(err) {
-			// Lost a race with another process; read the key it wrote.
-			existing, rerr := os.ReadFile(path) // #nosec G304 -- fixed path under the user-owned config directory.
-			if rerr == nil && len(existing) == 32 {
-				return existing, nil
+			// Lost a race with another process. Re-validate the path is a regular
+			// (non-symlink) file before reading, so an attacker who pre-created or
+			// swapped the path for a symlink in the race window cannot redirect
+			// this read.
+			if info, lerr := os.Lstat(path); lerr == nil {
+				if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+					return nil, fmt.Errorf("session key %s is not a regular file", path)
+				}
+				existing, rerr := os.ReadFile(path) // #nosec G304 -- fixed path under the user-owned config directory, Lstat-validated.
+				if rerr == nil && len(existing) == 32 {
+					return existing, nil
+				}
 			}
 		}
 		return nil, err

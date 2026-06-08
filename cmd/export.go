@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -46,7 +47,7 @@ var exportCmd = &cobra.Command{
 			if err := validateExportOutputPath(exportOutput); err != nil {
 				return err
 			}
-			if err := os.WriteFile(exportOutput, data, 0o600); err != nil {
+			if err := writeExportFileAtomic(exportOutput, data); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Exported %d tunnel(s) to %s.\n", len(config.Tunnels), exportOutput)
@@ -200,6 +201,39 @@ func validateExportOutputPath(path string) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("refusing to write export to %q: not a regular file", path)
+	}
+	return nil
+}
+
+// writeExportFileAtomic writes data to a temp file in the same directory with
+// O_EXCL (so a pre-created symlink cannot redirect the write) and then renames
+// it over the target. os.Rename replaces the target name itself rather than
+// following a symlink at that name, which closes the validate→write TOCTOU
+// window that a plain os.WriteFile would leave open.
+func writeExportFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
 	}
 	return nil
 }

@@ -1161,7 +1161,7 @@ func (c *Client) ensureCustomDomainResources(ctx context.Context, name, customDo
 	}
 
 	created := []createdResource{}
-	issuerCreated, err := c.applyDynamicResource(ctx, issuerGVR, customDomainIssuer(name))
+	issuerCreated, err := c.applyDynamicResource(ctx, issuerGVR, c.customDomainIssuer(name))
 	if err != nil {
 		return nil, fmt.Errorf("apply issuer %s: %w", name, err)
 	}
@@ -1183,7 +1183,23 @@ func (c *Client) ensureCustomDomainResources(ctx context.Context, name, customDo
 	return created, nil
 }
 
-func customDomainIssuer(name string) *unstructured.Unstructured {
+// acmeContactEmail derives a best-effort ACME registration contact from the
+// authenticated tenant namespace, so certificate expiry/policy notices are not
+// funneled into a single shared mailbox across all tenants. Falls back to a
+// generic per-namespace address when the namespace is unknown.
+func (c *Client) acmeContactEmail() string {
+	ns := strings.TrimSpace(c.namespace)
+	if ns == "" {
+		ns = "tenant"
+	}
+	domain := strings.TrimSpace(c.domain)
+	if domain == "" {
+		domain = "sealos.io"
+	}
+	return fmt.Sprintf("%s@%s", ns, domain)
+}
+
+func (c *Client) customDomainIssuer(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "cert-manager.io/v1",
 		"kind":       "Issuer",
@@ -1196,9 +1212,11 @@ func customDomainIssuer(name string) *unstructured.Unstructured {
 		"spec": map[string]interface{}{
 			"acme": map[string]interface{}{
 				"server": "https://acme-v02.api.letsencrypt.org/directory",
-				"email":  "admin@sealos.io",
+				"email":  c.acmeContactEmail(),
 				"privateKeySecretRef": map[string]interface{}{
-					"name": "letsencrypt-prod",
+					// Per-tunnel ACME account key so tenants do not share a
+					// single ACME account/registration.
+					"name": "letsencrypt-prod-" + name,
 				},
 				"solvers": []interface{}{
 					map[string]interface{}{
@@ -1526,7 +1544,22 @@ func (c *Client) cleanupCustomDomainResources(ctx context.Context, name string) 
 	if _, _, err := c.deleteManagedDynamicResourceIfExists(ctx, issuerGVR, name); err != nil {
 		recordFirstErr(&firstErr, err)
 	}
+	// The ACME account key secret is created by cert-manager (not us) from the
+	// Issuer's privateKeySecretRef, so it carries no managed label. Delete it by
+	// its deterministic per-tunnel name to avoid leaking it on teardown.
+	if err := c.deleteACMEKeySecret(ctx, name); err != nil {
+		recordFirstErr(&firstErr, err)
+	}
 	return firstErr
+}
+
+func (c *Client) deleteACMEKeySecret(ctx context.Context, name string) error {
+	keyName := "letsencrypt-prod-" + name
+	err := c.clientset.CoreV1().Secrets(c.namespace).Delete(ctx, keyName, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) deleteDeploymentIfOwned(ctx context.Context, name string) (bool, error) {
@@ -1759,6 +1792,9 @@ func (c *Client) CleanupManaged(ctx context.Context, tunnelIDs []string) (*Clean
 			}
 		} else if deleted {
 			summary.Issuers++
+		}
+		if err := c.deleteACMEKeySecret(ctx, name); err != nil && firstErr == nil {
+			firstErr = err
 		}
 		if err := c.cleanupCoreResources(ctx, name, summary); err != nil && firstErr == nil {
 			firstErr = err

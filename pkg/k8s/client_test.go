@@ -902,7 +902,7 @@ func TestEnsureTunnelWithCustomDomainRestoresCertificateWhenIngressUpdateFails(t
 	name := "sealtun-abc123"
 	oldCert := customDomainCertificate(name, "old.example.com")
 	oldCert.SetNamespace("default")
-	oldIssuer := customDomainIssuer(name)
+	oldIssuer := (&Client{namespace: "default"}).customDomainIssuer(name)
 	oldIssuer.SetNamespace("default")
 	clientset := fake.NewSimpleClientset(
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
@@ -1228,7 +1228,7 @@ func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
 			Labels:    map[string]string{managedLabelKey: name},
 		}},
 	)
-	issuer := customDomainIssuer(name)
+	issuer := (&Client{namespace: "default"}).customDomainIssuer(name)
 	issuer.SetNamespace("default")
 	certificate := customDomainCertificate(name, "dev.example.com")
 	certificate.SetNamespace("default")
@@ -1269,7 +1269,7 @@ func TestPauseTunnelScalesManagedDeploymentAndKeepsEntryResources(t *testing.T) 
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: authSecretName(name), Namespace: "default", Labels: managedLabels(name)}},
 	)
-	issuer := customDomainIssuer(name)
+	issuer := (&Client{namespace: "default"}).customDomainIssuer(name)
 	issuer.SetNamespace("default")
 	certificate := customDomainCertificate(name, "dev.example.com")
 	certificate.SetNamespace("default")
@@ -1540,7 +1540,7 @@ func TestCleanupManagedRemovesCustomDomainResources(t *testing.T) {
 		Namespace: "default",
 		Labels:    map[string]string{managedLabelKey: name},
 	}})
-	issuer := customDomainIssuer(name)
+	issuer := (&Client{namespace: "default"}).customDomainIssuer(name)
 	issuer.SetNamespace("default")
 	certificate := customDomainCertificate(name, "dev.example.com")
 	certificate.SetNamespace("default")
@@ -1783,7 +1783,7 @@ func TestTunnelResourcesSanitizesSecretsAndReportsCostHints(t *testing.T) {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name), CreationTimestamp: metav1.Now()}, Type: corev1.SecretTypeTLS, Data: map[string][]byte{"tls.key": []byte("secret")}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: authSecretName(name), Namespace: "default", Labels: managedLabels(name), CreationTimestamp: metav1.Now()}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"token": []byte("secret")}},
 	)
-	issuer := customDomainIssuer(name)
+	issuer := (&Client{namespace: "default"}).customDomainIssuer(name)
 	issuer.SetNamespace("default")
 	client := &Client{
 		clientset:     clientset,

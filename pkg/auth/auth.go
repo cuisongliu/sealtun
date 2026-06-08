@@ -139,7 +139,7 @@ func RequestDeviceAuthorization(region string) (*DeviceAuthResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := readLimitedResponseBody(resp.Body)
-		return nil, fmt.Errorf("device authorization failed (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("device authorization failed (%d): %s", resp.StatusCode, SanitizeServerText(string(body)))
 	}
 
 	var res DeviceAuthResponse
@@ -249,7 +249,7 @@ func GetRegionToken(region, accessToken string) (*RegionTokenResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := readLimitedResponseBody(resp.Body)
-		return nil, fmt.Errorf("region token exchange failed: %s", string(body))
+		return nil, fmt.Errorf("region token exchange failed: %s", SanitizeServerText(string(body)))
 	}
 
 	var res RegionTokenResponse
@@ -277,7 +277,7 @@ func ListWorkspaces(region, regionalToken string) (*NamespaceListResponse, error
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := readLimitedResponseBody(resp.Body)
-		return nil, fmt.Errorf("list workspaces failed: %s", string(body))
+		return nil, fmt.Errorf("list workspaces failed: %s", SanitizeServerText(string(body)))
 	}
 
 	var res NamespaceListResponse
@@ -315,7 +315,7 @@ func GetInitData(region string) (*InitDataResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := readLimitedResponseBody(resp.Body)
-		return nil, fmt.Errorf("get init data failed (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("get init data failed (%d): %s", resp.StatusCode, SanitizeServerText(string(body)))
 	}
 
 	var res InitDataResponse
@@ -346,4 +346,30 @@ func readBoundedResponseBody(r io.Reader) ([]byte, error) {
 		return body[:maxAuthResponseBodyBytes], fmt.Errorf("response body exceeds %d bytes", maxAuthResponseBodyBytes)
 	}
 	return body, nil
+}
+
+// SanitizeServerText strips control characters (including ANSI/VT100 terminal
+// escape sequences) from server-controlled strings before they are printed to
+// a terminal. A malicious or compromised region server could otherwise embed
+// escape sequences in an error body to clear the screen, rewrite earlier
+// output, or forge a fake prompt. Tab and newline are preserved; everything
+// below 0x20 (except \t and \n) and the DEL character are dropped, and the
+// result is length-capped.
+func SanitizeServerText(value string) string {
+	const maxLen = 2048
+	var b strings.Builder
+	for _, r := range value {
+		if r == '\t' || r == '\n' {
+			b.WriteRune(r)
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= maxLen {
+			break
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

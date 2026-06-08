@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -11,6 +12,12 @@ import (
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/spf13/cobra"
 )
+
+// userCodePattern restricts the server-supplied device user code to a safe
+// printable character set (alphanumerics and hyphens) before it is printed to
+// the terminal, preventing escape-sequence injection. This covers the RFC 8628
+// recommended format while tolerating lowercase codes.
+var userCodePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 var loginCmd = &cobra.Command{
 	Use:   "login [region]",
@@ -166,6 +173,13 @@ func validateDeviceAuthorization(deviceAuth *auth.DeviceAuthResponse) error {
 	}
 	if strings.TrimSpace(deviceAuth.UserCode) == "" {
 		return fmt.Errorf("device authorization response did not include a user code")
+	}
+	// The user code is server-controlled and printed verbatim to the terminal.
+	// Restrict it to the RFC 8628 user-code character set (uppercase
+	// alphanumerics and hyphens) so a malicious/MITM server cannot inject
+	// terminal escape sequences (fake prompts, OSC clipboard writes, etc.).
+	if !userCodePattern.MatchString(strings.TrimSpace(deviceAuth.UserCode)) {
+		return fmt.Errorf("device authorization response included a malformed user code")
 	}
 	if deviceAuth.ExpiresIn <= 0 {
 		return fmt.Errorf("device authorization response included invalid expiration %d", deviceAuth.ExpiresIn)

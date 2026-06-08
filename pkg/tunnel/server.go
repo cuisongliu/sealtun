@@ -586,6 +586,15 @@ func (s *Server) handleRawTCPConnection(conn net.Conn) {
 	s.lastTCPConnectedAt.Store(time.Now().Unix())
 	defer s.activeTCPConnections.Add(-1)
 
+	// Raw TCP (SSH/TCP) traffic has no HTTP layer, so token/Basic Auth cannot be
+	// enforced here. We can still apply the IP allow/denylist using the real
+	// connection peer address, which (unlike forwarded HTTP headers) cannot be
+	// spoofed by the client.
+	if ok, _ := accesspolicy.NetworkAllowedForIP(s.accessPolicy, rawConnPeerIP(conn)); !ok {
+		s.totalTCPErrors.Add(1)
+		return
+	}
+
 	s.mu.RLock()
 	session := s.activeSession
 	s.mu.RUnlock()
@@ -604,6 +613,25 @@ func (s *Server) handleRawTCPConnection(conn net.Conn) {
 	if err := s.relayRawTCPConns(conn, stream); err != nil && !expectedRelayClose(err) {
 		s.totalTCPErrors.Add(1)
 	}
+}
+
+// rawConnPeerIP extracts the remote peer IP from a raw TCP connection. Returns
+// nil when the address cannot be parsed, in which case an IP allowlist (if any)
+// will reject the connection (fail closed) and a denylist-only policy will allow
+// it (no rule matched).
+func rawConnPeerIP(conn net.Conn) net.IP {
+	if conn == nil {
+		return nil
+	}
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		host = addr.String()
+	}
+	return net.ParseIP(strings.TrimSpace(host))
 }
 
 func (s *Server) relayRawTCPConns(a, b net.Conn) error {

@@ -158,10 +158,11 @@ func saveLocked(session TunnelSession) error {
 	syncPIDStartToken(&session)
 	preserveScrubbedCredentials(path, &session)
 
-	data, err := json.MarshalIndent(session, "", "  ") // #nosec G117 -- tunnel secrets are intentionally persisted with 0600 permissions for daemon reconnects.
+	plaintext, err := json.MarshalIndent(session, "", "  ") // #nosec G117 -- tunnel secrets are encrypted at rest (see encryptSessionData) and the file is 0600.
 	if err != nil {
 		return err
 	}
+	data := encryptSessionData(plaintext)
 
 	// Create the temp file with O_EXCL so a same-UID attacker cannot pre-create
 	// the (otherwise predictable) temp path as a symlink and redirect this write
@@ -249,6 +250,10 @@ func preserveScrubbedCredentials(path string, next *TunnelSession) {
 	if err != nil {
 		return
 	}
+	data, err = decryptSessionData(data)
+	if err != nil {
+		return
+	}
 
 	var existing TunnelSession
 	if err := json.Unmarshal(data, &existing); err != nil {
@@ -317,9 +322,16 @@ func ScrubCredentials() error {
 		}
 
 		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path) // #nosec G304 -- entry is checked to be a regular .json file from the session directory.
+		raw, err := os.ReadFile(path) // #nosec G304 -- entry is checked to be a regular .json file from the session directory.
 		if err != nil {
 			return err
+		}
+		data, err := decryptSessionData(raw)
+		if err != nil {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
 		}
 
 		var sess TunnelSession
@@ -399,6 +411,10 @@ func getLockedFromConfigDir(root, tunnelID string) (*TunnelSession, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path is derived from a validated tunnel ID under the session directory.
 	if err != nil {
 		return nil, err
+	}
+	data, err = decryptSessionData(data)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt session %s: %w", tunnelID, err)
 	}
 
 	var sess TunnelSession
@@ -495,6 +511,10 @@ func listLockedFromConfigDir(root string) ([]TunnelSession, error) {
 				continue
 			}
 			return nil, err
+		}
+		data, err = decryptSessionData(data)
+		if err != nil {
+			continue
 		}
 
 		var sess TunnelSession

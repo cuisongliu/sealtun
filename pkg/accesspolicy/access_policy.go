@@ -96,7 +96,17 @@ func NetworkAllowed(policy *Policy, r *http.Request) (bool, string) {
 	if policy == nil || (len(policy.IPAllowlist) == 0 && len(policy.IPDenylist) == 0) {
 		return true, ""
 	}
-	ip := ClientIP(r)
+	return NetworkAllowedForIP(policy, ClientIP(r))
+}
+
+// NetworkAllowedForIP applies a policy's IP allowlist/denylist against a
+// caller-resolved client IP. It exists so non-HTTP transports (e.g. the raw TCP
+// listener) can enforce the same IP rules using the real peer address rather
+// than relying on forwardable HTTP headers.
+func NetworkAllowedForIP(policy *Policy, ip net.IP) (bool, string) {
+	if policy == nil || (len(policy.IPAllowlist) == 0 && len(policy.IPDenylist) == 0) {
+		return true, ""
+	}
 	if ip == nil {
 		return false, "client IP could not be determined"
 	}

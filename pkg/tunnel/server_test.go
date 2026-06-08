@@ -407,3 +407,40 @@ func TestStatusRecorderPreservesFirstStatus(t *testing.T) {
 		t.Fatalf("expected underlying recorder status 201, got %d", rec.Code)
 	}
 }
+
+type fakeAddr struct{ addr string }
+
+func (a fakeAddr) Network() string { return "tcp" }
+func (a fakeAddr) String() string  { return a.addr }
+
+type fakeConn struct {
+	net.Conn
+	remote string
+}
+
+func (c fakeConn) RemoteAddr() net.Addr { return fakeAddr{addr: c.remote} }
+
+func TestRawConnPeerIPParsesRemoteAddr(t *testing.T) {
+	t.Parallel()
+
+	ip := rawConnPeerIP(fakeConn{remote: "203.0.113.7:5555"})
+	if ip == nil || ip.String() != "203.0.113.7" {
+		t.Fatalf("expected 203.0.113.7, got %v", ip)
+	}
+	if got := rawConnPeerIP(nil); got != nil {
+		t.Fatalf("expected nil for nil conn, got %v", got)
+	}
+}
+
+func TestRawTCPPolicyEnforcesIPRulesByRealPeer(t *testing.T) {
+	t.Parallel()
+
+	policy := &accesspolicy.Policy{IPDenylist: []string{"203.0.113.7"}}
+
+	if ok, _ := accesspolicy.NetworkAllowedForIP(policy, rawConnPeerIP(fakeConn{remote: "203.0.113.7:1000"})); ok {
+		t.Fatal("expected denied peer to be rejected on the raw TCP path")
+	}
+	if ok, _ := accesspolicy.NetworkAllowedForIP(policy, rawConnPeerIP(fakeConn{remote: "198.51.100.4:1000"})); !ok {
+		t.Fatal("expected non-denied peer to be allowed on the raw TCP path")
+	}
+}

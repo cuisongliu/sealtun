@@ -26,7 +26,7 @@ func TestNetworkAllowedUsesDenyBeforeAllow(t *testing.T) {
 
 func TestClientIPPrefersRealIPHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
-	req.RemoteAddr = "192.0.2.1:1234"
+	req.RemoteAddr = "10.0.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "10.0.0.9")
 	req.Header.Set("X-Real-IP", "10.0.0.6")
 
@@ -37,11 +37,33 @@ func TestClientIPPrefersRealIPHeader(t *testing.T) {
 
 func TestClientIPUsesProxyForwardedForFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
-	req.RemoteAddr = "192.0.2.1:1234"
+	req.RemoteAddr = "10.0.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "203.0.113.200, 10.0.0.9")
 
 	if got := ClientIP(req).String(); got != "10.0.0.9" {
 		t.Fatalf("expected proxy-reported X-Forwarded-For IP to win, got %s", got)
+	}
+}
+
+func TestClientIPIgnoresForwardingHeadersFromUntrustedPeer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+	req.Header.Set("X-Real-IP", "10.0.0.6")
+	req.Header.Set("X-Forwarded-For", "10.0.0.9")
+
+	if got := ClientIP(req).String(); got != "203.0.113.5" {
+		t.Fatalf("expected spoofed headers to be ignored and peer IP used, got %s", got)
+	}
+}
+
+func TestNetworkAllowedRejectsSpoofedAllowlistHeaderFromPublicPeer(t *testing.T) {
+	policy := &Policy{IPAllowlist: []string{"10.0.0.0/8"}}
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+	req.Header.Set("X-Real-IP", "10.0.0.6")
+
+	if ok, _ := NetworkAllowed(policy, req); ok {
+		t.Fatal("expected spoofed allowlist header from public peer to be rejected")
 	}
 }
 

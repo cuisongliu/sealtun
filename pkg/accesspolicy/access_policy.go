@@ -102,7 +102,13 @@ func NetworkAllowed(policy *Policy, r *http.Request) (bool, string) {
 	}
 	for _, entry := range policy.IPDenylist {
 		matcher, err := cachedIPMatcher(entry)
-		if err == nil && matcher.Contains(ip) {
+		if err != nil {
+			// Fail closed: a denylist entry we cannot parse must never be
+			// treated as "does not match". Reject the request instead of
+			// silently letting a potentially-denied client through.
+			return false, "client IP denylist entry is invalid"
+		}
+		if matcher.Contains(ip) {
 			return false, "client IP is denied"
 		}
 	}
@@ -111,7 +117,13 @@ func NetworkAllowed(policy *Policy, r *http.Request) (bool, string) {
 	}
 	for _, entry := range policy.IPAllowlist {
 		matcher, err := cachedIPMatcher(entry)
-		if err == nil && matcher.Contains(ip) {
+		if err != nil {
+			// Fail closed: a malformed allowlist entry must not be able to
+			// match. Reject so a misconfigured policy cannot accidentally
+			// grant access.
+			return false, "client IP allowlist entry is invalid"
+		}
+		if matcher.Contains(ip) {
 			return true, ""
 		}
 	}
@@ -168,25 +180,47 @@ func ClientIP(r *http.Request) net.IP {
 	if r == nil {
 		return nil
 	}
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		if ip := net.ParseIP(realIP); ip != nil {
-			return ip
-		}
-	}
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		for i := len(parts) - 1; i >= 0; i-- {
-			part := parts[i]
-			if ip := net.ParseIP(strings.TrimSpace(part)); ip != nil {
+	peer := peerIP(r)
+	// Only trust client-supplied forwarding headers when the immediate peer is
+	// a trusted proxy (loopback or private range, where the in-cluster Sealos
+	// ingress terminates). A directly-connected public peer can forge these
+	// headers to bypass IP allow/denylists, so we ignore them in that case.
+	if trustedProxyPeer(peer) {
+		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+			if ip := net.ParseIP(realIP); ip != nil {
 				return ip
 			}
 		}
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			parts := strings.Split(forwarded, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				part := parts[i]
+				if ip := net.ParseIP(strings.TrimSpace(part)); ip != nil {
+					return ip
+				}
+			}
+		}
 	}
+	return peer
+}
+
+func peerIP(r *http.Request) net.IP {
 	host := r.RemoteAddr
 	if parsedHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		host = parsedHost
 	}
 	return net.ParseIP(strings.TrimSpace(host))
+}
+
+// trustedProxyPeer reports whether the immediate TCP peer is allowed to set
+// X-Real-IP / X-Forwarded-For. Loopback and RFC1918/RFC4193 private addresses
+// are treated as trusted because the Sealtun server only ever receives public
+// traffic through the cluster ingress on a private network.
+func trustedProxyPeer(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 type ipMatcher struct {

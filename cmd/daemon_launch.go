@@ -20,14 +20,20 @@ func ensureDaemonRunning() error {
 	release, err := daemonstate.AcquireLaunchLock()
 	if err != nil {
 		// Another process is likely starting the daemon; wait for it to come up.
-		deadline := time.Now().Add(8 * time.Second)
-		for time.Now().Before(deadline) {
+		timer := time.NewTimer(8 * time.Second)
+		defer timer.Stop()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
 			if daemonstate.Alive() {
 				return nil
 			}
-			time.Sleep(250 * time.Millisecond)
+			select {
+			case <-timer.C:
+				return fmt.Errorf("daemon launch is already in progress")
+			case <-ticker.C:
+			}
 		}
-		return fmt.Errorf("daemon launch is already in progress")
 	}
 	defer release()
 
@@ -62,8 +68,11 @@ func ensureDaemonRunning() error {
 	}
 	_ = logFile.Close()
 
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(8 * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		if daemonstate.Alive() {
 			_ = cmd.Process.Release()
 			return nil
@@ -73,11 +82,13 @@ func ensureDaemonRunning() error {
 			_ = cmd.Process.Release()
 			return fmt.Errorf("daemon exited before publishing state")
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-timer.C:
+			_ = cmd.Process.Release()
+			return fmt.Errorf("daemon did not publish liveness within 8s")
+		case <-ticker.C:
+		}
 	}
-
-	_ = cmd.Process.Release()
-	return fmt.Errorf("daemon did not publish liveness within 8s")
 }
 
 func openDaemonLogFile(path string) (*os.File, error) {
@@ -92,11 +103,14 @@ func openDaemonLogFile(path string) (*os.File, error) {
 }
 
 func waitForDaemonSession(tunnelID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
 	var lastState string
 	var lastError string
 	var connectedSince time.Time
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		sess, err := session.Get(tunnelID)
 		if err == nil {
 			lastState = sess.ConnectionState
@@ -112,13 +126,16 @@ func waitForDaemonSession(tunnelID string, timeout time.Duration) error {
 				connectedSince = time.Time{}
 			}
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-timer.C:
+			if lastError != "" {
+				return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s, last error: %s)", tunnelID, timeout, lastState, lastError)
+			}
+			if lastState != "" {
+				return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s)", tunnelID, timeout, lastState)
+			}
+			return fmt.Errorf("daemon did not connect tunnel %s within %s", tunnelID, timeout)
+		case <-ticker.C:
+		}
 	}
-	if lastError != "" {
-		return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s, last error: %s)", tunnelID, timeout, lastState, lastError)
-	}
-	if lastState != "" {
-		return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s)", tunnelID, timeout, lastState)
-	}
-	return fmt.Errorf("daemon did not connect tunnel %s within %s", tunnelID, timeout)
 }

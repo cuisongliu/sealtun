@@ -367,6 +367,13 @@ func (s dashboardServer) serveWatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// This is a long-lived streaming response, so clear the server's global
+	// WriteTimeout for this connection only. The global timeout protects all
+	// other handlers from slow-write/Slowloris-style resource exhaustion.
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
+
 	write := func() bool {
 		payload := dashboardWatchEvent{Type: "summary", Data: collectDashboardPayload(r.Context())}
 		data, err := json.Marshal(payload)

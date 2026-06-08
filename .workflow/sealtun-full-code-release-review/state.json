@@ -1,0 +1,51 @@
+{
+  "title": "Sealtun Full Code Release Review",
+  "slug": "sealtun-full-code-release-review",
+  "created_at": "2026-06-02T02:29:29+00:00",
+  "status": "completed",
+  "approval": {
+    "required": null,
+    "granted": null,
+    "notes": ""
+  },
+  "packets": [
+    {
+      "id": "packet-1-cli-lifecycle",
+      "status": "completed"
+    },
+    {
+      "id": "packet-2-dashboard-api-ui",
+      "status": "completed"
+    },
+    {
+      "id": "packet-3-k8s-tunnel-runtime",
+      "status": "completed"
+    },
+    {
+      "id": "packet-4-security-session-daemon",
+      "status": "completed"
+    },
+    {
+      "id": "packet-5-deps-docs-skills-release",
+      "status": "completed"
+    },
+    {
+      "id": "packet-6-integration-gate",
+      "status": "completed"
+    }
+  ],
+  "verification": {
+    "status": "passed",
+    "checks": [
+      "go test ./...",
+      "go vet ./...",
+      "go test -race ./cmd ./pkg/session ./pkg/accesspolicy ./pkg/publicauth ./pkg/k8s",
+      "go build",
+      "git diff --check",
+      "node --check scripts/build-npm-packages.mjs",
+      "go mod tidy -diff",
+      "skill sync diff",
+      "workflow validation"
+    ]
+  }
+}

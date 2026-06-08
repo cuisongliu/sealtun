@@ -121,6 +121,13 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, 
 	if err != nil {
 		return err
 	}
+	// In remote mode the page-fragment token is the only credential unless
+	// Basic Auth is configured, and that token is comparatively easy to leak
+	// (process args, shell history, logs). Require Basic Auth so a leaked or
+	// brute-forced token alone cannot grant write access over the network.
+	if !loopback && pageBasicAuth == nil {
+		return fmt.Errorf("refusing to expose dashboard remotely without Basic Auth; pass --basic-auth-user and --basic-auth-password-env (the token alone is not sufficient for network-exposed access)")
+	}
 
 	mux := http.NewServeMux()
 	token, err := newDashboardToken()
@@ -144,8 +151,11 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, 
 		Handler:           handler.withPageAuth(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      0,
-		IdleTimeout:       60 * time.Second,
+		// A global write timeout protects every handler from slow-write
+		// (Slowloris-style) resource exhaustion. The long-lived SSE watch
+		// handler clears this deadline per-connection via ResponseController.
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
@@ -158,8 +168,11 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, 
 			fmt.Printf("Sealtun dashboard listening on %s\n", displayURL)
 		} else {
 			displayURL = fmt.Sprintf("%s/#token=%s", displayURL, token)
-			fmt.Printf("Sealtun dashboard listening on %s\n", displayURL)
-			fmt.Println("Remote dashboard access requires the token in the URL fragment; keep it private.")
+			// Print the tokenized URL to stderr (not stdout) so it is not
+			// captured by output redirection/pipes, and is less likely to end
+			// up in logs. Basic Auth is also required in this mode.
+			fmt.Fprintf(os.Stderr, "Sealtun dashboard listening on http://%s\n", server.Addr)
+			fmt.Fprintln(os.Stderr, "Remote dashboard access requires the token in the URL fragment and Basic Auth; keep the URL private.")
 		}
 		if pageBasicAuth != nil {
 			fmt.Println("Dashboard Basic Auth is enabled.")

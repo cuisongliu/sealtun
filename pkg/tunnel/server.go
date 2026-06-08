@@ -76,7 +76,14 @@ func NewServerWithOptions(secret string, port int, protocol string, localPort st
 		basicAuth:    opts.BasicAuth,
 		accessPolicy: opts.AccessPolicy,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
+			// The tunnel control/TCP WebSocket endpoints are only ever dialed by
+			// the non-browser Sealtun CLI client, which never sets an Origin
+			// header. Reject any request that carries one so a browser page
+			// cannot be coerced into opening a tunnel WebSocket even if the
+			// bearer secret were somehow exposed to client-side JavaScript.
+			CheckOrigin: func(r *http.Request) bool {
+				return r.Header.Get("Origin") == ""
+			},
 		},
 	}
 

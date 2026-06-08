@@ -42,6 +42,17 @@ npx sealtun@latest login
 
 npm 包会按当前系统自动安装对应平台的可选二进制依赖，当前支持 macOS、Linux、Windows 的 `amd64/x64` 与 `arm64`。
 
+Windows 上如果使用 nvm-windows，或 Node/npm 安装在需要管理员权限的目录，全局安装可能因为 npm global prefix 不可写而失败。优先使用 `npx sealtun@latest --version` 临时运行，或把 npm 全局目录改到用户目录：
+
+```powershell
+npm config set prefix "$env:APPDATA\npm"
+$env:PATH += ";$env:APPDATA\npm"
+npm install -g sealtun
+sealtun --version
+```
+
+如果提示找不到 `@gitlayzer/sealtun-win32-x64` / `@gitlayzer/sealtun-win32-arm64`，请确认没有使用 `--omit=optional`，也没有设置 `npm config set optional false`。仍然受限时，可使用下方 PowerShell 方式直接下载 GitHub Release 二进制。
+
 macOS / Linux 快速安装：
 
 ```bash

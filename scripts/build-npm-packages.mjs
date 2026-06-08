@@ -310,11 +310,27 @@ if (!variant) {
   process.exit(1);
 }
 
+function printInstallHelp(reason) {
+  console.error(reason);
+  console.error('');
+  console.error('Troubleshooting:');
+  console.error('  - Reinstall with optional dependencies enabled: npm install -g ${args.packageName}');
+  console.error('  - One-off run without global install: npx ${args.packageName}@latest --version');
+  console.error('  - Ensure you did not use --omit=optional or npm config optional=false.');
+  if (process.platform === 'win32') {
+    console.error('  - On Windows, npm global installs can fail when the global prefix is not writable, especially with nvm-windows or Node under Program Files.');
+    console.error('  - Check the global prefix: npm config get prefix');
+    console.error('  - A user-writable prefix usually works: npm config set prefix "%APPDATA%\\\\npm"');
+    console.error('  - Ensure %APPDATA%\\\\npm is in PATH, then reopen PowerShell.');
+    console.error('  - If global install remains blocked, download sealtun_windows_amd64.zip or sealtun_windows_arm64.zip from GitHub Releases.');
+  }
+}
+
 let binaryPath;
 try {
   binaryPath = require.resolve(\`\${variant.packageName}/bin/\${variant.binary}\`);
 } catch (error) {
-  console.error(\`Could not find \${variant.packageName}. Reinstall sealtun with optional dependencies enabled.\`);
+  printInstallHelp(\`Could not find \${variant.packageName}. The platform-specific optional binary package was not installed.\`);
   process.exit(1);
 }
 
@@ -324,7 +340,7 @@ const result = spawnSync(binaryPath, process.argv.slice(2), {
 });
 
 if (result.error) {
-  console.error(result.error.message);
+  printInstallHelp(\`Failed to start sealtun binary at \${binaryPath}: \${result.error.message}\`);
   process.exit(1);
 }
 

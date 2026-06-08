@@ -42,6 +42,17 @@ npx sealtun@latest login
 
 The npm package installs the matching platform-specific optional binary package automatically. It currently supports macOS, Linux, and Windows on `amd64/x64` and `arm64`.
 
+On Windows, global npm installs can fail when nvm-windows is in use or when Node/npm lives under a directory that requires administrator permissions. Prefer `npx sealtun@latest --version` for a one-off run, or move the npm global prefix to a user-writable directory:
+
+```powershell
+npm config set prefix "$env:APPDATA\npm"
+$env:PATH += ";$env:APPDATA\npm"
+npm install -g sealtun
+sealtun --version
+```
+
+If npm reports that `@gitlayzer/sealtun-win32-x64` or `@gitlayzer/sealtun-win32-arm64` cannot be found, make sure you did not install with `--omit=optional` and did not set `npm config set optional false`. If the global install path is still blocked, use the PowerShell GitHub Release download below.
+
 Quick install for macOS / Linux:
 
 ```bash

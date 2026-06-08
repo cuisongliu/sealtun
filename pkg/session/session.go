@@ -46,7 +46,12 @@ type TunnelSession struct {
 	Mode            string           `json:"mode,omitempty"`
 	PID             int              `json:"pid"`
 	ConnectionState string           `json:"connectionState,omitempty"`
-	LastError       string           `json:"lastError,omitempty"`
+	// CredentialsScrubbed marks a session whose secrets were intentionally
+	// wiped (e.g. by logout). It is the authoritative scrub signal so that a
+	// tunnel that legitimately has no Secret (BasicAuth/AccessPolicy only) is
+	// not mistaken for a scrubbed one and silently stripped of its auth config.
+	CredentialsScrubbed bool             `json:"credentialsScrubbed,omitempty"`
+	LastError           string           `json:"lastError,omitempty"`
 	LastConnectedAt string           `json:"lastConnectedAt,omitempty"`
 	UpdatedAt       string           `json:"updatedAt,omitempty"`
 	CreatedAt       string           `json:"createdAt"`
@@ -234,13 +239,14 @@ func preserveScrubbedCredentials(path string, next *TunnelSession) {
 	if existing.TunnelID != next.TunnelID {
 		return
 	}
-	if existing.Secret == "" {
+	if existing.CredentialsScrubbed {
 		next.Secret = ""
 		next.BasicAuth = nil
 		next.AccessPolicy = nil
 		next.Kubeconfig = ""
 		next.PID = 0
 		next.ConnectionState = ConnectionStateStopped
+		next.CredentialsScrubbed = true
 		if next.LastError == "" {
 			next.LastError = "local credentials scrubbed"
 		}
@@ -311,7 +317,7 @@ func ScrubCredentials() error {
 			}
 			continue
 		}
-		if sess.Kubeconfig == "" && sess.Secret == "" && sess.PID == 0 && sess.ConnectionState == ConnectionStateStopped {
+		if sess.CredentialsScrubbed {
 			continue
 		}
 
@@ -321,6 +327,7 @@ func ScrubCredentials() error {
 		sess.AccessPolicy = nil
 		sess.PID = 0
 		sess.ConnectionState = ConnectionStateStopped
+		sess.CredentialsScrubbed = true
 		sess.LastError = "local credentials scrubbed"
 		if err := saveLocked(sess); err != nil {
 			return fmt.Errorf("scrub session %s credentials: %w", sess.TunnelID, err)

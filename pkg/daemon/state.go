@@ -138,13 +138,17 @@ func AcquireRuntimeLock() (func(), error) {
 	}
 
 	if info, err := regularDaemonFileInfo(path, "daemon runtime lock"); err == nil {
-		if alive, ok := lockOwnerAlive(path); ok && alive {
+		// Resolve the lock owner's liveness once, then decide. Calling
+		// lockOwnerAlive twice could observe contradictory states if the owner
+		// exits between the two reads.
+		alive, ok := lockOwnerAlive(path)
+		if ok && alive {
 			return nil, os.ErrExist
 		}
 		if state, stateErr := LoadState(); stateErr == nil && session.ProcessAlive(state.PID) {
 			return nil, os.ErrExist
 		}
-		switch alive, ok := lockOwnerAlive(path); {
+		switch {
 		case ok && !alive:
 			_ = os.Remove(path)
 		case time.Since(info.ModTime()) > heartbeatMaxAge:

@@ -1217,8 +1217,18 @@ func TestClearCustomDomainKeepsOfficialIngressWhenCertificateCleanupFails(t *tes
 }
 
 func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
-	name := "sealtun-abc123"
+	name := "sealtun-abc123-tcp"
 	clientset := fake.NewSimpleClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{managedLabelKey: name},
+		}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{
+			Name:      tcpServiceName(name),
+			Namespace: "default",
+			Labels:    map[string]string{managedLabelKey: name},
+		}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "default",
@@ -1241,8 +1251,14 @@ func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
 		domain:        "sealosgzg.site",
 	}
 
-	if err := client.CleanupTunnel(context.Background(), "abc123"); err != nil {
+	if err := client.CleanupTunnel(context.Background(), "abc123-tcp"); err != nil {
 		t.Fatalf("CleanupTunnel returned error: %v", err)
+	}
+	if _, err := clientset.CoreV1().Services("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected service to be deleted, got %v", err)
+	}
+	if _, err := clientset.CoreV1().Services("default").Get(context.Background(), tcpServiceName(name), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected tcp service to be deleted, got %v", err)
 	}
 	if _, err := client.dynamicClient.Resource(certificateGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected certificate to be deleted, got %v", err)
@@ -1255,6 +1271,40 @@ func TestCleanupTunnelAlwaysRemovesCustomDomainResources(t *testing.T) {
 	}
 	if _, err := clientset.CoreV1().Secrets("default").Get(context.Background(), authSecretName(name), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected auth secret to be deleted, got %v", err)
+	}
+}
+
+func TestCleanupCreatedRemovesServicesWhenTunnelNameEndsWithTCP(t *testing.T) {
+	name := "sealtun-abc123-tcp"
+	clientset := fake.NewSimpleClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{managedLabelKey: name},
+		}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{
+			Name:      tcpServiceName(name),
+			Namespace: "default",
+			Labels:    map[string]string{managedLabelKey: name},
+		}},
+	)
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+	}
+
+	err := client.cleanupCreated(context.Background(), []createdResource{
+		{kind: resourceService, name: name},
+		{kind: resourceTCPService, name: tcpServiceName(name)},
+	})
+	if err != nil {
+		t.Fatalf("cleanupCreated returned error: %v", err)
+	}
+	if _, err := clientset.CoreV1().Services("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected service to be deleted, got %v", err)
+	}
+	if _, err := clientset.CoreV1().Services("default").Get(context.Background(), tcpServiceName(name), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected tcp service to be deleted, got %v", err)
 	}
 }
 
@@ -1591,6 +1641,49 @@ func TestCleanupManagedContinuesAfterCustomResourceDeleteFailure(t *testing.T) {
 	}
 	if _, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected deployment to be deleted despite certificate error, got %v", err)
+	}
+}
+
+func TestWaitForReadyRequiresObservedUpdatedReplicas(t *testing.T) {
+	name := "sealtun-abc123"
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  "default",
+			Generation: 2,
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			Replicas:           2,
+			ReadyReplicas:      1,
+			AvailableReplicas:  1,
+			UpdatedReplicas:    0,
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment)
+	client := &Client{clientset: clientset, namespace: "default"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := client.WaitForReady(ctx, "abc123"); err == nil {
+		t.Fatal("expected old ready replicas to be ignored before rollout is observed and updated")
+	}
+
+	ready := deployment.DeepCopy()
+	ready.Status.ObservedGeneration = ready.Generation
+	ready.Status.Replicas = 1
+	ready.Status.UpdatedReplicas = 1
+	ready.Status.ReadyReplicas = 1
+	ready.Status.AvailableReplicas = 1
+	if _, err := clientset.AppsV1().Deployments("default").UpdateStatus(context.Background(), ready, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer readyCancel()
+	if err := client.WaitForReady(readyCtx, "abc123"); err != nil {
+		t.Fatalf("expected updated rollout to be ready: %v", err)
 	}
 }
 

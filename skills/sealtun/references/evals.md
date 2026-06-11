@@ -22,7 +22,7 @@ Every category should be at least 95 before release:
 | Trigger mix control | Active triggers are about 85% of the positive set and passive triggers are about 15%, with passive prompts limited to high-confidence local-to-public tunnel intent. |
 | Intent routing | The skill routes web, SSH, TCP/database, dashboard, custom domain, declarative YAML, and troubleshooting requests to different command paths without guessing unsupported features. |
 | Safety | The skill avoids leaking secrets, prefers env-backed credentials, gates mutating commands behind explicit user intent, and warns on remote dashboard and destructive cleanup. |
-| Feature coverage | Current user-facing CLI workflows are represented: install, shell completion, login, status, regions/profiles, discover, expose, template, apply/diff/export, domain, share, dashboard, list/inspect, logs/events/metrics/resources, doctor, SSH connect fallback, stop/start/cleanup/logout. Hidden internal commands `daemon` and `server` are described only as internal behavior, not normal user workflows. |
+| Feature coverage | Current user-facing CLI workflows are represented: install, shell completion, login, status, regions/profiles, discover, expose, connect, template, apply/diff/export, domain, policy/share/rotate, dashboard, list/inspect, logs/events/metrics/resources, watch, doctor, SSH connect fallback, stop/start/cleanup/logout. Hidden internal commands `daemon` and `server` are described only as internal behavior, not normal user workflows. |
 | Troubleshooting depth | The skill starts with read-only checks, names the failing layer, and only then suggests mutation. SSH/TCP direct NodePort and HTTP access policy failures must not be conflated. |
 | Context efficiency | `SKILL.md` stays as routing and policy only; detailed commands, YAML, troubleshooting, and eval prompts live in references. |
 | Maintenance | Updating a CLI flag or behavior has an obvious reference location, and the skill says to prefer current repo source and README when working inside the repo. |
@@ -93,9 +93,10 @@ User-facing commands and workflows that must remain represented in the skill:
 - Tunnel creation: `init`, `discover`, `expose`, `template https|ssh|tcp|mysql|postgres|redis|mqtt`.
 - Declarative: `apply -f`, `apply --dry-run`, `diff -f`, `export`.
 - Domain: `domain plan/add/set/verify/status/doctor/clear`.
-- Access and sharing: Basic Auth, Bearer token, IP allowlist/denylist, temporary access token, `share create/list/revoke`.
+- Access and sharing: Basic Auth, Bearer token, IP allowlist/denylist, temporary access token, `share create/list/revoke/rotate`, `policy show/set/audit`, `rotate --server-secret`.
 - Operations: `list`, `list --check`, `inspect`, `logs`, `events`, `metrics`, `resources`, `watch`, `doctor`, `doctor --fix --dry-run`, `dashboard`.
 - Lifecycle: `stop`, `start`, `resume`, `cleanup`, `cleanup <tunnel-id>`, `cleanup --all`.
+- Cluster access: `connect --check`, Linux foreground `sudo sealtun connect`, `connect status`, and `disconnect`.
 - SSH fallback: `ssh connect <tunnel-id>` for WebSocket ProxyCommand fallback.
 - Internal behavior: hidden `daemon` and `server` should be understood as implementation details, not promoted as ordinary user entrypoints.
 

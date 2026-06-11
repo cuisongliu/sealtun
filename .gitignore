@@ -4,6 +4,7 @@
 /sealtun.exe
 /packages/
 /homepage/
+/.workflow/
 
 # Generated copyright application artifacts
 /docs/copyright/

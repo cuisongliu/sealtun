@@ -1,10 +1,12 @@
+<p align="center">
+  <img src="./assets/sealtun-logo.svg.png" alt="Sealtun logo" width="220">
+</p>
+
 # Sealtun
 
 [中文版本](./README.md)
 
-Sealtun is a powerful, elegant CLI tool that provides a `cloudflared` tunnel-like experience entirely built on **Sealos Cloud** and **Kubernetes**.
-
-It connects your local development machine straight to the internet by dynamically provisioning Kubernetes resources (Deployments, Services, Ingresses) and tunneling the traffic securely via bidirectional multiplexed WebSocket streams (`yamux`).
+Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It can quickly publish local Web, SSH, database, or debugging services to the internet, and on Linux it can also let local tools directly access in-cluster Services and Pods.
 
 ## Features
 
@@ -17,11 +19,10 @@ It connects your local development machine straight to the internet by dynamical
 - 🛡️ **Security Operations**: HTTPS tunnels support Basic Auth, Bearer tokens, temporary links, IP rules, rate limits, access audit, and server secret rotation.
 - 📊 **Status, Diagnostics, and Workbench**: Use `doctor <tunnel-id>`, `inspect --remote`, `logs`, `events`, `metrics`, and `dashboard` to diagnose local ports, daemon state, remote Pods, Services, Ingresses, and certificates, or manage tunnels from the local workbench.
 - 🧭 **Guided UX and Safe Fixes**: Use `init` for first-run command/YAML recommendations, and `resources`, `watch`, or `doctor --fix --dry-run` to understand and conservatively repair tunnel state.
+- 🔌 **Cluster Service Access**: On Linux, `sudo sealtun connect` lets TCP clients directly reach Service FQDNs, Service ClusterIPs, and Pod IPs without SOCKS or client-side proxy config.
 - 🧩 **Protocol Templates**: Use `template https|ssh|tcp|mysql|postgres|redis|mqtt` to generate commands and `sealtun.yaml` examples.
 - 🧾 **Declarative Config**: Use `apply -f sealtun.yaml` to declare tunnels in YAML and create or update them with stable names; use `export` to turn local sessions back into YAML.
-- 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, HTTPS traffic, and WebSocket tunnels.
-- 🐳 **All-in-One Binary**: The client and the server agent live comfortably in the exact same compact binary and Docker image.
-- ☸️ **Cloud-Native by Design**: Resources on Sealos are natively managed using standard Kubernetes API constructs.
+- 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, certificates, and Kubernetes resources.
 
 ## Installation / Setup
 
@@ -90,34 +91,6 @@ make build
 ./sealtun --version
 ```
 
-`make build` injects the current Git short hash into the local binary version by default, which makes it easy to verify that the local binary matches the pushed commit. Untagged local builds use the `latest` remote tunnel image; tagged releases are built by GitHub Actions using the tag version for GitHub Release assets and matching container images.
-
-## Release Process
-
-Releases are tag-driven:
-
-```bash
-# 1. Test, commit, and push the branch first
-go test ./...
-make build
-git push origin master
-
-# 2. Then create and push a semantic version tag
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-Pushing a `v*` tag triggers GitHub Actions: GoReleaser builds multi-platform binaries and creates the GitHub Release, while the Docker workflow builds and publishes the matching `ghcr.io/gitlayzer/sealtun` image. After release, run `make build && ./sealtun --version` again to confirm that the local binary reports the Git hash that was pushed.
-
-After GitHub Release assets finish building, publish the npm packages:
-
-```bash
-NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish-dry-run
-NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
-```
-
-`make npm-publish` downloads the GoReleaser binary assets from the matching GitHub Release, generates the local `packages/` directory, publishes each platform optional dependency first, and then publishes the main package. `packages/` is a publish-time artifact and is ignored by `.gitignore`, so it is not committed.
-
 ## Codex Skill
 
 This repository includes `skills/sealtun` so Codex-like AI agents can understand and use the Sealtun CLI more accurately. The skill is designed to passively match requests about `sealtun`, `sealtun.yaml`, local tunneling, exposing a local port, temporary public preview links, third-party callbacks to a local service, tunnel access control, public SSH, or generic TCP tunnels.
@@ -138,6 +111,36 @@ cp -R skills/sealtun ~/.codex/skills/sealtun
 ```
 
 ## Quick Start
+
+Shortest path:
+
+```bash
+# 1. Login to Sealos
+sealtun login
+
+# 2. Discover local ports and print recommended commands
+sealtun init
+
+# 3. Publish a local Web service, for example localhost:3000
+sealtun expose 3000
+
+# 4. Inspect status, diagnosis, and logs
+sealtun list
+sealtun doctor
+sealtun logs <tunnel-id>
+
+# 5. Stop, resume, or clean up
+sealtun stop <tunnel-id>
+sealtun start <tunnel-id>
+sealtun cleanup <tunnel-id>
+```
+
+Access in-cluster Services/Pods from Linux:
+
+```bash
+sealtun connect --check
+sudo sealtun connect
+```
 
 ### 1. Login to Sealos
 Perform the device authentication (which operates smoothly without passwords similar to `gh auth login`):
@@ -249,12 +252,7 @@ Rotate the tunnel server secret:
 sealtun rotate <tunnel-id> --server-secret
 ```
 
-The new server secret is printed only once and saved back to the local session; the remote Deployment rolls to the new secret. `policy`, `share`, and `rotate` operate on the tunnel represented by the local session. HTTPS access policies do not apply to SSH/TCP NodePort traffic.
-
-Sealtun will:
-1. Spin up a tunnel proxy Pod in your Sealos namespace.
-2. Establish the Ingress routes.
-3. Automatically connect via WebSockets and proxy all L7 connections back to `localhost:3000`.
+The new server secret is printed only once and saved back to the local session; the remote tunnel rolls to the new secret. `policy`, `share`, and `rotate` operate on the tunnel represented by the local session. HTTPS access policies do not apply to SSH/TCP NodePort traffic.
 
 ### 3. Public SSH access
 If the Sealos region supports public TCP NodePort, use the L4 SSH mode to connect directly to the public host and port:
@@ -342,7 +340,36 @@ Remove the custom domain:
 sealtun domain clear <tunnel-id>
 ```
 
-### 6. Observe tunnels and run the local dashboard
+### 6. Access services inside the cluster
+`sealtun expose` makes a local service public. `sealtun connect` goes the other direction: local tools can directly reach Service FQDNs, Service ClusterIPs, and Pod IPs inside the current Sealos/Kubernetes namespace. It only uses the active Sealtun profile/region/namespace and kubeconfig, so users do not need to manually change RBAC.
+
+Linux currently supports transparent TCP mode. Sealtun temporarily updates local `iptables` and `/etc/hosts`, then forwards intercepted TCP connections through Kubernetes `pods/portforward`. This is not a SOCKS/HTTP proxy, and clients do not need proxy configuration.
+```bash
+sealtun connect --check
+sealtun connect --check --json
+sudo sealtun connect
+sudo sealtun connect --namespace ns-3rgvtt74
+```
+
+`sealtun connect` runs in the foreground by default. Keep that terminal open, or stop it from another terminal with `sudo sealtun disconnect`; a normal `Ctrl-C` or `disconnect` cleans up the `iptables` rules and `/etc/hosts` block written by Sealtun.
+
+After connect starts, use normal client commands:
+```bash
+curl http://my-service.ns-3rgvtt74.svc.cluster.local:8080
+curl http://10.96.0.12:8080      # Service ClusterIP
+curl http://10.244.0.22:3000     # Pod IP
+```
+
+Inspect or stop the current cluster connect session:
+```bash
+sealtun connect status
+sealtun connect status --json
+sudo sealtun disconnect
+```
+
+Limitations: transparent data-plane support is Linux + TCP only and requires root plus `iptables`; ICMP/ping and UDP are not supported. macOS/Windows fail clearly as unsupported for now.
+
+### 7. Observe tunnels and run the local dashboard
 Show remote tunnel pod logs:
 ```bash
 sealtun logs <tunnel-id>
@@ -437,7 +464,7 @@ sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-
 
 Remote mode does not embed the dashboard token in HTML; callers need the URL fragment token or request header. When dashboard Basic Auth is enabled, HTML, static assets, and APIs are all protected before the dashboard token layer. Every mutating action still requires a page confirmation and a backend-validated `confirm` field to avoid accidental clicks or scripted misuse.
 
-### 7. Protocol templates
+### 8. Protocol templates
 When you are unsure which command or declarative config to use, generate a template first:
 
 ```bash
@@ -449,7 +476,7 @@ sealtun template redis --name cache
 
 Templates print both a one-shot `sealtun expose` command and a `sealtun.yaml` snippet. `mysql`, `postgres`, `redis`, and `mqtt` templates default to generic TCP L4 entries; only HTTPS templates support custom domains and access controls.
 
-### 8. Declarative config
+### 9. Declarative config
 Create `sealtun.yaml`:
 ```yaml
 version: v1
@@ -521,14 +548,6 @@ basicAuth:
 ```
 
 `name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
-
-## Architecture Details
-
-- **HTTPS tunnel protocol**: Yamux over WebSocket.
-- **SSH L4 entry**: `--protocol ssh` exposes only a public TCP NodePort that connects directly to local SSH; HTTPS is kept only as an internal control channel, not as a default application URL.
-- **Generic TCP L4 entry**: `--protocol tcp` exposes a public TCP NodePort for local databases, queues, debugging services, and other non-HTTP protocols.
-- **Sealos Resources**: When you trigger `sealtun expose`, it creates `sealtun-*` variants of `Deployment`, `Service`, and `Ingress` in the active cluster context.
-- **Images**: Relies on a single Docker image built natively targeting `ghcr.io/gitlayzer/sealtun`.
 
 ## License
 

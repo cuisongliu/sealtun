@@ -1,6 +1,6 @@
 # Sealtun CLI Reference
 
-Use this for interactive Sealtun operation: install, shell completion, guided init, login, expose HTTPS, SSH, or generic TCP, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
+Use this for interactive Sealtun operation: install, shell completion, guided init, login, expose HTTPS, SSH, or generic TCP, access cluster-internal Services/Pods with connect, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
 
 ## Quick Recipes
 
@@ -13,6 +13,7 @@ Use these paths before listing every available flag:
 | "Give my local app a public domain" / "给本地服务一个公网域名" | `sealtun expose <port> --domain <domain>` or `sealtun domain plan <id> <domain>` | If the tunnel already exists, plan first, then add/set only when mutation is requested. |
 | "Expose SSH publicly" / "公网 SSH" | `sealtun expose 22 --protocol ssh` | Return `ssh <user>@<public-host> -p <node-port>`. Do not add HTTPS auth/domain features. |
 | "Expose Postgres/MySQL/Redis/MQTT" | `sealtun template postgres`; `sealtun expose 5432 --protocol tcp` | Common protocol templates map to generic TCP. Return `<host>:<node-port>`. |
+| "Access a cluster Service from my laptop" / "本机访问集群内服务" | `sealtun connect --check`; Linux `sudo sealtun connect` | Direct TCP access to Service FQDN, Service ClusterIP, and Pod IP. No SOCKS/proxy setup. |
 | "Secure this public URL" | HTTPS `expose`, `policy set`, or `share` with Basic Auth, Bearer token, IP rules, rate limit, audit, or temporary links | Prefer env-backed secrets. HTTP access controls do not protect SSH/TCP NodePort. |
 | "Show or operate everything in a UI" | `sealtun dashboard --open` | Remote dashboard needs `--allow-remote` and should use dashboard Basic Auth. |
 
@@ -118,6 +119,41 @@ sealtun expose 3000 --bearer-token share-secret
 sealtun expose 3000 --temporary-access-token review-link-secret --temporary-access-ttl 1h
 ```
 
+## Access Cluster Services From Local Tools
+
+`connect` is the reverse direction of `expose`: local tools can directly access Services or Pods inside the active Sealos/Kubernetes namespace. It does not create a public URL and does not expose anything to the internet.
+
+```bash
+sealtun connect --check
+sealtun connect --check --json
+sudo sealtun connect
+sudo sealtun connect --namespace ns-3rgvtt74
+sudo sealtun connect --mode tun --listen 127.0.0.1:15443
+sealtun connect status
+sealtun connect status --json
+sudo sealtun disconnect
+```
+
+Current behavior:
+
+- Uses only the active Sealtun login and active kubeconfig namespace.
+- `connect --check` reports capability and expected blockers.
+- Linux starts transparent TCP mode by temporarily updating local `iptables` and `/etc/hosts`.
+- `connect` runs in the foreground; stop with Ctrl-C or `sudo sealtun disconnect`, which cleans up the managed rules and hosts block.
+- Supports Service FQDN, Service ClusterIP, and Pod IP access for TCP clients.
+- Does not support ICMP/ping or UDP.
+- Do not suggest SOCKS, HTTP CONNECT, `ALL_PROXY`, or `socks5h` setup as a Sealtun user-facing solution.
+
+Examples:
+
+```bash
+curl http://my-service.default.svc.cluster.local:8080
+curl http://10.96.0.12:8080
+curl http://10.244.0.22:3000
+```
+
+On macOS/Windows, say the transparent data plane is currently Linux-only.
+
 Token constraints and behavior:
 
 - Bearer and temporary tokens must be at least 8 characters.
@@ -137,6 +173,7 @@ sealtun policy set <tunnel-id> --clear-rate-limit
 sealtun policy set <tunnel-id> --no-audit
 sealtun policy audit <tunnel-id> --since 10m
 sealtun policy audit <tunnel-id> --since 10m --json
+sealtun policy audit <tunnel-id> --since 10m --limit 200
 ```
 
 Use `policy audit` when the user asks why access was allowed or denied. Reasons include Basic Auth, Bearer, temporary token, IP rule, and rate limit.
@@ -231,6 +268,7 @@ sealtun resources <tunnel-id> --json
 sealtun watch
 sealtun watch <tunnel-id>
 sealtun watch <tunnel-id> --json
+sealtun watch <tunnel-id> --interval 5s --count 20
 
 sealtun list
 sealtun list --check
@@ -246,9 +284,12 @@ sealtun logs <tunnel-id> --since 10m
 
 sealtun metrics <tunnel-id>
 sealtun metrics <tunnel-id> --json
+sealtun metrics <tunnel-id> --remote=false
+sealtun metrics <tunnel-id> --server=false
 
 sealtun events <tunnel-id>
 sealtun events <tunnel-id> --json
+sealtun events <tunnel-id> --timeout 8s
 
 sealtun dashboard
 sealtun dashboard --addr 127.0.0.1 --port 19777
@@ -285,8 +326,12 @@ Use `doctor <tunnel-id>` for "why can't I connect" issues. It checks the local s
 ```bash
 sealtun share create <tunnel-id> --name review --ttl 1h
 sealtun share create <tunnel-id> --name qa --ttl 2h --open
+sealtun share create <tunnel-id> --name qa --ttl 2h --json
 sealtun share list <tunnel-id>
+sealtun share list <tunnel-id> --json
 sealtun share rotate <tunnel-id> review --ttl 1h
+sealtun share rotate <tunnel-id> review --ttl 1h --json
+sealtun share rotate <tunnel-id> review --ttl 1h --open
 sealtun share revoke <tunnel-id> review
 ```
 
@@ -296,6 +341,7 @@ Temporary share links only apply to HTTPS tunnels. `share create` updates the tu
 
 ```bash
 sealtun rotate <tunnel-id> --server-secret
+sealtun rotate <tunnel-id> --server-secret --json
 ```
 
 Use this for tunnel server secret rotation. The new secret is shown once and saved locally. It updates the remote Deployment and does not change the SSH/TCP access model; HTTPS access policies still apply only to public HTTPS traffic.
@@ -305,6 +351,7 @@ Use this for tunnel server secret rotation. The new secret is shown once and sav
 ```bash
 sealtun export <tunnel-id>
 sealtun export --all -o sealtun.yaml
+sealtun export --all --json
 sealtun export --all --include-secret-placeholders
 ```
 

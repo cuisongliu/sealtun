@@ -832,18 +832,9 @@ func rawConnPeerIP(conn net.Conn) net.IP {
 }
 
 func (s *Server) relayRawTCPConns(a, b net.Conn) error {
-	errc := make(chan error, 2)
-	go func() {
-		n, err := io.Copy(a, b)
+	return relayBidirectional(a, b, func(n int64) {
 		s.totalTCPBytes.Add(n)
-		errc <- err
-	}()
-	go func() {
-		n, err := io.Copy(b, a)
-		s.totalTCPBytes.Add(n)
-		errc <- err
-	}()
-	return <-errc
+	})
 }
 
 func expectedRelayClose(err error) bool {

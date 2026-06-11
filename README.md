@@ -1,10 +1,12 @@
+<p align="center">
+  <img src="./assets/sealtun-logo.svg.png" alt="Sealtun logo" width="220">
+</p>
+
 # Sealtun
 
 [English Version](./README_EN.md)
 
-Sealtun 是一款功能强大、设计优雅的 CLI 工具，旨在为 **Sealos Cloud** 和 **Kubernetes** 用户提供类似 `cloudflared` 的内网穿透体验。
-
-它通过动态调度 Kubernetes 资源（Deployments, Services, Ingresses），并利用双向多路复用 WebSocket 流（`yamux`）建立安全隧道，将你的本地开发环境直接暴露到公网。
+Sealtun 是一款面向 **Sealos Cloud** 和 **Kubernetes** 用户的本地隧道 CLI。它可以把本地 Web、SSH、数据库或调试服务快速暴露到公网，也可以让 Linux 本机直接访问集群内 Service 和 Pod。
 
 ## ✨ 特性
 
@@ -17,11 +19,10 @@ Sealtun 是一款功能强大、设计优雅的 CLI 工具，旨在为 **Sealos 
 - 🛡️ **安全运营**：HTTPS 隧道支持 Basic Auth、Bearer Token、临时链接、IP 规则、rate limit、访问审计和 server secret 轮换。
 - 📊 **状态、诊断与工作台**：`doctor <tunnel-id>`、`inspect --remote`、`logs`、`events`、`metrics` 和 `dashboard` 可定位本地端口、daemon、远端 Pod、Service、Ingress 与证书问题，也可在本地工作台中管理隧道。
 - 🧭 **引导与自动修复**：`init` 可根据登录状态和本地监听端口推荐命令/YAML；`resources`、`watch` 与 `doctor --fix --dry-run` 可帮助理解和保守修复隧道状态。
+- 🔌 **集群内服务访问**：Linux 下 `sudo sealtun connect` 可直接访问 Service FQDN、Service ClusterIP 和 Pod IP 的 TCP 流量，无需 SOCKS 或客户端代理配置。
 - 🧩 **协议模板**：`template https|ssh|tcp|mysql|postgres|redis|mqtt` 可生成直接命令和 `sealtun.yaml` 示例。
 - 🧾 **声明式配置**：`apply -f sealtun.yaml` 可用 YAML 声明隧道，并以稳定名称幂等创建或更新；`export` 可把本地 session 导出回 YAML。
-- 🌐 **深度适配 Sealos**：原生使用 Sealos Cloud 的 Kubernetes、Service 与 Ingress 能力，当前稳定支持 HTTPS 入口和 WebSocket 隧道。
-- 🐳 **全能二进制文件**：客户端和服务器代理共用同一个精简的二进制文件和 Docker 镜像。
-- ☸️ **云原生设计**：完全使用标准的 Kubernetes API 管理资源，无需额外的复杂中间件。
+- 🌐 **深度适配 Sealos**：原生使用 Sealos Cloud 的域名、证书和 Kubernetes 资源能力。
 
 ## 📦 安装
 
@@ -90,34 +91,6 @@ make build
 ./sealtun --version
 ```
 
-`make build` 默认会把当前 Git short hash 注入到本地二进制的 version 中，用于确认本地二进制和已 push 的代码提交一致。未打 tag 的本地构建会使用 `latest` 远端隧道镜像；正式 tag 发布时，GitHub Actions 会用 tag 版本构建 GitHub Release 产物和同版本容器镜像。
-
-## 🚢 发版流程
-
-项目采用 tag 驱动发布：
-
-```bash
-# 1. 先完成测试、提交并 push 分支
-go test ./...
-make build
-git push origin master
-
-# 2. 再创建并 push 语义化版本 tag
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-推送 `v*` tag 后，GitHub Actions 会触发 GoReleaser 生成多平台二进制和 GitHub Release；Docker workflow 会同步构建并发布 `ghcr.io/gitlayzer/sealtun` 镜像。发版后建议重新执行 `make build && ./sealtun --version`，确认本地二进制显示的 Git hash 与已 push 的提交一致。
-
-GitHub Release 产物构建完成后，再发布 npm 包：
-
-```bash
-NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish-dry-run
-NPM_VERSION=X.Y.Z NPM_RELEASE_TAG=vX.Y.Z make npm-publish
-```
-
-`make npm-publish` 会先从对应 GitHub Release 下载 GoReleaser 生成的二进制资产，生成本地 `packages/` 目录，然后先发布各平台可选依赖包，最后发布主包。`packages/` 是发包中间产物，已被 `.gitignore` 忽略，不提交到远端。
-
 ## 🤖 Codex Skill
 
 仓库内置了 `skills/sealtun`，用于让 Codex 类 AI agent 更准确地理解和使用 Sealtun CLI。这个 skill 会在用户提到 `sealtun`、`sealtun.yaml`、内网穿透、本地端口暴露、临时公网预览链接、第三方回调到本地、隧道访问控制、公网 SSH 或 TCP 隧道等场景时被动匹配。
@@ -138,6 +111,36 @@ cp -R skills/sealtun ~/.codex/skills/sealtun
 ```
 
 ## 🚀 快速上手
+
+最短路径：
+
+```bash
+# 1. 登录 Sealos
+sealtun login
+
+# 2. 发现本地端口并生成推荐命令
+sealtun init
+
+# 3. 暴露本地 Web 服务，例如 localhost:3000
+sealtun expose 3000
+
+# 4. 查看状态、诊断和日志
+sealtun list
+sealtun doctor
+sealtun logs <tunnel-id>
+
+# 5. 停止、恢复或清理
+sealtun stop <tunnel-id>
+sealtun start <tunnel-id>
+sealtun cleanup <tunnel-id>
+```
+
+Linux 下访问集群内 Service/Pod：
+
+```bash
+sealtun connect --check
+sudo sealtun connect
+```
 
 ### 1. 登录到 Sealos
 执行设备认证（类似于 `gh auth login`，无需手动输入密码）：
@@ -249,12 +252,7 @@ sealtun policy audit <tunnel-id> --since 10m --json
 sealtun rotate <tunnel-id> --server-secret
 ```
 
-新的 server secret 只在本次命令输出中显示一次，并会写回本地 session；远端 Deployment 会滚动到新 secret。`policy`、`share`、`rotate` 都只对当前本地 session 记录对应的隧道生效，HTTPS 访问策略不会应用到 SSH/TCP NodePort 流量。
-
-Sealtun 会自动执行以下操作：
-1. 在你的 Sealos Namespace 中启动一个隧道代理 Pod。
-2. 配置 Ingress 路由规则。
-3. 建立加密 WebSocket 隧道，并将所有流量转发至 `localhost:3000`。
+新的 server secret 只在本次命令输出中显示一次，并会写回本地 session；远端隧道会滚动到新 secret。`policy`、`share`、`rotate` 都只对当前本地 session 记录对应的隧道生效，HTTPS 访问策略不会应用到 SSH/TCP NodePort 流量。
 
 ### 3. SSH 公网访问
 如果 Sealos Region 支持公网 TCP NodePort，可以用四层 SSH 模式直接连接公网域名和端口：
@@ -342,7 +340,36 @@ sealtun domain doctor <tunnel-id>
 sealtun domain clear <tunnel-id>
 ```
 
-### 6. 观测和本地控制台
+### 6. 访问集群内服务
+`sealtun expose` 是把本地服务暴露到公网；`sealtun connect` 则是反向能力：让本机工具直接访问当前 Sealos/Kubernetes namespace 内的 Service FQDN、Service ClusterIP 或 Pod IP。它只使用当前 active profile/region/namespace 的 Sealtun 登录态和 kubeconfig，不要求用户手动修改 RBAC。
+
+Linux 当前支持透明 TCP 模式：Sealtun 会临时写入本机 `iptables` 和 `/etc/hosts`，把目标 TCP 连接转发到 Kubernetes `pods/portforward`。这不是 SOCKS/HTTP 代理，用户不需要给客户端配置代理。
+```bash
+sealtun connect --check
+sealtun connect --check --json
+sudo sealtun connect
+sudo sealtun connect --namespace ns-3rgvtt74
+```
+
+`sealtun connect` 默认以前台进程运行。保持该终端打开，或在另一个终端执行 `sudo sealtun disconnect` 停止；正常 `Ctrl-C` 或 `disconnect` 会清理 Sealtun 写入的 `iptables` 规则和 `/etc/hosts` 管理块。
+
+连接启动后可以直接访问：
+```bash
+curl http://my-service.ns-3rgvtt74.svc.cluster.local:8080
+curl http://10.96.0.12:8080      # Service ClusterIP
+curl http://10.244.0.22:3000     # Pod IP
+```
+
+查看或停止当前 cluster connect：
+```bash
+sealtun connect status
+sealtun connect status --json
+sudo sealtun disconnect
+```
+
+限制：当前透明数据面仅支持 Linux + TCP，需要 root 权限和 `iptables`；不支持 ICMP/ping 和 UDP。macOS/Windows 会明确提示暂不支持。
+
+### 7. 观测和本地控制台
 查看远端隧道 Pod 日志：
 ```bash
 sealtun logs <tunnel-id>
@@ -437,7 +464,7 @@ sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-
 
 远程模式不会把 dashboard token 写进 HTML；访问者需要 URL fragment 或请求头中的 token。启用 dashboard Basic Auth 后，HTML、静态资源和 API 都会先经过 Basic Auth。所有写操作仍要求页面确认，并由后端再次校验 `confirm` 字段，避免误触或脚本误调用。
 
-### 7. 协议模板
+### 8. 协议模板
 不确定该怎么写命令或声明式配置时，可以先生成模板：
 
 ```bash
@@ -449,7 +476,7 @@ sealtun template redis --name cache
 
 模板会同时输出一次性 `sealtun expose` 命令和可提交到项目内的 `sealtun.yaml` 片段。`mysql`、`postgres`、`redis`、`mqtt` 模板默认走通用 TCP 四层入口；HTTPS 模板才支持自定义域名和访问控制。
 
-### 8. 声明式配置
+### 9. 声明式配置
 创建 `sealtun.yaml`：
 ```yaml
 version: v1
@@ -521,14 +548,6 @@ basicAuth:
 ```
 
 `name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
-
-## 🛠️ 架构详情
-
-- **HTTPS 隧道协议**：基于 WebSocket 的 Yamux 多路复用。
-- **SSH 四层入口**：`--protocol ssh` 只提供公网 TCP NodePort 直连本地 SSH；HTTPS 只作为内部控制通道，不提供默认业务 URL。
-- **通用 TCP 四层入口**：`--protocol tcp` 提供公网 TCP NodePort，可暴露本地数据库、消息队列、调试服务等非 HTTP 协议。
-- **Sealos 资源**：触发 `sealtun expose` 时，会在集群中创建以 `sealtun-*` 命名的 `Deployment`、`Service` 和 `Ingress`。
-- **镜像来源**：依赖于 `ghcr.io/gitlayzer/sealtun` 的原生镜像。
 
 ## 📄 许可证
 

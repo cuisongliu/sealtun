@@ -120,19 +120,7 @@ func handleLocalForwarding(stream net.Conn, localPort, protocol string) {
 	}
 	defer localConn.Close()
 
-	errc := make(chan error, 2)
-
-	go func() {
-		_, err := io.Copy(localConn, stream)
-		errc <- err
-	}()
-
-	go func() {
-		_, err := io.Copy(stream, localConn)
-		errc <- err
-	}()
-
-	<-errc
+	_ = relayBidirectional(localConn, stream, nil)
 }
 
 func unavailableResponse(localPort string) string {

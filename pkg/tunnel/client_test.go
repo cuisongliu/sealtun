@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -56,4 +57,84 @@ func TestRawTCPLocalForwardingDoesNotWriteHTTPFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected raw TCP fallback to close without HTTP response bytes")
 	}
+}
+
+func TestRawTCPLocalForwardingKeepsResponseAfterClientHalfClose(t *testing.T) {
+	t.Parallel()
+
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localListener.Close()
+
+	localDone := make(chan struct{})
+	go func() {
+		defer close(localDone)
+		conn, err := localListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("ready\n"))
+		data, _ := io.ReadAll(conn)
+		if len(data) > 0 {
+			_, _ = conn.Write(append([]byte("echo:"), data...))
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(localListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamListener.Close()
+
+	acceptc := make(chan net.Conn, 1)
+	go func() {
+		conn, err := streamListener.Accept()
+		if err == nil {
+			acceptc <- conn
+		}
+	}()
+	client, err := net.Dial("tcp", streamListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	server := <-acceptc
+
+	forwardDone := make(chan struct{})
+	go func() {
+		defer close(forwardDone)
+		handleLocalForwarding(server, port, tunnelprotocol.TCP)
+	}()
+
+	if _, err := client.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if tcp, ok := client.(*net.TCPConn); ok {
+		if err := tcp.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal("expected tcp client connection")
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	payload, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, "ready\n") || !strings.Contains(text, "echo:ping") {
+		t.Fatalf("expected ready banner and echo response, got %q", text)
+	}
+
+	<-forwardDone
+	<-localDone
 }

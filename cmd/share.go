@@ -325,6 +325,14 @@ func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, p
 	if err != nil {
 		return fmt.Errorf("update remote access policy: %w", err)
 	}
+	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
+	defer cancelReady()
+	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
+		return fmt.Errorf("wait for updated access policy rollout: %w", err)
+	}
+	if err := waitForDaemonSession(sess.TunnelID, daemonConnectTimeout); err != nil {
+		return fmt.Errorf("wait for local daemon to reconnect after access policy update: %w", err)
+	}
 	sess.AccessPolicy = emptyAccessPolicyAsNil(policy)
 	sess.Host = hosts.PublicHost
 	sess.SealosHost = hosts.SealosHost

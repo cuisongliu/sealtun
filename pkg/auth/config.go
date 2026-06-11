@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,7 +61,7 @@ func GetSealosDir() (string, error) {
 // creating it or migrating legacy ~/.sealos data. Use this for scoped readers
 // such as the dashboard, where reading alternate config roots would be surprising.
 func CurrentSealtunDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := sealtunHomeDir()
 	if err != nil {
 		return "", err
 	}
@@ -75,7 +76,7 @@ func CurrentSealtunDir() (string, error) {
 }
 
 func getSealtunDir(migrateLegacy bool) (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := sealtunHomeDir()
 	if err != nil {
 		return "", err
 	}
@@ -95,22 +96,13 @@ func getSealtunDir(migrateLegacy bool) (string, error) {
 		}
 	}
 
-	// Verify directory is writable
-	testFile := filepath.Join(dir, ".write_test")
-	if info, err := os.Lstat(testFile); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return "", fmt.Errorf("config directory write-test file %s is not a regular file", testFile)
-		}
-		if err := os.Remove(testFile); err != nil {
-			return "", fmt.Errorf("remove stale config directory write-test file %s: %w", testFile, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	file, err := os.OpenFile(testFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- write-test path is fixed under the user-owned Sealtun config directory.
+	// Verify directory is writable with a unique file so concurrent CLI starts
+	// do not contend on a fixed probe path.
+	file, err := os.CreateTemp(dir, ".write_test.*")
 	if err != nil {
 		return "", fmt.Errorf("config directory %s is not writable: %w", dir, err)
 	}
+	testFile := file.Name()
 	if _, err := file.Write([]byte("ok")); err != nil {
 		_ = file.Close()
 		_ = os.Remove(testFile)
@@ -123,6 +115,22 @@ func getSealtunDir(migrateLegacy bool) (string, error) {
 	_ = os.Remove(testFile)
 
 	return dir, nil
+}
+
+func sealtunHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("SEALTUN_HOME")); home != "" {
+		return home, nil
+	}
+	if os.Geteuid() == 0 && strings.TrimSpace(os.Getenv("SUDO_USER")) != "" {
+		if sudoHome := strings.TrimSpace(os.Getenv("SUDO_HOME")); sudoHome != "" {
+			return sudoHome, nil
+		}
+		sudoUser, err := user.Lookup(strings.TrimSpace(os.Getenv("SUDO_USER")))
+		if err == nil && strings.TrimSpace(sudoUser.HomeDir) != "" {
+			return sudoUser.HomeDir, nil
+		}
+	}
+	return os.UserHomeDir()
 }
 
 // EnsurePrivateDir creates a private config subdirectory and rejects symlinks.

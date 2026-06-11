@@ -1639,12 +1639,12 @@ func (c *Client) cleanupCoreResources(ctx context.Context, name string, summary 
 	} else if summary != nil && deleted {
 		summary.Deployments++
 	}
-	if deleted, err := c.deleteServiceIfOwned(ctx, name); err != nil {
+	if deleted, err := c.deleteNamedServiceIfOwned(ctx, name, name); err != nil {
 		recordFirstErr(&firstErr, err)
 	} else if summary != nil && deleted {
 		summary.Services++
 	}
-	if deleted, err := c.deleteServiceIfOwned(ctx, tcpServiceName(name)); err != nil {
+	if deleted, err := c.deleteNamedServiceIfOwned(ctx, tcpServiceName(name), name); err != nil {
 		recordFirstErr(&firstErr, err)
 	} else if summary != nil && deleted {
 		summary.Services++
@@ -1726,9 +1726,10 @@ func (c *Client) cleanupCreated(ctx context.Context, resources []createdResource
 		case resourceDeployment:
 			_, err = c.deleteDeploymentIfOwned(ctx, resource.name)
 		case resourceService:
-			_, err = c.deleteServiceIfOwned(ctx, resource.name)
+			_, err = c.deleteNamedServiceIfOwned(ctx, resource.name, resource.name)
 		case resourceTCPService:
-			_, err = c.deleteServiceIfOwned(ctx, resource.name)
+			owner := strings.TrimSuffix(resource.name, "-tcp")
+			_, err = c.deleteNamedServiceIfOwned(ctx, resource.name, owner)
 		case resourceIngress:
 			owner := strings.TrimSuffix(resource.name, "-app")
 			_, err = c.deleteIngressIfOwned(ctx, resource.name, owner)
@@ -2489,7 +2490,20 @@ func (c *Client) WaitForReady(ctx context.Context, tunnelID string) error {
 					return fmt.Errorf("deployment %s failed: %s", name, condition.Message)
 				}
 			}
-			if dep.Status.ReadyReplicas > 0 {
+			desired := int32(1)
+			if dep.Spec.Replicas != nil {
+				desired = *dep.Spec.Replicas
+			}
+			if desired <= 0 {
+				return nil
+			}
+			if dep.Status.ObservedGeneration < dep.Generation {
+				continue
+			}
+			if dep.Status.Replicas <= desired &&
+				dep.Status.UpdatedReplicas >= desired &&
+				dep.Status.ReadyReplicas >= desired &&
+				dep.Status.AvailableReplicas >= desired {
 				return nil
 			}
 		}

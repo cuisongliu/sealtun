@@ -142,7 +142,7 @@ func runDashboard(ctx context.Context, addr string, port int, allowRemote bool, 
 	}
 	mux.HandleFunc("/", handler.serveHome)
 	mux.HandleFunc("/favicon.svg", serveDashboardFavicon)
-	mux.HandleFunc("/logo.svg", serveDashboardFavicon)
+	mux.HandleFunc("/logo.svg", serveDashboardLogo)
 	mux.HandleFunc("/api/summary", handler.serveDashboardSummary)
 	mux.HandleFunc("/api/context", handler.serveContext)
 	mux.HandleFunc("/api/", handler.serveAPI)
@@ -252,12 +252,20 @@ func (s dashboardServer) serveDashboardSummary(w http.ResponseWriter, r *http.Re
 }
 
 func serveDashboardFavicon(w http.ResponseWriter, r *http.Request) {
+	serveDashboardSVG(w, r, brandassets.SealtunIconSVG)
+}
+
+func serveDashboardLogo(w http.ResponseWriter, r *http.Request) {
+	serveDashboardSVG(w, r, brandassets.SealtunLogoSVG)
+}
+
+func serveDashboardSVG(w http.ResponseWriter, r *http.Request, content []byte) {
 	if !requireDashboardMethod(w, r, http.MethodGet) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_, _ = w.Write(brandassets.SealtunLogoSVG)
+	_, _ = w.Write(content)
 }
 
 func (s dashboardServer) serveContext(w http.ResponseWriter, r *http.Request) {
@@ -516,27 +524,28 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sealtun Control Center</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <meta name="theme-color" content="#007A62">
+  <meta name="theme-color" content="#1D6FE8">
   <style>
     :root {
       color-scheme: light;
-      --bg: #f7f6f3;
+      --bg: #f4f8ff;
       --surface: #ffffff;
-      --surface-soft: #fbfaf8;
-      --line: #e6e2dc;
-      --line-strong: #d8d3cb;
-      --ink: #171717;
-      --text: #33312e;
-      --muted: #746f68;
-      --faint: #a19a90;
-      --accent: #007a62;
-      --accent-soft: #edf7f3;
-      --warn: #d79a00;
-      --warn-soft: #fff8e6;
-      --bad: #db3340;
-      --bad-soft: #fff0f1;
-      --stale: #74716a;
-      --shadow: 0 1px 2px rgba(22, 22, 20, 0.04), 0 18px 48px rgba(22, 22, 20, 0.05);
+      --surface-soft: #f8fbff;
+      --line: #dce7f7;
+      --line-strong: #c8d8ee;
+      --ink: #0b1b33;
+      --text: #243955;
+      --muted: #667b98;
+      --faint: #94a6bd;
+      --accent: #1d6fe8;
+      --accent-strong: #1659c7;
+      --accent-soft: #eaf3ff;
+      --warn: #b77900;
+      --warn-soft: #fff7df;
+      --bad: #cf2e46;
+      --bad-soft: #fff0f3;
+      --stale: #6b7280;
+      --shadow: 0 1px 2px rgba(15, 35, 65, 0.04), 0 18px 48px rgba(27, 78, 145, 0.08);
       --mono: "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, monospace;
       --sans: "Geist", "Satoshi", "Avenir Next", "Helvetica Neue", Arial, sans-serif;
     }
@@ -545,10 +554,21 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     body {
       min-width: 1280px;
       min-height: 100dvh;
-      background: var(--bg);
+      background: radial-gradient(circle at 16% -12%, rgba(29, 111, 232, .12), transparent 30%), var(--bg);
       color: var(--text);
       font-family: var(--sans);
-      letter-spacing: -0.01em;
+      letter-spacing: 0;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 64px 0 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(29, 111, 232, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(29, 111, 232, .045) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,.9), rgba(0,0,0,.06));
     }
     button {
       border: 0;
@@ -558,7 +578,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       cursor: pointer;
     }
     button:focus-visible, a:focus-visible {
-      outline: 2px solid rgba(0, 122, 98, 0.35);
+      outline: 2px solid rgba(29, 111, 232, 0.35);
       outline-offset: 2px;
     }
     a { color: inherit; text-decoration: none; }
@@ -566,6 +586,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       min-height: 100dvh;
       display: grid;
       grid-template-rows: 64px minmax(0, 1fr);
+      position: relative;
+      z-index: 1;
     }
     .topbar {
       display: grid;
@@ -574,8 +596,12 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       gap: 22px;
       height: 64px;
       padding: 0 22px;
-      background: #ffffff;
+      background: rgba(255, 255, 255, .94);
       border-bottom: 1px solid var(--line);
+      box-shadow: 0 10px 30px rgba(32, 80, 148, .06);
+      backdrop-filter: blur(14px);
+      position: relative;
+      z-index: 40;
     }
     .brand {
       display: flex;
@@ -585,27 +611,38 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       border-right: 1px solid var(--line);
     }
 	.logo {
-		width: 34px;
-		height: 34px;
+		width: 44px;
+		height: 36px;
 		display: grid;
 		place-items: center;
+		border-radius: 8px;
 	}
 	.logo svg {
-		width: 34px;
-		height: 34px;
+		width: 44px;
+		height: 30px;
 		display: block;
-		filter: drop-shadow(0 1px 1px rgba(22,22,20,.10));
+		filter: drop-shadow(0 1px 1px rgba(15,35,65,.12));
 	}
 	.logo img {
-		width: 34px;
-		height: 34px;
+		width: 44px;
+		height: 30px;
+		object-fit: contain;
 		display: block;
-		filter: drop-shadow(0 1px 1px rgba(22,22,20,.10));
+		filter: drop-shadow(0 1px 1px rgba(15,35,65,.12));
 	}
     .brand-title {
       font-weight: 700;
       color: var(--ink);
       font-size: 16px;
+      white-space: nowrap;
+    }
+    .brand-subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0;
+      text-transform: uppercase;
       white-space: nowrap;
     }
     .context-bar {
@@ -632,7 +669,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       transition: background .15s;
     }
     .context-item:hover,
-    .context-item[data-open="true"] { background: #f2f0ed; }
+    .context-item[data-open="true"] { background: #eef5ff; }
     .context-item strong {
       color: var(--ink);
       font-weight: 650;
@@ -654,7 +691,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       border: 1px solid var(--line-strong);
       border-radius: 10px;
       background: #ffffff;
-      box-shadow: 0 18px 54px rgba(22, 22, 20, .14);
+      box-shadow: 0 18px 54px rgba(24, 75, 145, .16);
     }
     .context-menu[hidden] { display: none; }
 	.context-menu.profile-menu { width: 430px; }
@@ -664,7 +701,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       color: var(--muted);
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: .09em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }
 	.context-row {
@@ -683,7 +720,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 		display: block;
 		min-width: 0;
 	}
-    .context-row:hover { background: #f5f4f1; }
+    .context-row:hover { background: #eef5ff; }
     .context-row[disabled] {
       cursor: default;
       opacity: .66;
@@ -711,7 +748,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       margin-top: 8px;
       padding: 10px;
       border-radius: 8px;
-      background: #fbfaf7;
+      background: #f5f9ff;
       color: var(--muted);
       font-size: 12px;
       line-height: 1.45;
@@ -728,9 +765,9 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       gap: 6px;
       min-height: 26px;
       padding: 0 9px;
-      border: 1px solid #b9ded1;
+      border: 1px solid #b9d2f7;
       border-radius: 999px;
-      background: #edf7f3;
+      background: #eaf3ff;
       color: var(--accent);
       font-size: 12px;
       font-weight: 700;
@@ -753,11 +790,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       z-index: 30;
       max-width: 360px;
       padding: 10px 12px;
-      border: 1px solid #b9ded1;
+      border: 1px solid #b9d2f7;
       border-radius: 9px;
-      background: #edf7f3;
+      background: #eaf3ff;
       color: var(--accent);
-      box-shadow: 0 10px 30px rgba(22, 22, 20, .10);
+      box-shadow: 0 10px 30px rgba(24, 75, 145, .12);
       font-size: 13px;
       font-weight: 650;
     }
@@ -798,19 +835,21 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       border: 1px solid var(--line-strong);
       border-radius: 7px;
       background: #ffffff;
-      box-shadow: 0 1px 2px rgba(22,22,20,.04);
+      box-shadow: 0 1px 2px rgba(15,35,65,.04);
       color: var(--ink);
       transition: background .15s, border-color .15s, transform .15s;
     }
-    .btn:hover { background: var(--surface-soft); border-color: #c8c2b8; }
+    .btn:hover { background: var(--surface-soft); border-color: #aac2e6; }
     .btn:active { transform: translateY(1px); }
     .btn:disabled { opacity: .62; cursor: wait; }
     .btn svg { width: 16px; height: 16px; }
     .btn.primary {
-      border-color: #007a62;
-      background: #007a62;
+      border-color: var(--accent);
+      background: var(--accent);
       color: #ffffff;
+      box-shadow: 0 8px 18px rgba(29,111,232,.18);
     }
+    .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
     .btn.danger {
       border-color: #f1c1c5;
       color: var(--bad);
@@ -832,6 +871,12 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       align-items: center;
       gap: 12px;
       margin-bottom: 14px;
+      min-height: 64px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: linear-gradient(135deg, rgba(255,255,255,.98), rgba(234,243,255,.78));
+      box-shadow: var(--shadow);
     }
     .toolbar-actions {
       display: inline-flex;
@@ -842,6 +887,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       display: grid;
       grid-template-columns: minmax(0, 1fr) 360px;
       min-height: 0;
+      position: relative;
+      z-index: 1;
     }
     .main {
       min-width: 0;
@@ -849,9 +896,10 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       overflow: auto;
     }
     .inspect-panel {
-      background: #ffffff;
+      background: rgba(255, 255, 255, .94);
       border-left: 1px solid var(--line);
       min-height: calc(100dvh - 64px);
+      box-shadow: -18px 0 42px rgba(32, 80, 148, .05);
     }
     .cards {
       display: grid;
@@ -869,11 +917,23 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       grid-template-columns: 28px 1fr;
       gap: 14px;
       align-items: center;
-      box-shadow: 0 1px 2px rgba(22,22,20,.03);
+      box-shadow: 0 1px 2px rgba(15,35,65,.03);
+      position: relative;
+      overflow: hidden;
     }
-    .metric-card.active, .metric-card.domain { background: var(--accent-soft); border-color: #b9ded1; }
+    .metric-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      background: #b8c7db;
+    }
+    .metric-card.active, .metric-card.domain { background: linear-gradient(135deg, #ffffff, var(--accent-soft)); border-color: #b9d2f7; }
     .metric-card.degraded { background: var(--warn-soft); border-color: #f3d993; }
     .metric-card.issue { background: var(--bad-soft); border-color: #f1c1c5; }
+    .metric-card.active::before, .metric-card.domain::before { background: var(--accent); }
+    .metric-card.degraded::before { background: var(--warn); }
+    .metric-card.issue::before { background: var(--bad); }
     .metric-icon {
       color: var(--muted);
       width: 22px;
@@ -938,11 +998,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     th {
       color: var(--ink);
       font-weight: 600;
-      background: #fbfaf7;
+      background: #f6faff;
     }
     td { color: var(--text); }
     tr[data-selected="true"] td {
-      background: #f4faf7;
+      background: #edf5ff;
     }
     .status {
       display: inline-flex;
@@ -973,7 +1033,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       align-items: center;
       padding: 0 8px;
       border-radius: 6px;
-      background: #f0efed;
+      background: #eef5ff;
       font-size: 12px;
       font-family: var(--mono);
       color: var(--ink);
@@ -985,13 +1045,13 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       padding: 0 10px;
       border-radius: 7px;
       border: 1px solid var(--line);
-      background: #f5f4f1;
+      background: #f6faff;
       font-size: 12px;
       color: var(--ink);
     }
     .mono {
       font-family: var(--mono);
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
     }
     .muted { color: var(--muted); }
     .link {
@@ -1022,14 +1082,15 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       border-radius: 5px;
       color: var(--ink);
     }
-    .icon-btn:hover { background: #f0efed; }
+    .icon-btn:hover { background: #eef5ff; }
     .icon-btn svg { width: 17px; height: 17px; }
     .tabs {
       display: inline-flex;
       margin: 24px 0;
       border-radius: 8px;
-      background: #ecebea;
+      background: #e5eefb;
       padding: 2px;
+      border: 1px solid var(--line);
     }
     .tab {
       min-width: 58px;
@@ -1041,7 +1102,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     }
     .tab.active {
       background: #ffffff;
-      box-shadow: 0 1px 3px rgba(22,22,20,.14);
+      box-shadow: 0 1px 3px rgba(15,35,65,.14);
+      color: var(--accent);
     }
     .bottom-panel {
       border: 1px solid var(--line);
@@ -1094,11 +1156,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       height: 184px;
       overflow: auto;
       padding: 14px 16px;
-      background: #fbfaf7;
+      background: #07192f;
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.8;
-      color: var(--accent);
+      color: #dbeafe;
     }
     .log-line {
       display: grid;
@@ -1106,14 +1168,14 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       gap: 10px;
       align-items: baseline;
     }
-    .log-time { color: var(--faint); }
+    .log-time { color: #83a5ce; }
     .level {
       display: inline-flex;
       justify-content: center;
       border-radius: 4px;
       padding: 0 5px;
-      background: #d7f0e7;
-      color: var(--accent);
+      background: rgba(96, 165, 250, .18);
+      color: #93c5fd;
       font-size: 11px;
     }
     .level.warn {
@@ -1121,8 +1183,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       color: var(--warn);
     }
     .level.debug {
-      background: #eeeeeb;
-      color: var(--muted);
+      background: rgba(148, 163, 184, .16);
+      color: #cbd5e1;
     }
     .panel-grid {
       display: grid;
@@ -1133,7 +1195,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     .small-card {
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fbfaf7;
+      background: #f6faff;
       padding: 14px;
     }
     .small-card .label {
@@ -1166,8 +1228,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     }
     .yaml {
       padding: 16px;
-      background: #171717;
-      color: #f3f0e8;
+      background: #07192f;
+      color: #dbeafe;
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.65;
@@ -1181,6 +1243,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid var(--line);
+      background: linear-gradient(135deg, #ffffff, #f4f8ff);
     }
     .inspect-title {
       display: flex;
@@ -1223,7 +1286,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     .group-title {
       color: var(--muted);
       font-weight: 700;
-      letter-spacing: .11em;
+      letter-spacing: 0;
       text-transform: uppercase;
       font-size: 12px;
       margin-bottom: 13px;
@@ -1251,7 +1314,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       color: var(--ink);
     }
     .kv-row .value.mono {
-      background: #efeeeb;
+      background: #eef5ff;
       border-radius: 5px;
       padding: 4px 7px;
     }
@@ -1270,7 +1333,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       text-align: center;
       padding: 24px;
       color: var(--muted);
-      background: #fbfaf7;
+      background: #f6faff;
     }
     .empty strong {
       display: block;
@@ -1282,7 +1345,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       position: fixed;
       inset: 0;
       z-index: 50;
-      background: rgba(23,23,23,.32);
+      background: rgba(7, 25, 47, .38);
       display: grid;
       place-items: center;
       padding: 28px;
@@ -1294,7 +1357,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       overflow: auto;
       border-radius: 10px;
       background: #ffffff;
-      box-shadow: 0 30px 80px rgba(0,0,0,.22);
+      box-shadow: 0 30px 80px rgba(7, 25, 47, .26);
       border: 1px solid var(--line-strong);
     }
     .modal-head {
@@ -1353,7 +1416,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       padding: 0 10px;
       border: 1px solid var(--line-strong);
       border-radius: 7px;
-      background: #fbfaf7;
+      background: #f6faff;
       font-size: 12px;
       color: var(--ink);
     }
@@ -1367,7 +1430,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     .result-box {
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fbfaf7;
+      background: #f6faff;
       padding: 12px;
       font-family: var(--mono);
       font-size: 12px;
@@ -1379,8 +1442,8 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     .command-preview {
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #161614;
-      color: #f7f4ec;
+      background: #07192f;
+      color: #dbeafe;
       padding: 12px;
       font-family: var(--mono);
       font-size: 12px;
@@ -1402,7 +1465,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fbfaf7;
+      background: #f6faff;
       text-align: left;
     }
     .resource-row {
@@ -1424,7 +1487,10 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         <div class="logo" aria-hidden="true">
           <img src="/logo.svg" alt="">
         </div>
-        <div class="brand-title">Sealtun Control Center</div>
+        <div>
+          <div class="brand-title">Sealtun Control Center</div>
+          <div class="brand-subtitle">Tunnel workspace</div>
+        </div>
       </div>
       <div class="context-bar">
         <div class="context-wrap">

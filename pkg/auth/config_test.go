@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -150,7 +151,7 @@ func TestCurrentSealtunDirDoesNotCreateConfigDir(t *testing.T) {
 	}
 }
 
-func TestGetSealosDirRejectsWriteTestSymlink(t *testing.T) {
+func TestGetSealosDirDoesNotFollowLegacyWriteTestSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires extra privileges on Windows")
 	}
@@ -169,8 +170,8 @@ func TestGetSealosDirRejectsWriteTestSymlink(t *testing.T) {
 		t.Fatalf("create write-test symlink: %v", err)
 	}
 
-	if _, err := GetSealosDir(); err == nil || !strings.Contains(err.Error(), "write-test") {
-		t.Fatalf("expected write-test symlink to be rejected, got %v", err)
+	if _, err := GetSealosDir(); err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
 	}
 	data, err := os.ReadFile(outside)
 	if err != nil {
@@ -178,6 +179,54 @@ func TestGetSealosDirRejectsWriteTestSymlink(t *testing.T) {
 	}
 	if string(data) != "outside" {
 		t.Fatalf("outside file was modified through symlink: %q", string(data))
+	}
+}
+
+func TestGetSealosDirSupportsConcurrentWritableChecks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if _, err := GetSealosDir(); err != nil {
+		t.Fatalf("initial GetSealosDir returned error: %v", err)
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := GetSealosDir()
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent GetSealosDir returned error: %v", err)
+		}
+	}
+
+	matches, err := filepath.Glob(filepath.Join(home, currentConfigDir, ".write_test.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected write-test files to be removed, got %#v", matches)
+	}
+}
+
+func TestGetSealosDirUsesSealtunHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SEALTUN_HOME", home)
+	dir, err := GetSealosDir()
+	if err != nil {
+		t.Fatalf("GetSealosDir returned error: %v", err)
+	}
+	if dir != filepath.Join(home, currentConfigDir) {
+		t.Fatalf("expected SEALTUN_HOME config dir, got %s", dir)
 	}
 }
 

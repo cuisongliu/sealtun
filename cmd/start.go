@@ -43,12 +43,12 @@ var startCmd = &cobra.Command{
 				fmt.Fprintf(cmd.OutOrStdout(), "  Public TCP port: %d\n", endpoint.Port)
 				fmt.Fprintf(cmd.OutOrStdout(), "  Public TCP endpoint: %s\n", endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  Local target: localhost:%s\n", valueOr(sess.LocalPort, "unknown"))
+			fmt.Fprintf(cmd.OutOrStdout(), "  Target: %s\n", sessionTargetLabel(*sess))
 			return nil
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Started tunnel %s.\n", sess.TunnelID)
 		fmt.Fprintf(cmd.OutOrStdout(), "  Public URL: %s\n", endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort))
-		fmt.Fprintf(cmd.OutOrStdout(), "  Local target: localhost:%s\n", valueOr(sess.LocalPort, "unknown"))
+		fmt.Fprintf(cmd.OutOrStdout(), "  Target: %s\n", sessionTargetLabel(*sess))
 		return nil
 	},
 }

@@ -6,14 +6,14 @@
 
 [中文版本](./README.md)
 
-Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It can quickly publish local Web, SSH, database, or debugging services to the internet, and on Linux it can also let local tools directly access in-cluster Services and Pods.
+Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It can quickly publish local Web apps, remote HTTP upstreams, SSH, databases, or debugging services to the internet, and on Linux it can also let local tools directly access in-cluster Services and Pods.
 
 ## Features
 
 - 🔑 **Password-less OAuth2 Login**: Connect easily with `sealtun login` using the Device Authorization Grant flow.
 - 🌍 **Region Switching**: List built-in Sealos Cloud regions and switch regions by re-running login with `sealtun region use`.
 - 👤 **Named Profiles**: Save different Sealos accounts, regions, workspaces, and kubeconfigs as named profiles and switch between them.
-- 🚀 **One-Command Expose**: Execute `sealtun expose 8080`, and get a fully trusted HTTPS URL for your localhost securely routed.
+- 🚀 **One-Command Expose**: Run `sealtun expose 8080` or `sealtun expose --target http://10.0.0.12:8080` to get a trusted HTTPS URL.
 - 🌐 **Custom Domain Automation**: Use `domain plan/add/verify/status/doctor` to generate CNAME guidance, wait for DNS, attach domains, and inspect certificate readiness.
 - 🔗 **Temporary Share Links and Rotation**: Use `share create/list/revoke/rotate` to generate, revoke, or rotate expiring links for HTTPS tunnels.
 - 🛡️ **Security Operations**: HTTPS tunnels support Basic Auth, Bearer tokens, temporary links, IP rules, rate limits, access audit, and server secret rotation.
@@ -27,6 +27,8 @@ Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It 
 ## Installation / Setup
 
 Install the `sealtun` CLI with npm, or download the binary for your platform from GitHub Releases. Remote tunnel Pods use the matching `ghcr.io/gitlayzer/sealtun` container image.
+
+For development or prerelease smoke tests, `SEALTUN_SERVER_IMAGE` can override the remote Pod image. Normal users do not need to set it.
 
 Install globally with npm:
 
@@ -185,7 +187,12 @@ sealtun init --apply
 # Default https protocol (compatible with WebSocket)
 sealtun expose 3000
 
+# Or forward the public HTTPS entry to an HTTP upstream reachable from this machine
+sealtun expose --target http://10.0.0.12:8080
+
 ```
+
+`--target` applies only to default HTTPS tunnels. The target must be a `http://` or `https://` address reachable from the machine running the Sealtun CLI. SSH/TCP L4 tunnels continue to use the local port plus NodePort model.
 
 Enable Basic Auth for public application traffic:
 ```bash
@@ -216,7 +223,7 @@ sealtun expose 3000 --temporary-access-token-env SEALTUN_TEMP_TOKEN --temporary-
 sealtun expose 3000 --rate-limit 60/m --audit
 ```
 
-Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the last valid proxy-confirmed client IP in `X-Forwarded-For`. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access. `--rate-limit` uses fixed-window specs such as `60/m` or `1000/h`; access audit records only allow/deny reason, status, path, and client IP, never plaintext tokens, Authorization headers, or Basic Auth passwords.
+Bearer and temporary-link tokens must be at least 8 characters. They are stored only as SHA-256 hashes and are not written into Deployment args. Temporary links use `?_sealtun_token=...`; Sealtun strips that query parameter before forwarding the request to your local service or `--target` upstream. IP rules prefer the `X-Real-IP` value set by the Ingress/proxy and fall back to the last valid proxy-confirmed client IP in `X-Forwarded-For`. When Basic Auth and Bearer/temporary tokens are both configured, either authentication method can grant access. `--rate-limit` uses fixed-window specs such as `60/m` or `1000/h`; access audit records only allow/deny reason, status, path, and client IP, never plaintext tokens, Authorization headers, or Basic Auth passwords.
 
 Create, list, and revoke temporary share links for an existing HTTPS tunnel:
 ```bash
@@ -449,7 +456,7 @@ sealtun dashboard --addr 127.0.0.1 --port 19777
 sealtun dashboard --open
 ```
 
-The dashboard listens locally by default and uses only the current active profile/region/namespace. It reads local sessions, login state, remote diagnostics, and custom domain readiness. The page can create HTTPS/SSH/TCP tunnels, run `sealtun.yaml` dry-run/diff/apply, stop/start/cleanup tunnels, view logs/metrics/events/resources/audit, and run domain plan/add/verify/clear, policy set, share rotate, and server secret rotate. Before write confirmations, it previews the equivalent CLI command so the UI operation is not a black box.
+The dashboard listens locally by default and uses only the current active profile/region/namespace. It reads local sessions, login state, remote diagnostics, and custom domain readiness. The page can create HTTPS/SSH/TCP tunnels; the HTTPS form supports either a local port or a `Target URL` upstream. It can also run `sealtun.yaml` dry-run/diff/apply, stop/start/cleanup tunnels, view logs/metrics/events/resources/audit, and run domain plan/add/verify/clear, policy set, share rotate, and server secret rotate. Before write confirmations, it previews the equivalent CLI command so the UI operation is not a black box.
 
 The dashboard prefers live status updates and shows `Live`, `Reconnecting`, `Polling`, or `Disconnected` in the top bar; if the live stream fails it falls back to 15-second polling. The `Resources` tab shows the tunnel's Deployment, Pods, HTTP Service, TCP NodePort Service, Ingress, Certificate, Issuer, and Secret summaries. Resource visibility is not cloud billing estimation; it only highlights current Sealos/Kubernetes occupancy such as replica count, Pod count, Service type, NodePort, Ingress host count, and certificate presence. Secrets expose only name, type, and metadata, never data. The `New Tunnel` panel can also run `Discover local ports` to scan local TCP listening ports and prefill protocol, name, and localPort.
 
@@ -507,6 +514,15 @@ tunnels:
     domainTimeout: 5m
 ```
 
+Remote HTTP upstreams can use `target` without a local listening port:
+```yaml
+version: v1
+tunnels:
+  - name: upstream-api
+    target: http://10.0.0.12:8080
+    protocol: https
+```
+
 Apply it:
 ```bash
 # Offline validation and preview; no login required
@@ -547,7 +563,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
+`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `target` is HTTPS-only and must be a `http://` or `https://` URL; if `localPort` is also set, it must match the target port. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
 
 ## License
 

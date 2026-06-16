@@ -147,7 +147,7 @@ func TestPrintInspectShowsSSHEndpoint(t *testing.T) {
 		"Public SSH port: 32022",
 		"SSH command: ssh <user>@ssh.example.com -p 32022",
 		"Control host: control.example.com",
-		"Local target: localhost:22",
+		"Target: localhost:22",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected inspect output to contain %q, got:\n%s", want, text)
@@ -185,7 +185,7 @@ func TestPrintInspectShowsTCPEndpoint(t *testing.T) {
 		"Public TCP port: 35432",
 		"Public TCP endpoint: db.example.com:35432",
 		"Control host: control.example.com",
-		"Local target: localhost:5432",
+		"Target: localhost:5432",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected inspect output to contain %q, got:\n%s", want, text)

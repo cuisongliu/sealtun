@@ -19,6 +19,7 @@ import (
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/publicauth"
 	"github.com/labring/sealtun/pkg/session"
+	"github.com/labring/sealtun/pkg/tunnel"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,7 @@ type applyFile struct {
 
 type applyTunnel struct {
 	Name          string             `json:"name" yaml:"name"`
+	Target        string             `json:"target,omitempty" yaml:"target,omitempty"`
 	LocalPort     int                `json:"localPort" yaml:"localPort"`
 	Port          int                `json:"port,omitempty" yaml:"port,omitempty"`
 	Protocol      string             `json:"protocol,omitempty" yaml:"protocol,omitempty"`
@@ -50,18 +52,20 @@ type applyBasicAuth struct {
 }
 
 type diffResult struct {
-	Name         string   `json:"name"`
-	TunnelID     string   `json:"tunnelId"`
-	Action       string   `json:"action"`
-	Changes      []string `json:"changes,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
-	DesiredPort  string   `json:"desiredPort,omitempty"`
-	CurrentPort  string   `json:"currentPort,omitempty"`
-	DesiredHost  string   `json:"desiredHost,omitempty"`
-	CurrentHost  string   `json:"currentHost,omitempty"`
-	ExpiresAt    string   `json:"expiresAt,omitempty"`
-	AccessPolicy bool     `json:"accessPolicy"`
-	BasicAuth    bool     `json:"basicAuth"`
+	Name          string   `json:"name"`
+	TunnelID      string   `json:"tunnelId"`
+	Action        string   `json:"action"`
+	Changes       []string `json:"changes,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+	DesiredPort   string   `json:"desiredPort,omitempty"`
+	CurrentPort   string   `json:"currentPort,omitempty"`
+	DesiredTarget string   `json:"desiredTarget,omitempty"`
+	CurrentTarget string   `json:"currentTarget,omitempty"`
+	DesiredHost   string   `json:"desiredHost,omitempty"`
+	CurrentHost   string   `json:"currentHost,omitempty"`
+	ExpiresAt     string   `json:"expiresAt,omitempty"`
+	AccessPolicy  bool     `json:"accessPolicy"`
+	BasicAuth     bool     `json:"basicAuth"`
 }
 
 type applyResult struct {
@@ -73,6 +77,7 @@ type applyResult struct {
 	CustomDomain  string                 `json:"customDomain,omitempty"`
 	PublicPort    int32                  `json:"publicPort,omitempty"`
 	LocalPort     string                 `json:"localPort"`
+	TargetURL     string                 `json:"targetUrl,omitempty"`
 	BasicAuth     bool                   `json:"basicAuth"`
 	BasicAuthUser string                 `json:"basicAuthUser,omitempty"`
 	AccessPolicy  bool                   `json:"accessPolicy"`
@@ -88,6 +93,7 @@ type normalizedApplyTunnel struct {
 	Name          string
 	TunnelID      string
 	LocalPort     string
+	TargetURL     string
 	Protocol      string
 	CustomDomain  string
 	BasicAuth     *session.BasicAuthConfig
@@ -199,6 +205,7 @@ func runApplyConfig(ctx context.Context, config *applyFile, dryRun bool) ([]appl
 				TunnelID:      normalized.TunnelID,
 				Protocol:      normalized.Protocol,
 				LocalPort:     normalized.LocalPort,
+				TargetURL:     normalized.TargetURL,
 				BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 				BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
 				AccessPolicy:  normalized.AccessPolicy != nil,
@@ -320,6 +327,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 		TunnelID:      normalized.TunnelID,
 		Protocol:      normalized.Protocol,
 		LocalPort:     normalized.LocalPort,
+		TargetURL:     normalized.TargetURL,
 		BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
 		AccessPolicy:  normalized.AccessPolicy != nil,
@@ -406,6 +414,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	options := k8s.TunnelOptions{}
 	options.BasicAuth = basicAuthToK8s(normalized.BasicAuth)
 	options.AccessPolicy = accessPolicyToK8s(normalized.AccessPolicy)
+	options.TargetURL = normalized.TargetURL
 	if customDomainVerified {
 		options.CustomDomain = desiredCustomDomain
 		options.SealosHost = sealosHost
@@ -463,6 +472,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result.SealosHost = hosts.SealosHost
 	result.CustomDomain = hosts.CustomDomain
 	result.PublicPort = hosts.PublicPort
+	result.TargetURL = normalized.TargetURL
 	result.BasicAuth = normalized.BasicAuth != nil && normalized.BasicAuth.Enabled
 	result.BasicAuthUser = basicAuthUsername(normalized.BasicAuth)
 	result.AccessPolicy = normalized.AccessPolicy != nil
@@ -489,6 +499,7 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		CustomDomain:    hosts.CustomDomain,
 		PublicPort:      hosts.PublicPort,
 		LocalPort:       normalized.LocalPort,
+		TargetURL:       normalized.TargetURL,
 		Secret:          secret,
 		BasicAuth:       normalized.BasicAuth,
 		AccessPolicy:    normalized.AccessPolicy,
@@ -543,6 +554,7 @@ func restoreExistingApplyTunnel(client *k8s.Client, previous session.TunnelSessi
 	_, err := client.WithNamespace(previous.Namespace).EnsureTunnelWithOptions(cleanupCtx, previous.TunnelID, previous.Secret, protocol, previous.LocalPort, k8s.TunnelOptions{
 		CustomDomain: previous.CustomDomain,
 		SealosHost:   previous.SealosHost,
+		TargetURL:    previous.TargetURL,
 		BasicAuth:    basicAuthToK8s(previous.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(previous.AccessPolicy),
 	})
@@ -586,12 +598,8 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, err
 	}
-	port := item.LocalPort
-	if port == 0 {
-		port = item.Port
-	}
-	localPort := strconv.Itoa(port)
-	if err := validateLocalPort(localPort); err != nil {
+	localPort, targetURL, err := normalizeApplyTarget(item)
+	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
 	}
 	protocol := item.Protocol
@@ -624,6 +632,9 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s accessPolicy: %w", tunnelID, err)
 	}
 	if !tunnelprotocol.IsHTTP(protocol) {
+		if strings.TrimSpace(item.Target) != "" {
+			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: target is only supported for https tunnels", tunnelID)
+		}
 		if customDomain != "" || item.WaitDomain {
 			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: domain and waitDomain are only supported for https tunnels", tunnelID)
 		}
@@ -643,6 +654,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		Name:          item.Name,
 		TunnelID:      tunnelID,
 		LocalPort:     localPort,
+		TargetURL:     targetURL,
 		Protocol:      protocol,
 		CustomDomain:  customDomain,
 		BasicAuth:     basicAuth,
@@ -654,6 +666,31 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		ReadyTimeout:  effectiveReadyTimeout,
 		DomainTimeout: effectiveDomainTimeout,
 	}, nil
+}
+
+func normalizeApplyTarget(item applyTunnel) (string, string, error) {
+	port := item.LocalPort
+	if port == 0 {
+		port = item.Port
+	}
+	localPort := ""
+	if port != 0 {
+		localPort = strconv.Itoa(port)
+		if err := validateLocalPort(localPort); err != nil {
+			return "", "", err
+		}
+	}
+	target, err := tunnel.TargetFor(localPort, item.Target)
+	if err != nil {
+		return "", "", err
+	}
+	if localPort != "" && strings.TrimSpace(item.Target) != "" && localPort != target.Port {
+		return "", "", fmt.Errorf("localPort %s does not match target port %s; omit localPort or use the same port", localPort, target.Port)
+	}
+	if localPort == "" {
+		localPort = target.Port
+	}
+	return localPort, target.URL, nil
 }
 
 func resolveApplyTunnelExpiresAt(ttl string, now time.Time) (string, error) {
@@ -790,7 +827,7 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 	}
 	for _, result := range results {
 		endpoint := endpointDisplay(result.Protocol, result.Host, result.SealosHost, result.PublicPort)
-		fmt.Fprintf(out, "  - %s (%s): %s localhost:%s", result.Name, result.TunnelID, result.Status, result.LocalPort)
+		fmt.Fprintf(out, "  - %s (%s): %s %s", result.Name, result.TunnelID, result.Status, valueOr(result.TargetURL, defaultLocalTargetURL(result.LocalPort)))
 		if result.Protocol == tunnelprotocol.SSH && endpoint.Command != "" {
 			fmt.Fprintf(out, " -> %s", endpoint.Command)
 		} else if result.Protocol == tunnelprotocol.TCP && endpoint.Port != 0 {
@@ -801,6 +838,9 @@ func printApplyResults(cmd *cobra.Command, results []applyResult, dryRun bool) {
 		fmt.Fprintln(out)
 		if result.Protocol != "" {
 			fmt.Fprintf(out, "    Protocol: %s\n", result.Protocol)
+		}
+		if result.TargetURL != "" {
+			fmt.Fprintf(out, "    Target: %s\n", result.TargetURL)
 		}
 		if result.SealosHost != "" {
 			fmt.Fprintf(out, "    Sealos host: %s\n", result.SealosHost)
@@ -901,13 +941,14 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			return results, err
 		}
 		result := diffResult{
-			Name:         normalized.Name,
-			TunnelID:     normalized.TunnelID,
-			DesiredPort:  normalized.LocalPort,
-			DesiredHost:  normalized.CustomDomain,
-			ExpiresAt:    normalized.ExpiresAt,
-			AccessPolicy: normalized.AccessPolicy != nil,
-			BasicAuth:    normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+			Name:          normalized.Name,
+			TunnelID:      normalized.TunnelID,
+			DesiredPort:   normalized.LocalPort,
+			DesiredTarget: normalized.TargetURL,
+			DesiredHost:   normalized.CustomDomain,
+			ExpiresAt:     normalized.ExpiresAt,
+			AccessPolicy:  normalized.AccessPolicy != nil,
+			BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		}
 		existing, err := lookup(normalized.TunnelID)
 		if err == nil {
@@ -915,10 +956,14 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			result.ExpiresAt = normalized.ExpiresAt
 			result.AccessPolicy = normalized.AccessPolicy != nil
 			result.CurrentPort = existing.LocalPort
+			result.CurrentTarget = sessionTargetURL(*existing)
 			result.CurrentHost = existing.CustomDomain
 			result.Action = "no-op"
 			if existing.LocalPort != normalized.LocalPort {
 				result.Changes = append(result.Changes, fmt.Sprintf("localPort: %s -> %s", valueOr(existing.LocalPort, "-"), normalized.LocalPort))
+			}
+			if sessionTargetURL(*existing) != normalized.TargetURL {
+				result.Changes = append(result.Changes, fmt.Sprintf("target: %s -> %s", valueOr(sessionTargetURL(*existing), "-"), normalized.TargetURL))
 			}
 			if valueOr(existing.Protocol, "https") != normalized.Protocol {
 				result.Changes = append(result.Changes, fmt.Sprintf("protocol: %s -> %s", valueOr(existing.Protocol, "-"), normalized.Protocol))
@@ -991,8 +1036,8 @@ func printDiffResults(cmd *cobra.Command, results []diffResult) {
 	fmt.Fprintln(out, "Sealtun Diff")
 	for _, result := range results {
 		fmt.Fprintf(out, "  - %s (%s): %s", result.Name, result.TunnelID, result.Action)
-		if result.DesiredPort != "" {
-			fmt.Fprintf(out, " localhost:%s", result.DesiredPort)
+		if result.DesiredTarget != "" {
+			fmt.Fprintf(out, " %s", result.DesiredTarget)
 		}
 		fmt.Fprintln(out)
 		for _, change := range result.Changes {

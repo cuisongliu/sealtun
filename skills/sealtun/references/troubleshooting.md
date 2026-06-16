@@ -8,7 +8,7 @@ Start with the symptom, then confirm the layer before changing anything:
 
 | Symptom | Likely layer | First checks | Typical fix |
 | --- | --- | --- | --- |
-| Public URL shows offline/degraded | Local app or daemon | `list --check`, `inspect <id>`, `curl 127.0.0.1:<port>` | Start the local app, fix port, or restart/resume tunnel |
+| Public URL shows offline/degraded | Local app, upstream target, or daemon | `list --check`, `inspect <id>`, `curl 127.0.0.1:<port>` or `curl <target>` | Start the local app, fix target reachability, or restart/resume tunnel |
 | `ssh` connects then closes after auth starts | Local sshd/user auth | `ssh -vvv`, `logs <id>`, local sshd logs | Fix user/key/password/PAM on the machine running Sealtun |
 | TCP connection opens then closes | Local target protocol/auth | `inspect <id> --remote`, protocol client logs | Fix database/service bind/auth/TLS expectations |
 | Custom domain not ready | DNS/CNAME or certificate | `domain plan`, `domain verify`, `domain doctor` | Correct CNAME, then wait/verify certificate |
@@ -29,7 +29,7 @@ sealtun inspect <tunnel-id>
 sealtun doctor
 ```
 
-Start by checking login, active region/profile, local session records, and whether the local target port is reachable.
+Start by checking login, active region/profile, local session records, and whether the configured target is reachable from the machine running Sealtun.
 
 ## Login, Region, Profile
 
@@ -99,7 +99,7 @@ Direct SSH uses `--protocol ssh` and a public TCP NodePort. The public host plus
 
 For generic TCP, use `--protocol tcp` and connect to `<public-host>:<node-port>` with the protocol-specific client, for example `psql -h <public-host> -p <node-port>`. If the connection opens and closes, inspect the local target service logs and authentication settings on the machine running Sealtun.
 
-## Local Port Unreachable
+## Target Unreachable
 
 Symptoms:
 
@@ -115,9 +115,10 @@ sealtun list --check
 sealtun inspect <tunnel-id>
 lsof -i :3000
 curl -v http://127.0.0.1:3000/
+curl -v http://10.0.0.12:8080/
 ```
 
-Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. Fix the local service first. Sealtun forwards to `localhost:<localPort>` from the machine running the CLI.
+Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. For `--target`, do not use discovery; verify the explicit upstream URL from the machine running Sealtun. Fix the local service or upstream reachability first. Sealtun forwards to `localhost:<localPort>` for local tunnels, or to `target` for HTTPS upstream tunnels.
 
 ## Remote Kubernetes Or Pod Problems
 

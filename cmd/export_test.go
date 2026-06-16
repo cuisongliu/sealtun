@@ -88,6 +88,27 @@ func TestExportSessionCanIncludeSecretPlaceholders(t *testing.T) {
 	}
 }
 
+func TestExportSessionUsesTargetForRemoteHTTPUpstream(t *testing.T) {
+	t.Parallel()
+
+	item, warnings := exportSession(session.TunnelSession{
+		TunnelID:  "api",
+		Protocol:  "https",
+		LocalPort: "8080",
+		TargetURL: "http://10.0.0.12:8080",
+	}, false)
+
+	if item.Target != "http://10.0.0.12:8080" {
+		t.Fatalf("expected target export, got %#v", item)
+	}
+	if item.LocalPort != 0 {
+		t.Fatalf("remote target should not export localPort, got %d", item.LocalPort)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+}
+
 func TestExportSessionRejectsInvalidLocalPort(t *testing.T) {
 	t.Parallel()
 

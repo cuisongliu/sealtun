@@ -29,8 +29,26 @@ func TestServerUnavailablePageWhenClientDisconnected(t *testing.T) {
 	if !strings.Contains(body, "Sealtun Tunnel Status") {
 		t.Fatal("missing fallback page shell")
 	}
-	if !strings.Contains(body, "localhost:3000") {
+	if !strings.Contains(body, "http://localhost:3000") {
 		t.Fatal("fallback page should include expected local port")
+	}
+}
+
+func TestServerRewritesHostForHTTPUpstreamTarget(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions("secret", 8080, "https", "8080", ServerOptions{
+		TargetURL: "http://api.internal:8080",
+	})
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/app", nil)
+
+	server.reverseProxy.Director(req)
+
+	if req.Host != "api.internal:8080" {
+		t.Fatalf("expected upstream host rewrite, got %q", req.Host)
+	}
+	if req.URL.Host != "tunnel-target" {
+		t.Fatalf("unexpected proxy target host: %s", req.URL.Host)
 	}
 }
 

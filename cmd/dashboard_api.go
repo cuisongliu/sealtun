@@ -36,6 +36,7 @@ type dashboardTunnelCreateRequest struct {
 	Name                 string   `json:"name,omitempty"`
 	Protocol             string   `json:"protocol"`
 	LocalPort            int      `json:"localPort"`
+	Target               string   `json:"target,omitempty"`
 	Domain               string   `json:"domain,omitempty"`
 	WaitDomain           bool     `json:"waitDomain,omitempty"`
 	ReadyTimeout         string   `json:"readyTimeout,omitempty"`
@@ -711,7 +712,7 @@ func createDashboardTunnel(ctx context.Context, req dashboardTunnelCreateRequest
 		protocol = tunnelprotocol.HTTPS
 	}
 	localPort := req.LocalPort
-	if localPort == 0 {
+	if localPort == 0 && strings.TrimSpace(req.Target) == "" {
 		return applyResult{}, fmt.Errorf("localPort is required")
 	}
 	effectiveReadyTimeout, err := parseDashboardTimeout(req.ReadyTimeout, readyTimeout)
@@ -757,6 +758,7 @@ func createDashboardTunnel(ctx context.Context, req dashboardTunnelCreateRequest
 	}
 	result, err := applyOneTunnel(ctx, applyTunnel{
 		Name:          name,
+		Target:        req.Target,
 		LocalPort:     localPort,
 		Protocol:      protocol,
 		Domain:        req.Domain,

@@ -13,7 +13,7 @@ import (
 func TestUnavailableResponse(t *testing.T) {
 	t.Parallel()
 
-	response := unavailableResponse("3000")
+	response := unavailableResponse("http://localhost:3000")
 
 	if !strings.HasPrefix(response, "HTTP/1.1 502 Bad Gateway\r\n") {
 		t.Fatalf("unexpected status line: %q", response)
@@ -27,11 +27,11 @@ func TestUnavailableResponse(t *testing.T) {
 	if !strings.Contains(response, "localhost:3000") {
 		t.Fatal("response should show expected local target")
 	}
-	if !strings.Contains(response, "Refresh this page after the local service is ready.") {
+	if !strings.Contains(response, "Refresh this page after the target is ready.") {
 		t.Fatal("response should explain recovery step")
 	}
-	if !strings.Contains(response, "<strong>3000</strong>") {
-		t.Fatal("response should mention the local port")
+	if !strings.Contains(response, "http://localhost:3000") {
+		t.Fatal("response should mention the target")
 	}
 }
 

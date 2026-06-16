@@ -38,6 +38,7 @@ type TunnelSession struct {
 	CustomDomain string           `json:"customDomain,omitempty"`
 	PublicPort   int32            `json:"publicPort,omitempty"`
 	LocalPort    string           `json:"localPort"`
+	TargetURL    string           `json:"targetUrl,omitempty"`
 	Secret       string           `json:"secret,omitempty"`
 	BasicAuth    *BasicAuthConfig `json:"basicAuth,omitempty"`
 	AccessPolicy *AccessPolicy    `json:"accessPolicy,omitempty"`

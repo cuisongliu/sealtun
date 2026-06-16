@@ -587,6 +587,53 @@ func TestEnsureTunnelStoresAuthSecretOutsideDeploymentArgs(t *testing.T) {
 	}
 }
 
+func TestEnsureTunnelInjectsTargetURLAndRollsPodsOnTargetChange(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset()
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	_, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "raw-secret", "https", "3000", TunnelOptions{
+		TargetURL: "http://10.0.0.12:8080",
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	args := strings.Join(deployment.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "--target-url http://10.0.0.12:8080") {
+		t.Fatalf("expected target URL arg, got %#v", deployment.Spec.Template.Spec.Containers[0].Args)
+	}
+	firstDigest := deployment.Spec.Template.Annotations[serverConfigDigestKey]
+	if firstDigest == "" {
+		t.Fatalf("expected server config digest annotation")
+	}
+
+	_, err = client.EnsureTunnelWithOptions(context.Background(), "abc123", "raw-secret", "https", "3000", TunnelOptions{
+		TargetURL: "http://10.0.0.13:8080",
+	})
+	if err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error after target change: %v", err)
+	}
+	updated, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated deployment: %v", err)
+	}
+	updatedArgs := strings.Join(updated.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(updatedArgs, "--target-url http://10.0.0.13:8080") {
+		t.Fatalf("expected updated target URL arg, got %#v", updated.Spec.Template.Spec.Containers[0].Args)
+	}
+	if got := updated.Spec.Template.Annotations[serverConfigDigestKey]; got == "" || got == firstDigest {
+		t.Fatalf("expected server config digest annotation to change after target change, got %q", got)
+	}
+}
+
 func TestEnsureTunnelInjectsBasicAuthViaSecret(t *testing.T) {
 	name := "sealtun-abc123"
 	firstHash, err := publicauth.HashPassword("secret")
@@ -752,6 +799,14 @@ func TestImageTagForVersion(t *testing.T) {
 				t.Fatalf("expected %s, got %s", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestServerImageForVersionCanBeOverridden(t *testing.T) {
+	t.Setenv("SEALTUN_SERVER_IMAGE", "example.com/sealtun:test")
+
+	if got := serverImageForVersion("v1.2.3"); got != "example.com/sealtun:test" {
+		t.Fatalf("expected overridden image, got %s", got)
 	}
 }
 

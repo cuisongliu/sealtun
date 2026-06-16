@@ -58,6 +58,7 @@ type CleanupSummary struct {
 type TunnelOptions struct {
 	CustomDomain string
 	SealosHost   string
+	TargetURL    string
 	BasicAuth    *BasicAuthOptions
 	AccessPolicy *accesspolicy.Policy
 }
@@ -422,7 +423,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Deployment
-	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, digestSalt, opts.BasicAuth, opts.AccessPolicy)
+	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.TargetURL, digestSalt, opts.BasicAuth, opts.AccessPolicy)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure deployment: %w", err)
 	}
@@ -550,8 +551,8 @@ func validateBasicAuthOptions(opts *BasicAuthOptions) error {
 // It is HMAC-keyed with a per-tunnel random salt (stored only in the auth
 // Secret, never in the public pod annotation) so the annotation cannot be used
 // as an offline brute-force oracle to recover the tunnel secret or auth config.
-func serverConfigDigest(salt []byte, secret string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) string {
-	parts := []string{secret}
+func serverConfigDigest(salt []byte, secret, targetURL string, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) string {
+	parts := []string{secret, strings.TrimSpace(targetURL)}
 	if basicAuth != nil {
 		parts = append(parts, strings.TrimSpace(basicAuth.Username), basicAuth.PasswordHash)
 	}
@@ -622,7 +623,7 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 	return false, nil, getErr
 }
 
-func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort string, salt []byte, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
+func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort, targetURL string, salt []byte, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
 	replicas := int32(1)
 	labels := managedLabels(name)
 
@@ -631,6 +632,9 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 	u := int64(1001)
 
 	args := []string{"server", "--secret-env", "SEALTUN_SECRET", "--port", "8080", "--protocol", protocol, "--local-port", localPort}
+	if strings.TrimSpace(targetURL) != "" {
+		args = append(args, "--target-url", strings.TrimSpace(targetURL))
+	}
 	podAnnotations := map[string]string{}
 	env := []corev1.EnvVar{
 		{
@@ -681,7 +685,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 			},
 		})
 	}
-	podAnnotations[serverConfigDigestKey] = serverConfigDigest(salt, secret, basicAuth, policy)
+	podAnnotations[serverConfigDigestKey] = serverConfigDigest(salt, secret, targetURL, basicAuth, policy)
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -699,7 +703,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 					Containers: []corev1.Container{
 						{
 							Name:            name,
-							Image:           fmt.Sprintf("ghcr.io/gitlayzer/sealtun:%s", imageTagForVersion(version.Version)),
+							Image:           serverImageForVersion(version.Version),
 							ImagePullPolicy: corev1.PullAlways,
 							Args:            args,
 							Env:             env,
@@ -755,6 +759,13 @@ func imageTagForVersion(value string) string {
 		return strings.TrimPrefix(value, "v")
 	}
 	return "latest"
+}
+
+func serverImageForVersion(value string) string {
+	if image := strings.TrimSpace(os.Getenv("SEALTUN_SERVER_IMAGE")); image != "" {
+		return image
+	}
+	return fmt.Sprintf("ghcr.io/gitlayzer/sealtun:%s", imageTagForVersion(value))
 }
 
 func containerPortsForProtocol(protocol string) []corev1.ContainerPort {

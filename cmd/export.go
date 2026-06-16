@@ -109,8 +109,12 @@ func exportSession(sess session.TunnelSession, includeSecretPlaceholders bool) (
 		Domain:    sess.CustomDomain,
 		TTL:       sess.TTL,
 	}
+	if strings.TrimSpace(sess.TargetURL) != "" && sess.TargetURL != defaultLocalTargetURL(sess.LocalPort) {
+		item.Target = sess.TargetURL
+		item.LocalPort = 0
+	}
 	warnings := []string{}
-	if item.LocalPort == 0 {
+	if item.LocalPort == 0 && item.Target == "" {
 		warnings = append(warnings, fmt.Sprintf("tunnel %s has no numeric local port; exported localPort as 0 and needs manual editing", sess.TunnelID))
 	}
 	if tunnelprotocol.IsHTTP(protocol) {

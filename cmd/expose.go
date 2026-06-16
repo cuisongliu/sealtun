@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,15 +21,15 @@ import (
 
 var exposeCmd = &cobra.Command{
 	Use:   "expose [port]",
-	Short: "Expose a local port to the internet",
-	Long: `Expose a local port to the internet via Sealos Cloud.
+	Short: "Expose a local port or HTTP upstream target to the internet",
+	Long: `Expose a local port or HTTP upstream target to the internet via Sealos Cloud.
 This command automatically deploys a tunnel server on Sealos, obtains a public URL,
-and establishes a secure connection to forward traffic to your local port.`,
+and establishes a secure connection to forward traffic to the configured target.`,
 	SilenceUsage: true,
-	Args:         cobra.ExactArgs(1),
+	Args:         cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		localPort := args[0]
-		if err := validateLocalPort(localPort); err != nil {
+		localPort, targetURL, err := resolveExposeTarget(args, exposeTarget)
+		if err != nil {
 			return err
 		}
 		normalizedCustomDomain, err := validateCustomDomain(customDomain)
@@ -47,6 +48,9 @@ and establishes a secure connection to forward traffic to your local port.`,
 			return err
 		}
 		protocol = tunnelprotocol.Normalize(protocol)
+		if strings.TrimSpace(exposeTarget) != "" && !tunnelprotocol.IsHTTP(protocol) {
+			return fmt.Errorf("--target is only supported for https tunnels")
+		}
 		if !tunnelprotocol.IsHTTP(protocol) {
 			if normalizedCustomDomain != "" || waitDomain {
 				return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
@@ -120,6 +124,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 		hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{
 			BasicAuth:    basicAuthToK8s(basicAuthConfig),
 			AccessPolicy: accessPolicyToK8s(accessPolicyConfig),
+			TargetURL:    targetURL,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to provision tunnel on Sealos: %w", err)
@@ -143,6 +148,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			CustomDomain:    hosts.CustomDomain,
 			PublicPort:      hosts.PublicPort,
 			LocalPort:       localPort,
+			TargetURL:       targetURL,
 			Secret:          secret,
 			BasicAuth:       basicAuthConfig,
 			AccessPolicy:    accessPolicyConfig,
@@ -171,6 +177,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
 		} else {
 			fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
+			fmt.Printf("[+] Target: %s\n", targetURL)
 		}
 		if basicAuthConfig != nil && basicAuthConfig.Enabled {
 			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
@@ -252,7 +259,7 @@ and establishes a secure connection to forward traffic to your local port.`,
 
 		// 4 & 5. Connect via WebSocket
 		wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(sessionRecord))
-		return tunnel.DialServerAndServeProtocol(ctx, wsURL, secret, localPort, protocol, func() {
+		return tunnel.DialServerAndServeTarget(ctx, wsURL, secret, localPort, targetURL, protocol, func() {
 			current, err := session.Get(tunnelID)
 			if err != nil {
 				return
@@ -287,6 +294,7 @@ var temporaryAccessTokenEnv string
 var temporaryAccessTTL time.Duration
 var accessRateLimit string
 var accessAuditEnabled bool
+var exposeTarget string
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
@@ -295,6 +303,7 @@ const tunnelCleanupTimeout = 30 * time.Second
 func init() {
 	rootCmd.AddCommand(exposeCmd)
 	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https, ssh, or tcp")
+	exposeCmd.Flags().StringVar(&exposeTarget, "target", "", "HTTP upstream target URL to expose, e.g. http://10.0.0.12:8080")
 	exposeCmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
 	exposeCmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
 	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
@@ -313,6 +322,30 @@ func init() {
 	exposeCmd.Flags().DurationVar(&temporaryAccessTTL, "temporary-access-ttl", time.Hour, "Temporary access URL lifetime")
 	exposeCmd.Flags().StringVar(&accessRateLimit, "rate-limit", "", "Rate limit HTTPS public traffic, e.g. 60/m or 1000/h")
 	exposeCmd.Flags().BoolVar(&accessAuditEnabled, "audit", false, "Enable HTTPS access audit for allow/deny decisions")
+}
+
+func resolveExposeTarget(args []string, explicitTarget string) (string, string, error) {
+	if len(args) == 0 && strings.TrimSpace(explicitTarget) == "" {
+		return "", "", fmt.Errorf("provide a local port or --target")
+	}
+	localPort := ""
+	if len(args) > 0 {
+		localPort = args[0]
+		if err := validateLocalPort(localPort); err != nil {
+			return "", "", err
+		}
+	}
+	target, err := tunnel.TargetFor(localPort, explicitTarget)
+	if err != nil {
+		return "", "", err
+	}
+	if localPort != "" && strings.TrimSpace(explicitTarget) != "" && localPort != target.Port {
+		return "", "", fmt.Errorf("positional port %s does not match --target port %s; omit the positional port or use the same port", localPort, target.Port)
+	}
+	if localPort == "" {
+		localPort = target.Port
+	}
+	return localPort, target.URL, nil
 }
 
 func printAccessPolicySummary(config *session.AccessPolicy) {

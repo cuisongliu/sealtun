@@ -1,6 +1,6 @@
 # Sealtun CLI Reference
 
-Use this for interactive Sealtun operation: install, shell completion, guided init, login, expose HTTPS, SSH, or generic TCP, access cluster-internal Services/Pods with connect, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
+Use this for interactive Sealtun operation: install, shell completion, guided init, login, expose HTTPS, remote HTTP upstream targets, SSH, or generic TCP, access cluster-internal Services/Pods with connect, secure public HTTP traffic, observe, bind domains, stop/start, and clean up tunnels.
 
 ## Quick Recipes
 
@@ -9,6 +9,7 @@ Use these paths before listing every available flag:
 | Request | Commands | Notes |
 | --- | --- | --- |
 | "I want my local app on the internet" / "让本地项目跑在公网" | `sealtun status`; `sealtun discover` if the port is unclear; `sealtun expose <port>` | Defaults to HTTPS and daemon mode. Return the public URL and tunnel ID. |
+| "Expose this remote HTTP address" / "把远端地址端口转公网" | `sealtun expose --target http://host:port` | HTTPS-only. The target must be reachable from the machine running Sealtun. |
 | "Help me get started" / "第一次怎么用" | `sealtun status`; `sealtun init`; `sealtun init --apply` only if creation is requested | `init` is read-only by default and prints a recommended command plus YAML. |
 | "Give my local app a public domain" / "给本地服务一个公网域名" | `sealtun expose <port> --domain <domain>` or `sealtun domain plan <id> <domain>` | If the tunnel already exists, plan first, then add/set only when mutation is requested. |
 | "Expose SSH publicly" / "公网 SSH" | `sealtun expose 22 --protocol ssh` | Return `ssh <user>@<public-host> -p <node-port>`. Do not add HTTPS auth/domain features. |
@@ -76,6 +77,7 @@ sealtun init
 sealtun init --protocol auto --json
 sealtun init --protocol postgres --apply
 sealtun expose 3000
+sealtun expose --target http://10.0.0.12:8080
 sealtun expose 3000 --foreground
 sealtun expose 3000 --ready-timeout 2m
 ```
@@ -84,9 +86,11 @@ sealtun expose 3000 --ready-timeout 2m
 
 Use `https` when the user wants a browser URL, webhook callback URL, OAuth callback, payment callback, public preview link, Basic Auth, Bearer tokens, temporary access links, IP allowlist/denylist, or custom domain.
 
+Use `--target` when the public HTTPS URL should forward to an existing HTTP/HTTPS upstream address instead of `localhost:<port>`. The target must be reachable from the machine running the Sealtun CLI. `--target` is rejected for `--protocol ssh` and `--protocol tcp`; those remain direct L4 local-port tunnels.
+
 ## Public Access Controls
 
-Access controls are enforced by the Sealtun server proxy layer, independent of Ingress annotations. They apply to public business traffic, not `/_sealtun/ws`, health checks, or internal metrics protected by the tunnel secret.
+Access controls are enforced by the Sealtun server proxy layer, independent of Ingress annotations. They apply to public business traffic, including `--target` upstream traffic, not `/_sealtun/ws`, health checks, or internal metrics protected by the tunnel secret.
 
 Prefer environment variables for credentials:
 
@@ -158,7 +162,7 @@ Token constraints and behavior:
 
 - Bearer and temporary tokens must be at least 8 characters.
 - Stored runtime policy uses SHA-256 token hashes.
-- Temporary access uses `?_sealtun_token=<token>` and strips that query parameter before forwarding upstream.
+- Temporary access uses `?_sealtun_token=<token>` and strips that query parameter before forwarding to the local service or `--target` upstream.
 - IP rules accept individual IPs or CIDR ranges. Sealtun reads `X-Real-IP`, then the last valid proxy-confirmed client IP in `X-Forwarded-For`, then `RemoteAddr`.
 - When Basic Auth and Bearer or temporary links are both configured, either authentication path can allow the request, subject to IP rules.
 - Rate limits use fixed-window specs such as `60/m` or `1000/h`.
@@ -307,7 +311,7 @@ sealtun doctor --fix
 
 Dashboard is a local workbench by default. It can create HTTPS/SSH/TCP tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events/resources, and run domain plan/add/verify/clear. It uses only the current active profile/region/namespace and does not switch login scope.
 
-`sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. Use the returned `protocolHint`, `templateHint`, and `localPort` to prefill an expose command or dashboard form. Standard hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
+`sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port` or the dashboard HTTPS `Target URL` field. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
 
 `sealtun resources` uses the current active profile/region/namespace and shows Kubernetes resource occupancy for one tunnel: Deployment replicas, Pod count, Service type, NodePort, Ingress host count, Certificate presence, Issuer, and Secret metadata. It is not a cloud billing estimate, and Secret data is not displayed.
 

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 type ServerOptions struct {
 	BasicAuth    *publicauth.BasicAuth
 	AccessPolicy *accesspolicy.Policy
+	TargetURL    string
 }
 
 type Server struct {
@@ -37,6 +39,8 @@ type Server struct {
 	port                       int
 	protocol                   string
 	localPort                  string
+	targetURL                  string
+	targetHost                 string
 	basicAuth                  *publicauth.BasicAuth
 	accessPolicy               *accesspolicy.Policy
 	basicAuthAuthorizedHeaders sync.Map
@@ -77,11 +81,23 @@ func NewServerWithOptions(secret string, port int, protocol string, localPort st
 			rateLimiter = accesspolicy.NewRateLimiter(spec)
 		}
 	}
+	targetURL := strings.TrimSpace(opts.TargetURL)
+	if targetURL == "" {
+		if target, err := LocalhostTarget(localPort); err == nil {
+			targetURL = target.URL
+		}
+	}
+	targetHost := ""
+	if parsed, err := url.Parse(targetURL); err == nil {
+		targetHost = parsed.Host
+	}
 	s := &Server{
 		secret:       secret,
 		port:         port,
 		protocol:     protocol,
 		localPort:    localPort,
+		targetURL:    targetURL,
+		targetHost:   targetHost,
 		basicAuth:    opts.BasicAuth,
 		accessPolicy: opts.AccessPolicy,
 		rateLimiter:  rateLimiter,
@@ -100,17 +116,27 @@ func NewServerWithOptions(secret string, port int, protocol string, localPort st
 	director := func(req *http.Request) {
 		req.URL.Scheme = "http"
 		req.URL.Host = "tunnel-target"
+		if s.targetHost != "" {
+			req.Host = s.targetHost
+		}
 	}
 
 	s.reverseProxy = &httputil.ReverseProxy{
 		Director:  director,
 		Transport: s.reverseProxyTransport(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			WriteUnavailablePage(w, s.localPort, fmt.Sprintf("The remote ingress is reachable, but the local Sealtun client is not connected to this tunnel yet: %v", err))
+			WriteUnavailablePage(w, s.targetLabel(), fmt.Sprintf("The remote ingress is reachable, but the local Sealtun client is not connected to this tunnel yet: %v", err))
 		},
 	}
 
 	return s
+}
+
+func (s *Server) targetLabel() string {
+	if strings.TrimSpace(s.targetURL) != "" {
+		return s.targetURL
+	}
+	return s.localPort
 }
 
 func (s *Server) reverseProxyTransport() http.RoundTripper {
@@ -214,6 +240,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"connectedAt":         connectedAt,
 		"protocol":            s.protocol,
 		"localPort":           s.localPort,
+		"targetUrl":           s.targetURL,
 		"totalRequests":       total,
 		"activeRequests":      s.activeRequests.Load(),
 		"totalResponseBytes":  s.totalResponseBytes.Load(),

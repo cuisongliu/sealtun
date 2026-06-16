@@ -16,6 +16,7 @@ import (
 	"github.com/labring/sealtun/pkg/k8s"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/session"
+	"github.com/labring/sealtun/pkg/tunnel"
 )
 
 var errMissingSessionKubeconfig = errors.New("session has no embedded kubeconfig")
@@ -38,17 +39,44 @@ func findSession(tunnelID string) (*session.TunnelSession, error) {
 }
 
 func localPortReachable(port string) bool {
-	if port == "" || port == "-" {
+	return targetReachable(defaultLocalTargetURL(port))
+}
+
+func targetReachable(targetURL string) bool {
+	target, err := tunnel.ParseTarget(targetURL)
+	if err != nil {
 		return false
 	}
-
-	target := (&url.URL{Scheme: "http", Host: net.JoinHostPort("localhost", port)}).Host
-	conn, err := net.DialTimeout("tcp", target, 500*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", target.Address, 500*time.Millisecond)
 	if err != nil {
 		return false
 	}
 	_ = conn.Close()
 	return true
+}
+
+func defaultLocalTargetURL(port string) string {
+	if port == "" || port == "-" {
+		return ""
+	}
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort("localhost", port)}).String()
+}
+
+func sessionTargetURL(sess session.TunnelSession) string {
+	if strings.TrimSpace(sess.TargetURL) != "" {
+		return sess.TargetURL
+	}
+	return defaultLocalTargetURL(sess.LocalPort)
+}
+
+func sessionTargetLabel(sess session.TunnelSession) string {
+	if strings.TrimSpace(sess.TargetURL) != "" {
+		return sess.TargetURL
+	}
+	if strings.TrimSpace(sess.LocalPort) != "" {
+		return "localhost:" + sess.LocalPort
+	}
+	return "unknown"
 }
 
 func k8sClientForSession(sess session.TunnelSession) (*k8s.Client, error) {
@@ -172,7 +200,7 @@ func classifySession(sess session.TunnelSession, checkLocalPort bool) sessionSna
 	status := session.RuntimeStatusWithOwner(sess, processAlive)
 	localReachable := false
 	if checkLocalPort {
-		localReachable = localPortReachable(sess.LocalPort)
+		localReachable = targetReachable(sessionTargetURL(sess))
 		if status == "active" && processAlive && !localReachable {
 			status = "degraded"
 		}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,26 @@ func TestDaemonTunnelFingerprintChangesForForwardingInputs(t *testing.T) {
 				t.Fatalf("expected fingerprint to change for %s", tt.name)
 			}
 		})
+	}
+}
+
+func TestWaitForDaemonSessionAfterRequiresFreshConnection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:        "abc123",
+		Mode:            "daemon",
+		PID:             os.Getpid(),
+		ConnectionState: session.ConnectionStateConnected,
+		LastConnectedAt: time.Now().Add(-time.Minute).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := waitForDaemonSessionAfter("abc123", 20*time.Millisecond, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "did not reconnect") {
+		t.Fatalf("expected stale connection to be rejected, got %v", err)
 	}
 }
 

@@ -159,7 +159,7 @@ func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDo
 		Status:             snapshot.Status,
 		Protocol:           valueOr(sess.Protocol, "https"),
 		Endpoint:           endpoint,
-		LocalTarget:        "localhost:" + valueOr(sess.LocalPort, "unknown"),
+		LocalTarget:        sessionTargetLabel(*sess),
 		Mode:               valueOr(sess.Mode, "foreground"),
 		Namespace:          sess.Namespace,
 		ProcessAlive:       snapshot.ProcessAlive,
@@ -169,7 +169,7 @@ func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDo
 	payload.Checks = append(payload.Checks,
 		doctorCheck{Name: "session", Status: "ok", Detail: "local session record exists"},
 		ownerDoctorCheck(*sess, snapshot.ProcessAlive),
-		localPortDoctorCheck(*sess, snapshot.LocalPortReachable),
+		targetDoctorCheck(*sess, snapshot.LocalPortReachable),
 	)
 
 	remoteCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -659,25 +659,25 @@ func ownerCheckDetail(sess session.TunnelSession, alive bool) string {
 	return "recorded process is not running"
 }
 
-func localPortDoctorCheck(sess session.TunnelSession, reachable bool) doctorCheck {
+func targetDoctorCheck(sess session.TunnelSession, reachable bool) doctorCheck {
 	status := checkStatus(reachable)
 	if sess.ConnectionState == session.ConnectionStateStopped {
 		status = "skip"
 	}
-	return doctorCheck{Name: "local-port", Status: status, Detail: localPortCheckDetail(sess, reachable)}
+	return doctorCheck{Name: "target", Status: status, Detail: targetCheckDetail(sess, reachable)}
 }
 
-func localPortCheckDetail(sess session.TunnelSession, reachable bool) string {
+func targetCheckDetail(sess session.TunnelSession, reachable bool) string {
 	if reachable {
-		return "local target accepts TCP connections"
+		return "target accepts TCP connections"
 	}
-	if strings.TrimSpace(sess.LocalPort) == "" {
-		return "local port is missing from the session"
+	if strings.TrimSpace(sessionTargetURL(sess)) == "" {
+		return "target is missing from the session"
 	}
 	if sess.ConnectionState == session.ConnectionStateStopped {
 		return "not checked because the tunnel is stopped"
 	}
-	return fmt.Sprintf("localhost:%s is not reachable", sess.LocalPort)
+	return fmt.Sprintf("%s is not reachable", sessionTargetLabel(sess))
 }
 
 func remoteDoctorChecks(remote *k8s.TunnelDiagnostics) []doctorCheck {
@@ -723,8 +723,8 @@ func tunnelDoctorSuggestions(sess session.TunnelSession, payload *tunnelDoctorPa
 	if !payload.ProcessAlive && sess.Mode == "daemon" {
 		suggestions = append(suggestions, "run `sealtun status` to check the daemon, then restart the tunnel if needed")
 	}
-	if !payload.LocalPortReachable && strings.TrimSpace(sess.LocalPort) != "" && payload.Status != "stopped" {
-		suggestions = append(suggestions, fmt.Sprintf("start the local service on localhost:%s, then rerun `sealtun doctor %s`", sess.LocalPort, sess.TunnelID))
+	if !payload.LocalPortReachable && strings.TrimSpace(sessionTargetURL(sess)) != "" && payload.Status != "stopped" {
+		suggestions = append(suggestions, fmt.Sprintf("make target %s reachable from this machine, then rerun `sealtun doctor %s`", sessionTargetLabel(sess), sess.TunnelID))
 	}
 	if payload.Remote == nil {
 		suggestions = append(suggestions, fmt.Sprintf("run `sealtun inspect %s --remote` after login to see Kubernetes resource details", sess.TunnelID))

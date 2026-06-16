@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labring/sealtun/pkg/k8s"
@@ -65,7 +66,8 @@ func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServ
 		return nil, fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
 	}
 	newSecret := uuid.New().String()
-	if err := updateTunnelServerSecret(ctx, sess, newSecret); err != nil {
+	mutatedAt := nowUTC().Add(-time.Second)
+	if err := updateTunnelServerSecret(ctx, sess, newSecret, mutatedAt); err != nil {
 		return nil, err
 	}
 	return &rotateServerSecretPayload{
@@ -75,7 +77,7 @@ func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServ
 	}, nil
 }
 
-func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, newSecret string) error {
+func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, newSecret string, mutatedAt time.Time) error {
 	client, err := k8sClientForSession(*sess)
 	if err != nil {
 		return err
@@ -84,6 +86,7 @@ func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, 
 	hosts, err := namespacedClient.EnsureTunnelWithOptions(ctx, sess.TunnelID, newSecret, sessionProtocol(*sess), sess.LocalPort, k8s.TunnelOptions{
 		CustomDomain: sess.CustomDomain,
 		SealosHost:   sessionSealosHostForDomain(*sess, namespacedClient.SealosHost(sess.TunnelID)),
+		TargetURL:    sess.TargetURL,
 		BasicAuth:    basicAuthToK8s(sess.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(sess.AccessPolicy),
 	})
@@ -97,6 +100,14 @@ func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, 
 	sess.PublicPort = hosts.PublicPort
 	if err := session.Update(*sess); err != nil {
 		return fmt.Errorf("save rotated session: %w", err)
+	}
+	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
+	defer cancelReady()
+	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
+		return fmt.Errorf("wait for rotated server secret rollout: %w", err)
+	}
+	if err := waitForDaemonSessionAfter(sess.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
+		return fmt.Errorf("wait for local daemon to reconnect after server secret rotation: %w", err)
 	}
 	return nil
 }

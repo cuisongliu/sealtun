@@ -1592,6 +1592,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	      return dnsHostPattern.test(host) ? host : "";
 	    };
 	    const publicHostFor = (t) => safeHost(t?.host) || safeHost(t?.sealosHost);
+	    const targetFor = (t) => {
+	      if (t?.targetUrl) return String(t.targetUrl);
+	      if (!t?.localPort) return "-";
+	      return t?.protocol === "ssh" || t?.protocol === "tcp" ? "localhost:" + t.localPort : "http://localhost:" + t.localPort;
+	    };
 	    const publicEndpointFor = (t) => {
 	      const host = publicHostFor(t);
 	      if (!host) return "";
@@ -1780,7 +1785,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         ["Degraded Tunnels", d.degradedSessions || 0, "degraded", warnIcon()],
         ["Remote Issues", d.remoteIssues || 0, "issue", serverIcon()],
         ["Domains Ready", domains.ready || 0, "domain", globeIcon],
-        ["Local Ports", d.reachableActivePorts || 0, "", plugIcon()]
+        ["Reachable Targets", d.reachableActivePorts || 0, "", plugIcon()]
       ];
       document.getElementById("cards").innerHTML = cards.map(c =>
         '<div class="metric-card ' + c[2] + '"><div class="metric-icon">' + c[3] + '</div><div><div class="metric-label">' + esc(c[0]) + '</div><div class="metric-value">' + esc(c[1]) + '</div></div></div>'
@@ -1796,7 +1801,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         return;
       }
 	      document.getElementById("tunnel-table").innerHTML =
-	        '<table><thead><tr><th>Status</th><th>Tunnel ID</th><th>Public Endpoint</th><th>Local Target</th><th>Mode</th><th>Namespace</th><th>Created At</th><th>Actions</th></tr></thead><tbody>' +
+	        '<table><thead><tr><th>Status</th><th>Tunnel ID</th><th>Public Endpoint</th><th>Target</th><th>Mode</th><th>Namespace</th><th>Created At</th><th>Actions</th></tr></thead><tbody>' +
 	        tunnels.map(t => {
 	          const cls = statusClass(t.status);
 	          const host = publicHostFor(t);
@@ -1804,7 +1809,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	            '<td><button class="status ' + cls + '" data-select="' + esc(t.tunnelId) + '"><span class="dot"></span>' + esc(title(t.status)) + '</button></td>' +
 	            '<td><span class="tag">' + esc(t.tunnelId) + '</span></td>' +
 	            '<td>' + hostLink(t, "link") + '</td>' +
-	            '<td class="mono muted">localhost:' + esc(t.localPort || "-") + '</td>' +
+	            '<td class="mono muted">' + esc(targetFor(t)) + '</td>' +
             '<td><span class="mode">' + esc(t.mode || "-") + '</span></td>' +
             '<td class="muted">' + esc(t.namespace || "-") + '</td>' +
             '<td class="mono muted">' + esc(shortDate(t.createdAt)) + '</td>' +
@@ -1849,11 +1854,11 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 	          group("Connection", [
 	            [t.protocol === "ssh" ? "Public SSH" : (t.protocol === "tcp" ? "Public TCP" : "Public URL"), publicEndpointFor(t) || "-", true],
 	            ["CNAME Target", cname || "-", true],
-	            ["Local Target", "localhost:" + (t.localPort || "-"), true]
+	            ["Target", targetFor(t), true]
           ]) +
           group("Local Status", [
             ["Process Alive", isLive(t.status) ? "Yes" : "Unknown", false, isLive(t.status)],
-            ["Port Reachable", t.status === "degraded" ? "No" : (isLive(t.status) ? "Yes" : "Unknown"), false, t.status !== "degraded" && isLive(t.status)]
+            ["Target Reachable", t.status === "degraded" ? "No" : (isLive(t.status) ? "Yes" : "Unknown"), false, t.status !== "degraded" && isLive(t.status)]
           ]) +
           group("Remote Resources", [
             ["Deployment Ready", isLive(t.status) ? "Yes" : "Unknown", false, isLive(t.status)],
@@ -1925,7 +1930,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       const server = data.server || {};
       return '<div class="panel-grid">' +
         small("Status", data.status || title(t.status)) +
-        small("Local Target", "localhost:" + (data.localPort || t.localPort || "-")) +
+        small("Target", data.targetUrl || targetFor(t)) +
         small("Remote Ready", remote.deploymentReady || "-") +
         small("Pods", String(remote.readyPods || 0) + "/" + String(remote.podCount || 0)) +
         small("Requests", server.totalRequests ?? "-") +
@@ -2015,7 +2020,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 
     function configPanel(t) {
       const cfgDomain = safeHost(t.customDomain);
-      const yaml = 'version: v1\ntunnels:\n  - name: ' + (t.tunnelId || "web") + '\n    localPort: ' + (t.localPort || "3000") + '\n    protocol: ' + (t.protocol || "https") + (cfgDomain ? '\n    domain: ' + cfgDomain : '') + '\n    readyTimeout: 90s';
+      const yaml = 'version: v1\ntunnels:\n  - name: ' + (t.tunnelId || "web") + yamlTargetLine(t) + '\n    protocol: ' + (t.protocol || "https") + (cfgDomain ? '\n    domain: ' + cfgDomain : '') + '\n    readyTimeout: 90s';
       return '<pre class="yaml">' + esc(yaml) + '</pre><div class="modal-actions"><button class="btn" data-copy="' + esc(yaml) + '">Copy YAML</button><button class="btn primary" data-open-apply="' + esc(t.tunnelId) + '">Open in Apply YAML</button></div>';
     }
 
@@ -2217,6 +2222,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
 
     function exposeCommandFromForm() {
       const port = Number(document.getElementById("new-port")?.value || 0);
+      const target = document.getElementById("new-target")?.value.trim() || "";
       const protocol = document.getElementById("new-protocol")?.value || "https";
       const domain = document.getElementById("new-domain")?.value.trim() || "";
       const basicAuth = document.getElementById("new-basic-auth")?.value.trim() || "";
@@ -2227,7 +2233,9 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       const tempTTL = document.getElementById("new-temp-ttl")?.value.trim() || "";
       const rateLimit = document.getElementById("new-rate-limit")?.value.trim() || "";
       const auditEnabled = document.getElementById("new-audit")?.checked || false;
-      const parts = ["sealtun", "expose", String(port || "<port>")];
+      const parts = ["sealtun", "expose"];
+      if (target && protocol === "https") parts.push("--target", target);
+      else parts.push(String(port || "<port>"));
       if (protocol !== "https") parts.push("--protocol", protocol);
       if (domain) parts.push("--domain", domain, "--wait-domain");
       if (protocol === "https") {
@@ -2383,7 +2391,13 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     function configYAMLFor(t) {
       if (!t) return "version: v1\ntunnels:\n  - name: web\n    localPort: 3000\n    protocol: https\n";
       const cfgDomain = safeHost(t.customDomain);
-      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + "\n    localPort: " + (t.localPort || "3000") + "\n    protocol: " + (t.protocol || "https") + (cfgDomain ? "\n    domain: " + cfgDomain : "") + "\n    readyTimeout: 90s\n";
+      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + yamlTargetLine(t) + "\n    protocol: " + (t.protocol || "https") + (cfgDomain ? "\n    domain: " + cfgDomain : "") + "\n    readyTimeout: 90s\n";
+    }
+
+    function yamlTargetLine(t) {
+      const localDefault = "http://localhost:" + (t?.localPort || "");
+      if ((t?.protocol || "https") === "https" && t?.targetUrl && t.targetUrl !== localDefault) return "\n    target: " + t.targetUrl;
+      return "\n    localPort: " + (t?.localPort || "3000");
     }
 
     function modal(titleText, bodyHTML, actionsHTML) {
@@ -2419,6 +2433,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           '<label class="field">Name<input class="input" id="new-name" value="' + esc(defaults.name) + '"></label>' +
           '<label class="field">Protocol<select class="select" id="new-protocol"><option value="https">https</option><option value="ssh">ssh</option><option value="tcp">tcp</option></select></label>' +
           '<label class="field">Local Port<input class="input" id="new-port" type="number" min="1" max="65535" value="' + esc(defaults.port) + '"></label>' +
+          '<label class="field" data-http-field>Target URL<input class="input" id="new-target" placeholder="http://10.0.0.12:8080"></label>' +
           '<label class="field" data-http-field>Domain<input class="input" id="new-domain" placeholder="app.example.com"></label>' +
           '<label class="field" data-http-field>Basic Auth<input class="input" id="new-basic-auth" placeholder="user:password"></label>' +
           '<label class="field" data-http-field>Bearer Token<input class="input" id="new-bearer" placeholder="optional"></label>' +
@@ -2445,6 +2460,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         const item = protocolDefaults[key] || protocolDefaults.https;
         document.getElementById("new-name").value = item.name;
         document.getElementById("new-port").value = item.port;
+        document.getElementById("new-target").value = "";
         document.getElementById("new-protocol").value = item.protocol;
         updateProtocolFields();
       };
@@ -2478,7 +2494,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           target.innerHTML = '<div class="context-note">' + esc(err.message || String(err)) + '</div>';
         }
       };
-      ["new-name", "new-protocol", "new-port", "new-domain", "new-basic-auth", "new-bearer", "new-allow", "new-deny", "new-temp-token", "new-temp-ttl", "new-rate-limit", "new-audit"].forEach(id => {
+      ["new-name", "new-protocol", "new-port", "new-target", "new-domain", "new-basic-auth", "new-bearer", "new-allow", "new-deny", "new-temp-token", "new-temp-ttl", "new-rate-limit", "new-audit"].forEach(id => {
         document.getElementById(id).oninput = updateProtocolFields;
         document.getElementById(id).onchange = updateProtocolFields;
       });
@@ -2493,6 +2509,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           name,
           protocol: document.getElementById("new-protocol").value,
           localPort: Number(document.getElementById("new-port").value),
+          target: document.getElementById("new-target").value.trim(),
           domain: document.getElementById("new-domain").value.trim(),
           basicAuth: document.getElementById("new-basic-auth").value.trim(),
           bearerToken: document.getElementById("new-bearer").value.trim(),

@@ -24,6 +24,7 @@ type inspectPayload struct {
 	CustomDomain       string                 `json:"customDomain,omitempty"`
 	PublicPort         int32                  `json:"publicPort,omitempty"`
 	LocalPort          string                 `json:"localPort,omitempty"`
+	TargetURL          string                 `json:"targetUrl,omitempty"`
 	BasicAuth          *inspectBasicAuth      `json:"basicAuth,omitempty"`
 	AccessPolicy       *inspectAccessPolicy   `json:"accessPolicy,omitempty"`
 	TTL                string                 `json:"ttl,omitempty"`
@@ -108,6 +109,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 		CustomDomain:       sess.CustomDomain,
 		PublicPort:         sess.PublicPort,
 		LocalPort:          sess.LocalPort,
+		TargetURL:          sessionTargetLabel(*sess),
 		BasicAuth:          inspectBasicAuthFromSession(sess.BasicAuth),
 		AccessPolicy:       inspectAccessPolicyFromSession(sess.AccessPolicy),
 		TTL:                sess.TTL,
@@ -207,7 +209,7 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		fmt.Fprintf(out, "  Custom domain: %s\n", payload.CustomDomain)
 		fmt.Fprintf(out, "  DNS CNAME target: %s\n", valueOr(payload.SealosHost, payload.Host))
 	}
-	fmt.Fprintf(out, "  Local target: localhost:%s\n", valueOr(payload.LocalPort, "unknown"))
+	fmt.Fprintf(out, "  Target: %s\n", valueOr(payload.TargetURL, sessionTargetLabel(session.TunnelSession{Protocol: payload.Protocol, LocalPort: payload.LocalPort})))
 	if payload.BasicAuth != nil && payload.BasicAuth.Enabled {
 		fmt.Fprintf(out, "  Basic Auth: enabled")
 		if payload.BasicAuth.Username != "" {
@@ -247,7 +249,7 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 	fmt.Fprintf(out, "  Region: %s\n", valueOr(payload.Region, "unknown"))
 	fmt.Fprintf(out, "  PID: %d\n", payload.PID)
 	fmt.Fprintf(out, "  Process alive: %s\n", yesNo(payload.ProcessAlive))
-	fmt.Fprintf(out, "  Local port reachable: %s\n", yesNo(payload.LocalPortReachable))
+	fmt.Fprintf(out, "  Target reachable: %s\n", yesNo(payload.LocalPortReachable))
 	fmt.Fprintf(out, "  Created at: %s\n", valueOr(payload.CreatedAt, "unknown"))
 
 	if len(payload.Resources) > 0 {

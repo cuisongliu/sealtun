@@ -103,8 +103,13 @@ func openDaemonLogFile(path string) (*os.File, error) {
 }
 
 func waitForDaemonSession(tunnelID string, timeout time.Duration) error {
+	return waitForDaemonSessionAfter(tunnelID, timeout, time.Time{})
+}
+
+func waitForDaemonSessionAfter(tunnelID string, timeout time.Duration, after time.Time) error {
 	var lastState string
 	var lastError string
+	var lastConnectedAt string
 	var connectedSince time.Time
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -115,7 +120,15 @@ func waitForDaemonSession(tunnelID string, timeout time.Duration) error {
 		if err == nil {
 			lastState = sess.ConnectionState
 			lastError = sess.LastError
+			lastConnectedAt = sess.LastConnectedAt
 			if daemonstate.Alive() && session.RuntimeStatusWithOwner(*sess, true) == "active" {
+				if !after.IsZero() {
+					connectedAt, err := time.Parse(time.RFC3339, sess.LastConnectedAt)
+					if err != nil || !connectedAt.After(after) {
+						connectedSince = time.Time{}
+						goto wait
+					}
+				}
 				if connectedSince.IsZero() {
 					connectedSince = time.Now()
 				}
@@ -126,10 +139,14 @@ func waitForDaemonSession(tunnelID string, timeout time.Duration) error {
 				connectedSince = time.Time{}
 			}
 		}
+	wait:
 		select {
 		case <-timer.C:
 			if lastError != "" {
 				return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s, last error: %s)", tunnelID, timeout, lastState, lastError)
+			}
+			if !after.IsZero() && lastConnectedAt != "" {
+				return fmt.Errorf("daemon did not reconnect tunnel %s within %s (state=%s, last connected at: %s)", tunnelID, timeout, lastState, lastConnectedAt)
 			}
 			if lastState != "" {
 				return fmt.Errorf("daemon did not connect tunnel %s within %s (state=%s)", tunnelID, timeout, lastState)

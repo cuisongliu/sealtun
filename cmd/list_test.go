@@ -88,6 +88,9 @@ func TestCollectListItemsShowsSSHEndpoint(t *testing.T) {
 	if items[0].Endpoint != "ssh <user>@ssh.example.com -p 32022" {
 		t.Fatalf("unexpected ssh endpoint: %s", items[0].Endpoint)
 	}
+	if items[0].TargetURL != "localhost:22" {
+		t.Fatalf("unexpected ssh target: %s", items[0].TargetURL)
+	}
 }
 
 func TestCollectListItemsShowsTCPEndpoint(t *testing.T) {
@@ -116,6 +119,9 @@ func TestCollectListItemsShowsTCPEndpoint(t *testing.T) {
 	}
 	if items[0].Endpoint != "db.example.com:35432" {
 		t.Fatalf("unexpected tcp endpoint: %s", items[0].Endpoint)
+	}
+	if items[0].TargetURL != "localhost:5432" {
+		t.Fatalf("unexpected tcp target: %s", items[0].TargetURL)
 	}
 }
 

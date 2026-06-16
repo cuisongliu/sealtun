@@ -22,6 +22,7 @@ type metricsPayload struct {
 	SealosHost     string                 `json:"sealosHost,omitempty"`
 	CustomDomain   string                 `json:"customDomain,omitempty"`
 	LocalPort      string                 `json:"localPort"`
+	TargetURL      string                 `json:"targetUrl,omitempty"`
 	ProcessAlive   bool                   `json:"processAlive"`
 	LocalReachable bool                   `json:"localReachable"`
 	Remote         *remoteMetricsPayload  `json:"remote,omitempty"`
@@ -89,6 +90,7 @@ func collectMetricsPayloadForSession(ctx context.Context, sess session.TunnelSes
 		SealosHost:     sess.SealosHost,
 		CustomDomain:   sess.CustomDomain,
 		LocalPort:      sess.LocalPort,
+		TargetURL:      sessionTargetLabel(sess),
 		ProcessAlive:   snapshot.ProcessAlive,
 		LocalReachable: snapshot.LocalPortReachable,
 	}
@@ -207,9 +209,9 @@ func printMetrics(cmd *cobra.Command, payload *metricsPayload) {
 	if payload.CustomDomain != "" {
 		fmt.Fprintf(out, "  Custom domain: %s\n", payload.CustomDomain)
 	}
-	fmt.Fprintf(out, "  Local port: %s\n", valueOr(payload.LocalPort, "unknown"))
+	fmt.Fprintf(out, "  Target: %s\n", valueOr(payload.TargetURL, "unknown"))
 	fmt.Fprintf(out, "  Process alive: %s\n", yesNo(payload.ProcessAlive))
-	fmt.Fprintf(out, "  Local reachable: %s\n", yesNo(payload.LocalReachable))
+	fmt.Fprintf(out, "  Target reachable: %s\n", yesNo(payload.LocalReachable))
 
 	if payload.Remote != nil {
 		fmt.Fprintln(out, "")

@@ -150,6 +150,26 @@ func TestNormalizeApplyTunnelDefaultsProtocol(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplyTunnelAcceptsHTTPUpstreamTarget(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeApplyTunnel(applyTunnel{Name: "api", Target: "http://10.0.0.12:8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.LocalPort != "8080" || normalized.TargetURL != "http://10.0.0.12:8080" {
+		t.Fatalf("unexpected target normalization: %#v", normalized)
+	}
+}
+
+func TestNormalizeApplyTunnelRejectsMismatchedLocalPortAndTarget(t *testing.T) {
+	t.Parallel()
+
+	if _, err := normalizeApplyTunnel(applyTunnel{Name: "api", LocalPort: 3000, Target: "http://10.0.0.12:8080"}); err == nil {
+		t.Fatal("expected mismatched localPort and target port to fail")
+	}
+}
+
 func TestNormalizeApplyTunnelRejectsHTTPOnlyOptionsForSSH(t *testing.T) {
 	t.Setenv("SEALTUN_TEST_BEARER", "secret-token")
 
@@ -172,6 +192,10 @@ func TestNormalizeApplyTunnelRejectsHTTPOnlyOptionsForSSH(t *testing.T) {
 		{
 			name: "access policy",
 			item: applyTunnel{Name: "ssh", LocalPort: 22, Protocol: "ssh", AccessPolicy: &applyAccessPolicy{BearerTokenEnv: "SEALTUN_TEST_BEARER"}},
+		},
+		{
+			name: "target",
+			item: applyTunnel{Name: "ssh", Target: "http://10.0.0.12:22", Protocol: "ssh"},
 		},
 	}
 	for _, tt := range tests {
@@ -417,6 +441,7 @@ func TestRunDiffDetectsCreateAndUpdate(t *testing.T) {
 		Protocol:  "https",
 		Host:      "web.example.com",
 		LocalPort: "3000",
+		TargetURL: "http://localhost:3000",
 		Secret:    "secret",
 	}); err != nil {
 		t.Fatal(err)
@@ -425,7 +450,7 @@ func TestRunDiffDetectsCreateAndUpdate(t *testing.T) {
 	data := []byte(`version: v1
 tunnels:
   - name: web
-    localPort: 3001
+    target: http://10.0.0.12:3001
   - name: api
     localPort: 8080
 `)
@@ -446,7 +471,7 @@ tunnels:
 	foundUpdate := false
 	for _, result := range results {
 		if result.TunnelID == "web" {
-			foundUpdate = result.Action == "update" && len(result.Changes) > 0
+			foundUpdate = result.Action == "update" && changesContain(result.Changes, "target:")
 			if result.CurrentHost != "" {
 				t.Fatalf("expected currentHost to report custom domain, got public host %q", result.CurrentHost)
 			}
@@ -455,6 +480,15 @@ tunnels:
 	if !foundUpdate {
 		t.Fatalf("expected web update diff, got %#v", results)
 	}
+}
+
+func changesContain(changes []string, needle string) bool {
+	for _, change := range changes {
+		if strings.Contains(change, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunDiffWithoutSessionDirectoryPlansCreate(t *testing.T) {

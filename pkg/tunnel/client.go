@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"html"
 	"io"
@@ -18,21 +19,33 @@ import (
 
 // DialServerAndServe connects to the tunnel Server and serves local requests
 func DialServerAndServe(ctx context.Context, wsURL, secret, localPort string) error {
-	return dialServerAndServe(ctx, wsURL, secret, localPort, tunnelprotocol.HTTPS, nil)
+	return DialServerAndServeProtocol(ctx, wsURL, secret, localPort, tunnelprotocol.HTTPS, nil)
 }
 
 // DialServerAndServeWithOnConnected invokes onConnected after the tunnel handshake succeeds.
 func DialServerAndServeWithOnConnected(ctx context.Context, wsURL, secret, localPort string, onConnected func()) error {
-	return dialServerAndServe(ctx, wsURL, secret, localPort, tunnelprotocol.HTTPS, onConnected)
+	return DialServerAndServeProtocol(ctx, wsURL, secret, localPort, tunnelprotocol.HTTPS, onConnected)
 }
 
 // DialServerAndServeProtocol connects to the tunnel Server and serves local
 // requests using protocol-aware fallback behavior.
 func DialServerAndServeProtocol(ctx context.Context, wsURL, secret, localPort, protocol string, onConnected func()) error {
-	return dialServerAndServe(ctx, wsURL, secret, localPort, protocol, onConnected)
+	target, err := TargetFor(localPort, "")
+	if err != nil {
+		return err
+	}
+	return dialServerAndServe(ctx, wsURL, secret, target, protocol, onConnected)
 }
 
-func dialServerAndServe(ctx context.Context, wsURL, secret, localPort, protocol string, onConnected func()) error {
+func DialServerAndServeTarget(ctx context.Context, wsURL, secret, localPort, targetURL, protocol string, onConnected func()) error {
+	target, err := TargetFor(localPort, targetURL)
+	if err != nil {
+		return err
+	}
+	return dialServerAndServe(ctx, wsURL, secret, target, protocol, onConnected)
+}
+
+func dialServerAndServe(ctx context.Context, wsURL, secret string, target Target, protocol string, onConnected func()) error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
@@ -78,7 +91,7 @@ func dialServerAndServe(ctx context.Context, wsURL, secret, localPort, protocol 
 		onConnected()
 	}
 
-	fmt.Printf("Tunnel established! Forwarding to localhost:%s\n", localPort)
+	fmt.Printf("Tunnel established! Forwarding to %s\n", target.URL)
 
 	for {
 		stream, err := session.AcceptStream()
@@ -93,7 +106,7 @@ func dialServerAndServe(ctx context.Context, wsURL, secret, localPort, protocol 
 			return fmt.Errorf("accept stream error: %w", err)
 		}
 
-		go handleLocalForwarding(stream, localPort, protocol)
+		go handleTargetForwarding(stream, target, protocol)
 	}
 }
 
@@ -101,30 +114,59 @@ var lastWarning time.Time
 var warningMu sync.Mutex
 
 func handleLocalForwarding(stream net.Conn, localPort, protocol string) {
+	target, err := LocalhostTarget(localPort)
+	if err != nil {
+		_ = stream.Close()
+		return
+	}
+	handleTargetForwarding(stream, target, protocol)
+}
+
+func handleTargetForwarding(stream net.Conn, target Target, protocol string) {
 	defer stream.Close()
 
-	localAddr := fmt.Sprintf("localhost:%s", localPort)
-	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
+	targetConn, err := dialTarget(target)
 	if err != nil {
 		warningMu.Lock()
 		if time.Since(lastWarning) > 2*time.Second {
-			fmt.Printf("🚦 Hint: Request received, but local service %s is not running yet. Please start it.\n", localAddr)
+			fmt.Printf("Hint: Request received, but target %s is not reachable yet. Please check it.\n", target.URL)
 			lastWarning = time.Now()
 		}
 		warningMu.Unlock()
 
 		if tunnelprotocol.IsHTTP(protocol) {
-			_, _ = io.WriteString(stream, unavailableResponse(localPort))
+			_, _ = io.WriteString(stream, unavailableResponse(target.URL))
 		}
 		return
 	}
-	defer localConn.Close()
+	defer targetConn.Close()
 
-	_ = relayBidirectional(localConn, stream, nil)
+	_ = relayBidirectional(targetConn, stream, nil)
 }
 
-func unavailableResponse(localPort string) string {
-	body := unavailableHTML(localPort, "Your public tunnel is online, but the local app is not listening yet.", "Sealtun has received this request successfully. The remote ingress and tunnel server are working, but the client machine is not serving traffic on the configured local port.")
+func dialTarget(target Target) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", target.Address, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(target.URL, "https://") {
+		host, _, splitErr := net.SplitHostPort(target.Address)
+		if splitErr != nil {
+			_ = conn.Close()
+			return nil, splitErr
+		}
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: host})
+		if err := tlsConn.Handshake(); err != nil {
+			_ = tlsConn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+	return conn, nil
+}
+
+func unavailableResponse(target string) string {
+	body := unavailableHTML(target, "Your public tunnel is online, but the target is not reachable yet.", "Sealtun has received this request successfully. The remote ingress and tunnel server are working, but the configured target is not accepting traffic.")
 
 	return fmt.Sprintf(
 		"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
@@ -134,17 +176,17 @@ func unavailableResponse(localPort string) string {
 }
 
 // WriteUnavailablePage renders the public fallback page when the server cannot reach the local client.
-func WriteUnavailablePage(w http.ResponseWriter, localPort string, detail string) {
-	body := unavailableHTML(localPort, "Your public tunnel is online, but the local client is not connected yet.", detail)
+func WriteUnavailablePage(w http.ResponseWriter, target string, detail string) {
+	body := unavailableHTML(target, "Your public tunnel is online, but the local client is not connected yet.", detail)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
 	_, _ = io.WriteString(w, body)
 }
 
-func unavailableHTML(localPort string, heading string, detail string) string {
-	port := html.EscapeString(localPort)
-	if port == "" {
-		port = "unknown"
+func unavailableHTML(target string, heading string, detail string) string {
+	target = html.EscapeString(target)
+	if target == "" {
+		target = "unknown"
 	}
 	heading = html.EscapeString(heading)
 	detail = html.EscapeString(detail)
@@ -165,14 +207,14 @@ func unavailableHTML(localPort string, heading string, detail string) string {
 		".list { margin: 0; padding-left: 18px; color: #cbd5e1; }" +
 		".list li { margin: 6px 0; }" +
 		"</style></head><body><div class='shell'><div class='topbar'><div class='dot'></div><div class='brand'>Sealtun Tunnel Status</div></div><div class='content'>" +
-		"<div class='badge'>Local Port Offline</div>" +
+		"<div class='badge'>Target Offline</div>" +
 		"<h1>" + heading + "</h1>" +
 		"<p>" + detail + "</p>" +
-		"<div class='panel'><div class='label'>Expected local target</div><div class='value'>localhost:" + port + "</div></div>" +
+		"<div class='panel'><div class='label'>Expected target</div><div class='value'>" + target + "</div></div>" +
 		"<div class='panel'><div class='label'>What to do next</div><ul class='list'>" +
-		"<li>Start your local application on port <strong>" + port + "</strong>.</li>" +
-		"<li>Keep the <code>sealtun expose " + port + "</code> process running.</li>" +
-		"<li>Refresh this page after the local service is ready.</li>" +
+		"<li>Confirm the target is reachable from the machine running the Sealtun client.</li>" +
+		"<li>Keep the <code>sealtun expose</code> process or daemon running.</li>" +
+		"<li>Refresh this page after the target is ready.</li>" +
 		"</ul></div>" +
 		"</div></div></body></html>"
 }

@@ -527,6 +527,9 @@ func TestDashboardHomeIncludesCommandPreviewForMutations(t *testing.T) {
 	for _, want := range []string{
 		"command-preview",
 		"exposeCommandFromForm",
+		"new-target",
+		"--target",
+		"yamlTargetLine",
 		"sealtun apply -f sealtun.yaml",
 		"sealtun domain add",
 		"sealtun domain verify",

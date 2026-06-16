@@ -37,3 +37,35 @@ func TestValidateProtocol(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveExposeTargetDefaultsLocalPort(t *testing.T) {
+	t.Parallel()
+
+	localPort, targetURL, err := resolveExposeTarget([]string{"3000"}, "")
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if localPort != "3000" || targetURL != "http://localhost:3000" {
+		t.Fatalf("unexpected target: localPort=%s target=%s", localPort, targetURL)
+	}
+}
+
+func TestResolveExposeTargetAcceptsRemoteHTTPUpstream(t *testing.T) {
+	t.Parallel()
+
+	localPort, targetURL, err := resolveExposeTarget(nil, "http://10.0.0.12:8080")
+	if err != nil {
+		t.Fatalf("resolve remote target: %v", err)
+	}
+	if localPort != "8080" || targetURL != "http://10.0.0.12:8080" {
+		t.Fatalf("unexpected remote target: localPort=%s target=%s", localPort, targetURL)
+	}
+}
+
+func TestResolveExposeTargetRejectsMismatchedPortAndTarget(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := resolveExposeTarget([]string{"3000"}, "http://10.0.0.12:8080"); err == nil {
+		t.Fatal("expected mismatched positional port and target port to fail")
+	}
+}

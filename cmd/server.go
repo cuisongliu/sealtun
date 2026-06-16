@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/labring/sealtun/pkg/accesspolicy"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
@@ -36,6 +37,10 @@ var serverCmd = &cobra.Command{
 		if err := validateLocalPort(serverLocalPort); err != nil {
 			return fmt.Errorf("invalid --local-port: %w", err)
 		}
+		serverTargetURL := strings.TrimSpace(serverTarget)
+		if serverTargetURL == "" {
+			serverTargetURL = defaultLocalTargetURL(serverLocalPort)
+		}
 		basicAuth, err := resolveServerBasicAuth(serverBasicAuthInput{
 			User:              serverBasicAuthUser,
 			UserEnv:           serverBasicAuthUserEnv,
@@ -55,6 +60,7 @@ var serverCmd = &cobra.Command{
 		svr := tunnel.NewServerWithOptions(resolvedSecret, bindPort, serverProtocol, serverLocalPort, tunnel.ServerOptions{
 			BasicAuth:    basicAuth,
 			AccessPolicy: accessPolicy,
+			TargetURL:    serverTargetURL,
 		})
 		return svr.Start()
 	},
@@ -65,6 +71,7 @@ var secretEnv string
 var bindPort int
 var serverProtocol string
 var serverLocalPort string
+var serverTarget string
 var serverBasicAuthUser string
 var serverBasicAuthUserEnv string
 var serverBasicAuthPasswordHash string
@@ -81,6 +88,7 @@ func init() {
 	serverCmd.Flags().IntVar(&bindPort, "port", 8080, "Port to bind the server to")
 	serverCmd.Flags().StringVar(&serverProtocol, "protocol", "https", "Tunnel protocol")
 	serverCmd.Flags().StringVar(&serverLocalPort, "local-port", "", "Expected local port displayed on fallback pages")
+	serverCmd.Flags().StringVar(&serverTarget, "target-url", "", "Expected target URL displayed on fallback pages")
 	serverCmd.Flags().StringVar(&serverBasicAuthUser, "basic-auth-user", "", "Basic Auth username for public tunnel traffic")
 	serverCmd.Flags().StringVar(&serverBasicAuthUserEnv, "basic-auth-user-env", "", "Read Basic Auth username from an environment variable")
 	serverCmd.Flags().StringVar(&serverBasicAuthPasswordHash, "basic-auth-password-hash", "", "Basic Auth password hash for public tunnel traffic")

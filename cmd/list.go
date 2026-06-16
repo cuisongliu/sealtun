@@ -18,6 +18,7 @@ type listItem struct {
 	CustomDomain string `json:"customDomain,omitempty"`
 	PublicPort   int32  `json:"publicPort,omitempty"`
 	LocalPort    string `json:"localPort"`
+	TargetURL    string `json:"targetUrl"`
 	PID          int    `json:"pid"`
 	Mode         string `json:"mode"`
 	Namespace    string `json:"namespace"`
@@ -89,6 +90,7 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 			CustomDomain: sess.CustomDomain,
 			PublicPort:   sess.PublicPort,
 			LocalPort:    valueOr(sess.LocalPort, "-"),
+			TargetURL:    sessionTargetLabel(sess),
 			PID:          sess.PID,
 			Mode:         valueOr(sess.Mode, "foreground"),
 			Namespace:    valueOr(sess.Namespace, "-"),
@@ -117,14 +119,14 @@ func printListTable(cmd *cobra.Command, items []listItem) {
 	fmt.Fprintln(out, "")
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tPROTOCOL\tENDPOINT\tLOCAL TARGET\tAUTH\tACCESS\tPID\tMODE\tNAMESPACE\tEXPIRES AT\tCREATED AT")
+	fmt.Fprintln(w, "TUNNEL ID\tSTATUS\tPROTOCOL\tENDPOINT\tTARGET\tAUTH\tACCESS\tPID\tMODE\tNAMESPACE\tEXPIRES AT\tCREATED AT")
 	for _, item := range items {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\tlocalhost:%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 			item.TunnelID,
 			item.Status,
 			item.Protocol,
 			item.Endpoint,
-			item.LocalPort,
+			item.TargetURL,
 			yesNo(item.BasicAuth),
 			yesNo(item.AccessPolicy),
 			item.PID,

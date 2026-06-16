@@ -311,6 +311,8 @@ func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, p
 	if strings.TrimSpace(sess.Secret) == "" {
 		return fmt.Errorf("tunnel %s has no local secret; recreate it before updating access policy", sess.TunnelID)
 	}
+	policyChanged := accessPolicyChanged(sess.AccessPolicy, policy)
+	mutatedAt := nowUTC().Add(-time.Second)
 	client, err := k8sClientForSession(*sess)
 	if err != nil {
 		return err
@@ -319,19 +321,12 @@ func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, p
 	hosts, err := namespacedClient.EnsureTunnelWithOptions(ctx, sess.TunnelID, sess.Secret, sessionProtocol(*sess), sess.LocalPort, k8s.TunnelOptions{
 		CustomDomain: sess.CustomDomain,
 		SealosHost:   sessionSealosHostForDomain(*sess, namespacedClient.SealosHost(sess.TunnelID)),
+		TargetURL:    sess.TargetURL,
 		BasicAuth:    basicAuthToK8s(sess.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(policy),
 	})
 	if err != nil {
 		return fmt.Errorf("update remote access policy: %w", err)
-	}
-	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
-	defer cancelReady()
-	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
-		return fmt.Errorf("wait for updated access policy rollout: %w", err)
-	}
-	if err := waitForDaemonSession(sess.TunnelID, daemonConnectTimeout); err != nil {
-		return fmt.Errorf("wait for local daemon to reconnect after access policy update: %w", err)
 	}
 	sess.AccessPolicy = emptyAccessPolicyAsNil(policy)
 	sess.Host = hosts.PublicHost
@@ -340,6 +335,16 @@ func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, p
 	sess.PublicPort = hosts.PublicPort
 	if err := session.Update(*sess); err != nil {
 		return fmt.Errorf("save updated session: %w", err)
+	}
+	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
+	defer cancelReady()
+	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
+		return fmt.Errorf("wait for updated access policy rollout: %w", err)
+	}
+	if policyChanged {
+		if err := waitForDaemonSessionAfter(sess.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
+			return fmt.Errorf("wait for local daemon to reconnect after access policy update: %w", err)
+		}
 	}
 	return nil
 }

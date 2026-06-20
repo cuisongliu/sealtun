@@ -120,6 +120,8 @@ curl -v http://10.0.0.12:8080/
 
 Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. For `--target`, do not use discovery; verify the explicit upstream URL from the machine running Sealtun. Fix the local service or upstream reachability first. Sealtun forwards to `localhost:<localPort>` for local tunnels, or reverse-proxies HTTP methods and bodies to `target` for HTTPS upstream tunnels. A path in `target` is treated as the upstream base path.
 
+On macOS, some local network routes can be reachable through system tools such as `/usr/bin/nc` while Go's native socket dial returns `no route to host`. For explicit HTTP/HTTPS `--target` upstreams, Sealtun falls back to the system `nc` TCP carrier on that narrow error class so the Go HTTP reverse proxy can still complete TLS and request forwarding. If both native dial and the fallback fail, troubleshoot the machine's local network permission or routing state first.
+
 ## Remote Kubernetes Or Pod Problems
 
 Symptoms:

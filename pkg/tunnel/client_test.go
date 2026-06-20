@@ -3,6 +3,8 @@ package tunnel
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -418,6 +420,68 @@ func TestHTTPTargetForwardingSupportsUpgradeResponses(t *testing.T) {
 	}
 	_ = client.Close()
 	<-done
+}
+
+func TestHTTPUpstreamDialFallsBackForNoRouteErrors(t *testing.T) {
+	oldNative := nativeHTTPUpstreamDialContext
+	oldFallback := fallbackHTTPUpstreamDialContext
+	defer func() {
+		nativeHTTPUpstreamDialContext = oldNative
+		fallbackHTTPUpstreamDialContext = oldFallback
+	}()
+
+	nativeErr := errors.New("dial tcp 192.168.10.70:443: connect: no route to host")
+	nativeHTTPUpstreamDialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, nativeErr
+	}
+	fallbackCalled := false
+	fallbackHTTPUpstreamDialContext = func(_ context.Context, network, address string, got error) (net.Conn, error) {
+		fallbackCalled = true
+		if got != nativeErr {
+			t.Fatalf("expected original error, got %v", got)
+		}
+		if network != "tcp" || address != "192.168.10.70:443" {
+			t.Fatalf("unexpected dial target: network=%s address=%s", network, address)
+		}
+		server, client := net.Pipe()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = client.Close()
+		})
+		return client, nil
+	}
+
+	conn, err := dialHTTPUpstreamContext(context.Background(), "tcp", "192.168.10.70:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if !fallbackCalled {
+		t.Fatal("expected fallback dialer to be called")
+	}
+}
+
+func TestHTTPUpstreamDialDoesNotFallbackForOtherErrors(t *testing.T) {
+	oldNative := nativeHTTPUpstreamDialContext
+	oldFallback := fallbackHTTPUpstreamDialContext
+	defer func() {
+		nativeHTTPUpstreamDialContext = oldNative
+		fallbackHTTPUpstreamDialContext = oldFallback
+	}()
+
+	nativeErr := errors.New("dial tcp 10.0.0.12:443: connect: connection refused")
+	nativeHTTPUpstreamDialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, nativeErr
+	}
+	fallbackHTTPUpstreamDialContext = func(context.Context, string, string, error) (net.Conn, error) {
+		t.Fatal("fallback should not be called")
+		return nil, nil
+	}
+
+	_, err := dialHTTPUpstreamContext(context.Background(), "tcp", "10.0.0.12:443")
+	if !errors.Is(err, nativeErr) {
+		t.Fatalf("expected original error, got %v", err)
+	}
 }
 
 func TestJoinTargetPathPreservesRouteShape(t *testing.T) {

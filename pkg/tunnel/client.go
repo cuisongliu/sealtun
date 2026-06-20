@@ -200,7 +200,7 @@ func newTargetReverseProxy(upstream *url.URL, target Target) *httputil.ReversePr
 	}
 	proxy.Transport = &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           dialHTTPUpstreamContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
@@ -212,6 +212,36 @@ func newTargetReverseProxy(upstream *url.URL, target Target) *httputil.ReversePr
 		WriteUnavailablePage(w, target.URL, fmt.Sprintf("The configured target could not be reached by the local Sealtun client: %v", err))
 	}
 	return proxy
+}
+
+type dialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+var nativeHTTPUpstreamDialContext dialContextFunc = (&net.Dialer{
+	Timeout:   10 * time.Second,
+	KeepAlive: 30 * time.Second,
+}).DialContext
+
+var fallbackHTTPUpstreamDialContext = dialSystemNCContext
+
+func dialHTTPUpstreamContext(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := nativeHTTPUpstreamDialContext(ctx, network, address)
+	if err == nil {
+		return conn, nil
+	}
+	if shouldFallbackToSystemNC(err) {
+		return fallbackHTTPUpstreamDialContext(ctx, network, address, err)
+	}
+	return nil, err
+}
+
+func shouldFallbackToSystemNC(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no route to host") ||
+		strings.Contains(message, "network is unreachable") ||
+		strings.Contains(message, "host is down")
 }
 
 func isHTTPUpgrade(req *http.Request) bool {

@@ -9,9 +9,11 @@ import (
 )
 
 type Target struct {
-	URL     string
-	Address string
-	Port    string
+	URL        string
+	Address    string
+	Port       string
+	HostHeader string
+	Explicit   bool
 }
 
 func LocalhostTarget(localPort string) (Target, error) {
@@ -44,9 +46,6 @@ func ParseTarget(raw string) (Target, error) {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return Target{}, fmt.Errorf("target must not include query or fragment")
 	}
-	if parsed.Path != "" && parsed.Path != "/" {
-		return Target{}, fmt.Errorf("target path is not supported")
-	}
 	port := parsed.Port()
 	if port == "" {
 		if scheme == "https" {
@@ -60,18 +59,37 @@ func ParseTarget(raw string) (Target, error) {
 		return Target{}, fmt.Errorf("target port must be between 1 and 65535")
 	}
 	parsed.Scheme = scheme
+	hostHeader := targetHostHeader(parsed.Hostname(), scheme, port)
 	parsed.Host = net.JoinHostPort(parsed.Hostname(), port)
-	parsed.Path = ""
+	if parsed.Path == "/" {
+		parsed.Path = ""
+	}
 	return Target{
-		URL:     parsed.String(),
-		Address: parsed.Host,
-		Port:    port,
+		URL:        parsed.String(),
+		Address:    parsed.Host,
+		Port:       port,
+		HostHeader: hostHeader,
 	}, nil
+}
+
+func targetHostHeader(host, scheme, port string) string {
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		if strings.Contains(host, ":") {
+			return "[" + host + "]"
+		}
+		return host
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func TargetFor(localPort, targetURL string) (Target, error) {
 	if strings.TrimSpace(targetURL) != "" {
-		return ParseTarget(targetURL)
+		target, err := ParseTarget(targetURL)
+		if err != nil {
+			return Target{}, err
+		}
+		target.Explicit = true
+		return target, nil
 	}
 	return LocalhostTarget(localPort)
 }

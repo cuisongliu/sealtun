@@ -31,7 +31,7 @@ Use declarative config when the user wants repeatability, multiple tunnels, stab
 | Need | YAML choice | Check |
 | --- | --- | --- |
 | Stable HTTPS tunnel | `protocol: https`, `name`, `localPort` | `apply --dry-run`, `diff`, then `inspect` |
-| Remote HTTP upstream | `protocol: https`, `name`, `target: http://host:port` | target must be reachable from the Sealtun client machine |
+| Remote HTTP upstream | `protocol: https`, `name`, `target: http://host:port` | target must be reachable from the Sealtun client machine; optional path becomes the upstream base path |
 | Public SSH | `protocol: ssh`, `localPort: 22` | output must show SSH host and port |
 | Generic TCP/database | `protocol: tcp`, protocol-specific port | output must show `<host>:<port>` |
 | Auto-expire | `ttl: 2h` or similar Go duration | verify `expiresAt` behavior in output/session |
@@ -76,7 +76,7 @@ Remote HTTP upstream example:
 version: v1
 tunnels:
   - name: upstream-api
-    target: http://10.0.0.12:8080
+    target: https://10.0.0.12:8443/admin
     protocol: https
     accessPolicy:
       rateLimit: 60/m
@@ -89,9 +89,9 @@ tunnels:
 - `version` defaults to `v1`; only `v1` is supported.
 - `tunnels` must contain at least one item.
 - `name` is required, lower-case DNS-compatible, and becomes the stable tunnel ID. Reapplying the same name updates `sealtun-<name>`.
-- Use `localPort`; `port` is accepted as a compatibility alias. For HTTPS upstream forwarding, use `target: http://host:port` or `target: https://host:port` instead of `localPort`.
+- Use `localPort`; `port` is accepted as a compatibility alias. For HTTPS upstream forwarding, use `target: http://host:port` or `target: https://host:port/base` instead of `localPort`.
 - `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH, and `tcp` is supported for generic direct TCP NodePort tunnels. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh` and `tcp`.
-- `target` is HTTPS-only. It must not include userinfo, path, query, or fragment. If `localPort` is also set, it must match the target port.
+- `target` is HTTPS-only. It may include a path as the upstream base path, but must not include userinfo, query, or fragment. If `localPort` is also set, it must match the target port.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.
 - `readyTimeout` and `domainTimeout` use Go duration syntax and must be positive.
 - Multiple tunnels are applied in one run. On an apply failure, Sealtun attempts rollback for tunnels changed earlier in the batch.

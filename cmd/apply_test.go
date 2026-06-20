@@ -162,6 +162,18 @@ func TestNormalizeApplyTunnelAcceptsHTTPUpstreamTarget(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplyTunnelAcceptsHTTPUpstreamTargetSubRoute(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeApplyTunnel(applyTunnel{Name: "api", Target: "https://192.168.10.70.nip.io/admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.LocalPort != "443" || normalized.TargetURL != "https://192.168.10.70.nip.io:443/admin" {
+		t.Fatalf("unexpected target normalization: %#v", normalized)
+	}
+}
+
 func TestNormalizeApplyTunnelRejectsMismatchedLocalPortAndTarget(t *testing.T) {
 	t.Parallel()
 

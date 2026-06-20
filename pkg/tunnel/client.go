@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -125,6 +127,11 @@ func handleLocalForwarding(stream net.Conn, localPort, protocol string) {
 func handleTargetForwarding(stream net.Conn, target Target, protocol string) {
 	defer stream.Close()
 
+	if tunnelprotocol.IsHTTP(protocol) && target.Explicit {
+		proxyHTTPStream(stream, target)
+		return
+	}
+
 	targetConn, err := dialTarget(target)
 	if err != nil {
 		warningMu.Lock()
@@ -142,6 +149,153 @@ func handleTargetForwarding(stream net.Conn, target Target, protocol string) {
 	defer targetConn.Close()
 
 	_ = relayBidirectional(targetConn, stream, nil)
+}
+
+func proxyHTTPStream(stream net.Conn, target Target) {
+	upstream, err := url.Parse(target.URL)
+	if err != nil {
+		_, _ = io.WriteString(stream, unavailableResponse(target.URL))
+		return
+	}
+
+	proxy := newTargetReverseProxy(upstream, target)
+	listener := singleConnListener{conn: stream, done: make(chan struct{})}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isHTTPUpgrade(r) {
+			defer listener.Close()
+		}
+		proxy.ServeHTTP(w, r)
+	})
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	server.SetKeepAlivesEnabled(false)
+	server.ConnState = func(conn net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			_ = listener.Close()
+		}
+	}
+	err = server.Serve(&listener)
+	if err != nil && err != http.ErrServerClosed && !expectedRelayClose(err) {
+		fmt.Printf("target proxy error for %s: %v\n", target.URL, err)
+	}
+}
+
+func newTargetReverseProxy(upstream *url.URL, target Target) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	originalDirector := proxy.Director
+	upstreamPath := upstream.Path
+	upstreamRawPath := upstream.EscapedPath()
+	proxy.Director = func(req *http.Request) {
+		incomingPath := req.URL.Path
+		incomingRawPath := req.URL.EscapedPath()
+		originalDirector(req)
+		req.URL.Scheme = upstream.Scheme
+		req.URL.Host = upstream.Host
+		req.URL.Path = joinTargetPath(upstreamPath, incomingPath)
+		req.URL.RawPath = joinTargetRawPath(upstreamRawPath, incomingRawPath, req.URL.Path)
+		req.Host = target.HostHeader
+	}
+	proxy.Transport = &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		fmt.Printf("target proxy error for %s: %v\n", target.URL, err)
+		WriteUnavailablePage(w, target.URL, fmt.Sprintf("The configured target could not be reached by the local Sealtun client: %v", err))
+	}
+	return proxy
+}
+
+func isHTTPUpgrade(req *http.Request) bool {
+	if req.Header.Get("Upgrade") == "" {
+		return false
+	}
+	for _, value := range req.Header.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func joinTargetPath(basePath, requestPath string) string {
+	if basePath == "" || basePath == "/" {
+		if requestPath == "" {
+			return "/"
+		}
+		return requestPath
+	}
+	if requestPath == "" {
+		return basePath
+	}
+	if requestPath == "/" {
+		if strings.HasSuffix(basePath, "/") {
+			return basePath
+		}
+		return basePath + "/"
+	}
+	baseSlash := strings.HasSuffix(basePath, "/")
+	requestSlash := strings.HasPrefix(requestPath, "/")
+	switch {
+	case baseSlash && requestSlash:
+		return basePath + requestPath[1:]
+	case !baseSlash && !requestSlash:
+		return basePath + "/" + requestPath
+	default:
+		return basePath + requestPath
+	}
+}
+
+func joinTargetRawPath(basePath, requestPath, decodedPath string) string {
+	joined := joinTargetPath(basePath, requestPath)
+	unescaped, err := url.PathUnescape(joined)
+	if err != nil || unescaped != decodedPath {
+		return ""
+	}
+	if (&url.URL{Path: decodedPath}).EscapedPath() == joined {
+		return ""
+	}
+	return joined
+}
+
+type singleConnListener struct {
+	conn net.Conn
+	once sync.Once
+	stop sync.Once
+	done chan struct{}
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+
+func (l *singleConnListener) Close() error {
+	l.stop.Do(func() {
+		close(l.done)
+	})
+	return nil
+}
+
+func (l *singleConnListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
 }
 
 func dialTarget(target Target) (net.Conn, error) {

@@ -1,6 +1,10 @@
 package cmd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/labring/sealtun/pkg/tunnel"
+)
 
 func TestValidateLocalPort(t *testing.T) {
 	t.Parallel()
@@ -59,6 +63,34 @@ func TestResolveExposeTargetAcceptsRemoteHTTPUpstream(t *testing.T) {
 	}
 	if localPort != "8080" || targetURL != "http://10.0.0.12:8080" {
 		t.Fatalf("unexpected remote target: localPort=%s target=%s", localPort, targetURL)
+	}
+}
+
+func TestResolveExposeTargetAcceptsRemoteHTTPUpstreamSubRoute(t *testing.T) {
+	t.Parallel()
+
+	localPort, targetURL, err := resolveExposeTarget(nil, "https://192.168.10.70.nip.io/admin")
+	if err != nil {
+		t.Fatalf("resolve remote target: %v", err)
+	}
+	if localPort != "443" || targetURL != "https://192.168.10.70.nip.io:443/admin" {
+		t.Fatalf("unexpected remote target: localPort=%s target=%s", localPort, targetURL)
+	}
+}
+
+func TestResolveExposeTargetDefaultHTTPSPortKeepsHostHeaderStable(t *testing.T) {
+	t.Parallel()
+
+	_, targetURL, err := resolveExposeTarget(nil, "https://192.168.10.70.nip.io/")
+	if err != nil {
+		t.Fatalf("resolve remote target: %v", err)
+	}
+	target, err := tunnel.TargetFor("", targetURL)
+	if err != nil {
+		t.Fatalf("parse persisted target: %v", err)
+	}
+	if target.HostHeader != "192.168.10.70.nip.io" {
+		t.Fatalf("unexpected host header after target round trip: %s", target.HostHeader)
 	}
 }
 

@@ -189,10 +189,11 @@ sealtun expose 3000
 
 # 也可以把公网 HTTPS 入口转发到当前机器可访问的 HTTP upstream
 sealtun expose --target http://10.0.0.12:8080
+sealtun expose --target https://10.0.0.12:8443/admin
 
 ```
 
-`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。
+`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；可带 path 作为 upstream base path，例如公开访问 `/api` 会转发到 `https://10.0.0.12:8443/admin/api`。SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。
 
 为公网业务流量启用 Basic Auth：
 ```bash
@@ -519,7 +520,7 @@ tunnels:
 version: v1
 tunnels:
   - name: upstream-api
-    target: http://10.0.0.12:8080
+    target: https://10.0.0.12:8443/admin
     protocol: https
 ```
 
@@ -563,7 +564,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，如果同时写 `localPort`，端口必须和 `target` 端口一致。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
+`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，可带 path 作为 upstream base path，但不能包含 query、fragment 或 userinfo；如果同时写 `localPort`，端口必须和 `target` 端口一致。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
 
 ## 📄 许可证
 

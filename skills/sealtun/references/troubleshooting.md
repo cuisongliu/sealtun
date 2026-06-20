@@ -118,7 +118,7 @@ curl -v http://127.0.0.1:3000/
 curl -v http://10.0.0.12:8080/
 ```
 
-Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. For `--target`, do not use discovery; verify the explicit upstream URL from the machine running Sealtun. Fix the local service or upstream reachability first. Sealtun forwards to `localhost:<localPort>` for local tunnels, or to `target` for HTTPS upstream tunnels.
+Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. For `--target`, do not use discovery; verify the explicit upstream URL from the machine running Sealtun. Fix the local service or upstream reachability first. Sealtun forwards to `localhost:<localPort>` for local tunnels, or reverse-proxies HTTP methods and bodies to `target` for HTTPS upstream tunnels. A path in `target` is treated as the upstream base path.
 
 ## Remote Kubernetes Or Pod Problems
 

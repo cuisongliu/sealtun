@@ -280,6 +280,12 @@ func TestStartRejectsExpiredSessionBeforeRemoteMutation(t *testing.T) {
 func TestRollbackStartedTunnelSessionMarksSessionStopped(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	previousPause := pauseSessionResources
+	pauseSessionResources = func(context.Context, session.TunnelSession) error {
+		return nil
+	}
+	t.Cleanup(func() { pauseSessionResources = previousPause })
+
 	sess := session.TunnelSession{
 		TunnelID:        "rollbackstart",
 		Region:          "https://gzg.sealos.run",

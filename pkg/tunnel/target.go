@@ -9,9 +9,10 @@ import (
 )
 
 type Target struct {
-	URL     string
-	Address string
-	Port    string
+	URL                   string
+	Address               string
+	Port                  string
+	TLSInsecureSkipVerify bool
 }
 
 func LocalhostTarget(localPort string) (Target, error) {
@@ -22,7 +23,15 @@ func LocalhostTarget(localPort string) (Target, error) {
 	return ParseTarget(targetURL)
 }
 
+type TargetOptions struct {
+	TLSInsecureSkipVerify bool
+}
+
 func ParseTarget(raw string) (Target, error) {
+	return ParseTargetWithOptions(raw, TargetOptions{})
+}
+
+func ParseTargetWithOptions(raw string, opts TargetOptions) (Target, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return Target{}, fmt.Errorf("target is required")
@@ -59,19 +68,30 @@ func ParseTarget(raw string) (Target, error) {
 	if err != nil || value < 1 || value > 65535 {
 		return Target{}, fmt.Errorf("target port must be between 1 and 65535")
 	}
+	if opts.TLSInsecureSkipVerify && scheme != "https" {
+		return Target{}, fmt.Errorf("target TLS insecure skip verify is only supported for https targets")
+	}
 	parsed.Scheme = scheme
 	parsed.Host = net.JoinHostPort(parsed.Hostname(), port)
 	parsed.Path = ""
 	return Target{
-		URL:     parsed.String(),
-		Address: parsed.Host,
-		Port:    port,
+		URL:                   parsed.String(),
+		Address:               parsed.Host,
+		Port:                  port,
+		TLSInsecureSkipVerify: opts.TLSInsecureSkipVerify,
 	}, nil
 }
 
 func TargetFor(localPort, targetURL string) (Target, error) {
+	return TargetForWithOptions(localPort, targetURL, TargetOptions{})
+}
+
+func TargetForWithOptions(localPort, targetURL string, opts TargetOptions) (Target, error) {
 	if strings.TrimSpace(targetURL) != "" {
-		return ParseTarget(targetURL)
+		return ParseTargetWithOptions(targetURL, opts)
+	}
+	if opts.TLSInsecureSkipVerify {
+		return Target{}, fmt.Errorf("target TLS insecure skip verify requires --target with an https URL")
 	}
 	return LocalhostTarget(localPort)
 }

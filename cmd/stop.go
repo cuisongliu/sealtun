@@ -22,15 +22,9 @@ var stopCmd = &cobra.Command{
 		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 		defer cancel()
 
-		ownerAlive := sessionOwnerAlive(*sess)
-		if err := pauseSessionResources(ctx, *sess); err != nil {
-			return fmt.Errorf("pause tunnel %s: %w", sess.TunnelID, err)
-		}
-		sess.PID = 0
-		sess.ConnectionState = session.ConnectionStateStopped
-		sess.LastError = ""
-		if err := session.Update(*sess); err != nil {
-			return fmt.Errorf("update local session %s: %w", sess.TunnelID, err)
+		ownerAlive, err := stopTunnelSession(ctx, sess)
+		if err != nil {
+			return err
 		}
 
 		if sess.Protocol == "ssh" || sess.Protocol == "tcp" {
@@ -48,4 +42,24 @@ var stopCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(stopCmd)
+}
+
+func stopTunnelSession(ctx context.Context, sess *session.TunnelSession) (bool, error) {
+	ownerAlive := sessionOwnerAlive(*sess)
+	previous := *sess
+	sess.PID = 0
+	sess.ConnectionState = session.ConnectionStateStopped
+	sess.LastError = ""
+	if err := session.Update(*sess); err != nil {
+		return ownerAlive, fmt.Errorf("update local session %s: %w", sess.TunnelID, err)
+	}
+	if err := pauseSessionResources(ctx, *sess); err != nil {
+		previous.LastError = err.Error()
+		if restoreErr := session.Update(previous); restoreErr != nil {
+			return ownerAlive, fmt.Errorf("pause tunnel %s: %w; restore local session failed: %v", sess.TunnelID, err, restoreErr)
+		}
+		*sess = previous
+		return ownerAlive, fmt.Errorf("pause tunnel %s: %w", sess.TunnelID, err)
+	}
+	return ownerAlive, nil
 }

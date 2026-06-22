@@ -40,8 +40,13 @@ type applyTunnel struct {
 	WaitDomain    bool               `json:"waitDomain,omitempty" yaml:"waitDomain,omitempty"`
 	ReadyTimeout  string             `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
 	DomainTimeout string             `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
+	TargetTLS     *applyTargetTLS    `json:"targetTls,omitempty" yaml:"targetTls,omitempty"`
 	BasicAuth     *applyBasicAuth    `json:"basicAuth,omitempty" yaml:"basicAuth,omitempty"`
 	AccessPolicy  *applyAccessPolicy `json:"accessPolicy,omitempty" yaml:"accessPolicy,omitempty"`
+}
+
+type applyTargetTLS struct {
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty" yaml:"insecureSkipVerify,omitempty"`
 }
 
 type applyBasicAuth struct {
@@ -52,41 +57,44 @@ type applyBasicAuth struct {
 }
 
 type diffResult struct {
-	Name          string   `json:"name"`
-	TunnelID      string   `json:"tunnelId"`
-	Action        string   `json:"action"`
-	Changes       []string `json:"changes,omitempty"`
-	Warnings      []string `json:"warnings,omitempty"`
-	DesiredPort   string   `json:"desiredPort,omitempty"`
-	CurrentPort   string   `json:"currentPort,omitempty"`
-	DesiredTarget string   `json:"desiredTarget,omitempty"`
-	CurrentTarget string   `json:"currentTarget,omitempty"`
-	DesiredHost   string   `json:"desiredHost,omitempty"`
-	CurrentHost   string   `json:"currentHost,omitempty"`
-	ExpiresAt     string   `json:"expiresAt,omitempty"`
-	AccessPolicy  bool     `json:"accessPolicy"`
-	BasicAuth     bool     `json:"basicAuth"`
+	Name                               string   `json:"name"`
+	TunnelID                           string   `json:"tunnelId"`
+	Action                             string   `json:"action"`
+	Changes                            []string `json:"changes,omitempty"`
+	Warnings                           []string `json:"warnings,omitempty"`
+	DesiredPort                        string   `json:"desiredPort,omitempty"`
+	CurrentPort                        string   `json:"currentPort,omitempty"`
+	DesiredTarget                      string   `json:"desiredTarget,omitempty"`
+	CurrentTarget                      string   `json:"currentTarget,omitempty"`
+	DesiredHost                        string   `json:"desiredHost,omitempty"`
+	CurrentHost                        string   `json:"currentHost,omitempty"`
+	ExpiresAt                          string   `json:"expiresAt,omitempty"`
+	TargetTLSInsecureSkipVerify        bool     `json:"targetTlsInsecureSkipVerify,omitempty"`
+	CurrentTargetTLSInsecureSkipVerify bool     `json:"currentTargetTlsInsecureSkipVerify,omitempty"`
+	AccessPolicy                       bool     `json:"accessPolicy"`
+	BasicAuth                          bool     `json:"basicAuth"`
 }
 
 type applyResult struct {
-	Name          string                 `json:"name"`
-	TunnelID      string                 `json:"tunnelId"`
-	Protocol      string                 `json:"protocol"`
-	Host          string                 `json:"host"`
-	SealosHost    string                 `json:"sealosHost,omitempty"`
-	CustomDomain  string                 `json:"customDomain,omitempty"`
-	PublicPort    int32                  `json:"publicPort,omitempty"`
-	LocalPort     string                 `json:"localPort"`
-	TargetURL     string                 `json:"targetUrl,omitempty"`
-	BasicAuth     bool                   `json:"basicAuth"`
-	BasicAuthUser string                 `json:"basicAuthUser,omitempty"`
-	AccessPolicy  bool                   `json:"accessPolicy"`
-	ExpiresAt     string                 `json:"expiresAt,omitempty"`
-	TemporaryURLs []string               `json:"temporaryUrls,omitempty"`
-	Status        string                 `json:"status"`
-	Warnings      []string               `json:"warnings,omitempty"`
-	NewTunnel     bool                   `json:"-"`
-	Previous      *session.TunnelSession `json:"-"`
+	Name                        string                 `json:"name"`
+	TunnelID                    string                 `json:"tunnelId"`
+	Protocol                    string                 `json:"protocol"`
+	Host                        string                 `json:"host"`
+	SealosHost                  string                 `json:"sealosHost,omitempty"`
+	CustomDomain                string                 `json:"customDomain,omitempty"`
+	PublicPort                  int32                  `json:"publicPort,omitempty"`
+	LocalPort                   string                 `json:"localPort"`
+	TargetURL                   string                 `json:"targetUrl,omitempty"`
+	TargetTLSInsecureSkipVerify bool                   `json:"targetTlsInsecureSkipVerify,omitempty"`
+	BasicAuth                   bool                   `json:"basicAuth"`
+	BasicAuthUser               string                 `json:"basicAuthUser,omitempty"`
+	AccessPolicy                bool                   `json:"accessPolicy"`
+	ExpiresAt                   string                 `json:"expiresAt,omitempty"`
+	TemporaryURLs               []string               `json:"temporaryUrls,omitempty"`
+	Status                      string                 `json:"status"`
+	Warnings                    []string               `json:"warnings,omitempty"`
+	NewTunnel                   bool                   `json:"-"`
+	Previous                    *session.TunnelSession `json:"-"`
 }
 
 type normalizedApplyTunnel struct {
@@ -98,6 +106,7 @@ type normalizedApplyTunnel struct {
 	CustomDomain  string
 	BasicAuth     *session.BasicAuthConfig
 	BasicAuthPass string
+	TargetTLS     *session.TargetTLSConfig
 	AccessPolicy  *session.AccessPolicy
 	TTL           string
 	ExpiresAt     string
@@ -201,16 +210,17 @@ func runApplyConfig(ctx context.Context, config *applyFile, dryRun bool) ([]appl
 				return results, err
 			}
 			results = append(results, applyResult{
-				Name:          normalized.Name,
-				TunnelID:      normalized.TunnelID,
-				Protocol:      normalized.Protocol,
-				LocalPort:     normalized.LocalPort,
-				TargetURL:     normalized.TargetURL,
-				BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
-				BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
-				AccessPolicy:  normalized.AccessPolicy != nil,
-				ExpiresAt:     normalized.ExpiresAt,
-				Status:        "planned",
+				Name:                        normalized.Name,
+				TunnelID:                    normalized.TunnelID,
+				Protocol:                    normalized.Protocol,
+				LocalPort:                   normalized.LocalPort,
+				TargetURL:                   normalized.TargetURL,
+				TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS),
+				BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+				BasicAuthUser:               basicAuthUsername(normalized.BasicAuth),
+				AccessPolicy:                normalized.AccessPolicy != nil,
+				ExpiresAt:                   normalized.ExpiresAt,
+				Status:                      "planned",
 			})
 		}
 		return results, nil
@@ -244,7 +254,7 @@ func runApplyConfig(ctx context.Context, config *applyFile, dryRun bool) ([]appl
 		results = append(results, result)
 	}
 	if !dryRun {
-		if err := ensureDaemonRunning(); err != nil {
+		if err := ensureDaemonRunningFn(); err != nil {
 			rollbackApplyResults(client, results)
 			return results, fmt.Errorf("failed to start local daemon: %w", err)
 		}
@@ -323,16 +333,17 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	}
 
 	result = applyResult{
-		Name:          normalized.Name,
-		TunnelID:      normalized.TunnelID,
-		Protocol:      normalized.Protocol,
-		LocalPort:     normalized.LocalPort,
-		TargetURL:     normalized.TargetURL,
-		BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
-		BasicAuthUser: basicAuthUsername(normalized.BasicAuth),
-		AccessPolicy:  normalized.AccessPolicy != nil,
-		ExpiresAt:     normalized.ExpiresAt,
-		Status:        "planned",
+		Name:                        normalized.Name,
+		TunnelID:                    normalized.TunnelID,
+		Protocol:                    normalized.Protocol,
+		LocalPort:                   normalized.LocalPort,
+		TargetURL:                   normalized.TargetURL,
+		TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS),
+		BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+		BasicAuthUser:               basicAuthUsername(normalized.BasicAuth),
+		AccessPolicy:                normalized.AccessPolicy != nil,
+		ExpiresAt:                   normalized.ExpiresAt,
+		Status:                      "planned",
 	}
 	secret := uuid.New().String()
 	createdAt := ""
@@ -473,6 +484,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	result.CustomDomain = hosts.CustomDomain
 	result.PublicPort = hosts.PublicPort
 	result.TargetURL = normalized.TargetURL
+	result.TargetTLSInsecureSkipVerify = targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS)
 	result.BasicAuth = normalized.BasicAuth != nil && normalized.BasicAuth.Enabled
 	result.BasicAuthUser = basicAuthUsername(normalized.BasicAuth)
 	result.AccessPolicy = normalized.AccessPolicy != nil
@@ -500,6 +512,7 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		PublicPort:      hosts.PublicPort,
 		LocalPort:       normalized.LocalPort,
 		TargetURL:       normalized.TargetURL,
+		TargetTLS:       normalized.TargetTLS,
 		Secret:          secret,
 		BasicAuth:       normalized.BasicAuth,
 		AccessPolicy:    normalized.AccessPolicy,
@@ -631,9 +644,16 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s accessPolicy: %w", tunnelID, err)
 	}
+	targetTLS, err := resolveApplyTargetTLS(item.Target, item.TargetTLS)
+	if err != nil {
+		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
+	}
 	if !tunnelprotocol.IsHTTP(protocol) {
 		if strings.TrimSpace(item.Target) != "" {
 			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: target is only supported for https tunnels", tunnelID)
+		}
+		if targetTLS != nil {
+			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: targetTls is only supported for https target tunnels", tunnelID)
 		}
 		if customDomain != "" || item.WaitDomain {
 			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: domain and waitDomain are only supported for https tunnels", tunnelID)
@@ -659,6 +679,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		CustomDomain:  customDomain,
 		BasicAuth:     basicAuth,
 		BasicAuthPass: basicAuthPass,
+		TargetTLS:     targetTLS,
 		AccessPolicy:  accessPolicy,
 		TTL:           ttl,
 		ExpiresAt:     expiresAt,
@@ -691,6 +712,19 @@ func normalizeApplyTarget(item applyTunnel) (string, string, error) {
 		localPort = target.Port
 	}
 	return localPort, target.URL, nil
+}
+
+func resolveApplyTargetTLS(rawTarget string, config *applyTargetTLS) (*session.TargetTLSConfig, error) {
+	if config == nil || !config.InsecureSkipVerify {
+		return nil, nil
+	}
+	if strings.TrimSpace(rawTarget) == "" {
+		return nil, fmt.Errorf("targetTls.insecureSkipVerify requires target with an https URL")
+	}
+	if err := validateTargetTLSOptions(rawTarget, true); err != nil {
+		return nil, err
+	}
+	return sessionTargetTLSConfig(true), nil
 }
 
 func resolveApplyTunnelExpiresAt(ttl string, now time.Time) (string, error) {
@@ -941,14 +975,15 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			return results, err
 		}
 		result := diffResult{
-			Name:          normalized.Name,
-			TunnelID:      normalized.TunnelID,
-			DesiredPort:   normalized.LocalPort,
-			DesiredTarget: normalized.TargetURL,
-			DesiredHost:   normalized.CustomDomain,
-			ExpiresAt:     normalized.ExpiresAt,
-			AccessPolicy:  normalized.AccessPolicy != nil,
-			BasicAuth:     normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
+			Name:                        normalized.Name,
+			TunnelID:                    normalized.TunnelID,
+			DesiredPort:                 normalized.LocalPort,
+			DesiredTarget:               normalized.TargetURL,
+			DesiredHost:                 normalized.CustomDomain,
+			ExpiresAt:                   normalized.ExpiresAt,
+			TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS),
+			AccessPolicy:                normalized.AccessPolicy != nil,
+			BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		}
 		existing, err := lookup(normalized.TunnelID)
 		if err == nil {
@@ -958,12 +993,16 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			result.CurrentPort = existing.LocalPort
 			result.CurrentTarget = sessionTargetURL(*existing)
 			result.CurrentHost = existing.CustomDomain
+			result.CurrentTargetTLSInsecureSkipVerify = targetTLSInsecureSkipVerifyEnabled(existing.TargetTLS)
 			result.Action = "no-op"
 			if existing.LocalPort != normalized.LocalPort {
 				result.Changes = append(result.Changes, fmt.Sprintf("localPort: %s -> %s", valueOr(existing.LocalPort, "-"), normalized.LocalPort))
 			}
 			if sessionTargetURL(*existing) != normalized.TargetURL {
 				result.Changes = append(result.Changes, fmt.Sprintf("target: %s -> %s", valueOr(sessionTargetURL(*existing), "-"), normalized.TargetURL))
+			}
+			if targetTLSInsecureSkipVerifyEnabled(existing.TargetTLS) != targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS) {
+				result.Changes = append(result.Changes, fmt.Sprintf("targetTls.insecureSkipVerify: %t -> %t", targetTLSInsecureSkipVerifyEnabled(existing.TargetTLS), targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS)))
 			}
 			if valueOr(existing.Protocol, "https") != normalized.Protocol {
 				result.Changes = append(result.Changes, fmt.Sprintf("protocol: %s -> %s", valueOr(existing.Protocol, "-"), normalized.Protocol))
@@ -1048,6 +1087,9 @@ func printDiffResults(cmd *cobra.Command, results []diffResult) {
 		}
 		if result.BasicAuth {
 			fmt.Fprintln(out, "    Basic Auth: enabled")
+		}
+		if result.TargetTLSInsecureSkipVerify {
+			fmt.Fprintln(out, "    Target TLS: insecure certificate verification disabled")
 		}
 		if result.ExpiresAt != "" {
 			fmt.Fprintf(out, "    Expires at: %s\n", result.ExpiresAt)

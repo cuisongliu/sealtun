@@ -13,30 +13,31 @@ import (
 )
 
 type inspectPayload struct {
-	TunnelID           string                 `json:"tunnelId"`
-	Status             string                 `json:"status"`
-	Mode               string                 `json:"mode,omitempty"`
-	Region             string                 `json:"region,omitempty"`
-	Namespace          string                 `json:"namespace,omitempty"`
-	Protocol           string                 `json:"protocol,omitempty"`
-	Host               string                 `json:"host,omitempty"`
-	SealosHost         string                 `json:"sealosHost,omitempty"`
-	CustomDomain       string                 `json:"customDomain,omitempty"`
-	PublicPort         int32                  `json:"publicPort,omitempty"`
-	LocalPort          string                 `json:"localPort,omitempty"`
-	TargetURL          string                 `json:"targetUrl,omitempty"`
-	BasicAuth          *inspectBasicAuth      `json:"basicAuth,omitempty"`
-	AccessPolicy       *inspectAccessPolicy   `json:"accessPolicy,omitempty"`
-	TTL                string                 `json:"ttl,omitempty"`
-	ExpiresAt          string                 `json:"expiresAt,omitempty"`
-	PID                int                    `json:"pid"`
-	ProcessAlive       bool                   `json:"processAlive"`
-	LocalPortReachable bool                   `json:"localPortReachable"`
-	CreatedAt          string                 `json:"createdAt,omitempty"`
-	Resources          []string               `json:"resources,omitempty"`
-	LastError          string                 `json:"lastError,omitempty"`
-	Remote             *k8s.TunnelDiagnostics `json:"remote,omitempty"`
-	Warnings           []string               `json:"warnings,omitempty"`
+	TunnelID                    string                 `json:"tunnelId"`
+	Status                      string                 `json:"status"`
+	Mode                        string                 `json:"mode,omitempty"`
+	Region                      string                 `json:"region,omitempty"`
+	Namespace                   string                 `json:"namespace,omitempty"`
+	Protocol                    string                 `json:"protocol,omitempty"`
+	Host                        string                 `json:"host,omitempty"`
+	SealosHost                  string                 `json:"sealosHost,omitempty"`
+	CustomDomain                string                 `json:"customDomain,omitempty"`
+	PublicPort                  int32                  `json:"publicPort,omitempty"`
+	LocalPort                   string                 `json:"localPort,omitempty"`
+	TargetURL                   string                 `json:"targetUrl,omitempty"`
+	TargetTLSInsecureSkipVerify bool                   `json:"targetTlsInsecureSkipVerify,omitempty"`
+	BasicAuth                   *inspectBasicAuth      `json:"basicAuth,omitempty"`
+	AccessPolicy                *inspectAccessPolicy   `json:"accessPolicy,omitempty"`
+	TTL                         string                 `json:"ttl,omitempty"`
+	ExpiresAt                   string                 `json:"expiresAt,omitempty"`
+	PID                         int                    `json:"pid"`
+	ProcessAlive                bool                   `json:"processAlive"`
+	LocalPortReachable          bool                   `json:"localPortReachable"`
+	CreatedAt                   string                 `json:"createdAt,omitempty"`
+	Resources                   []string               `json:"resources,omitempty"`
+	LastError                   string                 `json:"lastError,omitempty"`
+	Remote                      *k8s.TunnelDiagnostics `json:"remote,omitempty"`
+	Warnings                    []string               `json:"warnings,omitempty"`
 }
 
 type inspectBasicAuth struct {
@@ -98,28 +99,29 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 
 	snapshot := classifySession(*sess, true)
 	payload := &inspectPayload{
-		TunnelID:           sess.TunnelID,
-		Status:             snapshot.Status,
-		Mode:               valueOr(sess.Mode, "foreground"),
-		Region:             sess.Region,
-		Namespace:          sess.Namespace,
-		Protocol:           sess.Protocol,
-		Host:               sess.Host,
-		SealosHost:         sess.SealosHost,
-		CustomDomain:       sess.CustomDomain,
-		PublicPort:         sess.PublicPort,
-		LocalPort:          sess.LocalPort,
-		TargetURL:          sessionTargetLabel(*sess),
-		BasicAuth:          inspectBasicAuthFromSession(sess.BasicAuth),
-		AccessPolicy:       inspectAccessPolicyFromSession(sess.AccessPolicy),
-		TTL:                sess.TTL,
-		ExpiresAt:          formatAuthTime(sess.ExpiresAt),
-		PID:                sess.PID,
-		ProcessAlive:       snapshot.ProcessAlive,
-		LocalPortReachable: snapshot.LocalPortReachable,
-		CreatedAt:          formatAuthTime(sess.CreatedAt),
-		Resources:          sess.Resources,
-		LastError:          sess.LastError,
+		TunnelID:                    sess.TunnelID,
+		Status:                      snapshot.Status,
+		Mode:                        valueOr(sess.Mode, "foreground"),
+		Region:                      sess.Region,
+		Namespace:                   sess.Namespace,
+		Protocol:                    sess.Protocol,
+		Host:                        sess.Host,
+		SealosHost:                  sess.SealosHost,
+		CustomDomain:                sess.CustomDomain,
+		PublicPort:                  sess.PublicPort,
+		LocalPort:                   sess.LocalPort,
+		TargetURL:                   sessionTargetLabel(*sess),
+		TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS),
+		BasicAuth:                   inspectBasicAuthFromSession(sess.BasicAuth),
+		AccessPolicy:                inspectAccessPolicyFromSession(sess.AccessPolicy),
+		TTL:                         sess.TTL,
+		ExpiresAt:                   formatAuthTime(sess.ExpiresAt),
+		PID:                         sess.PID,
+		ProcessAlive:                snapshot.ProcessAlive,
+		LocalPortReachable:          snapshot.LocalPortReachable,
+		CreatedAt:                   formatAuthTime(sess.CreatedAt),
+		Resources:                   sess.Resources,
+		LastError:                   sess.LastError,
 	}
 
 	if payload.Status == "stale" {
@@ -210,6 +212,9 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		fmt.Fprintf(out, "  DNS CNAME target: %s\n", valueOr(payload.SealosHost, payload.Host))
 	}
 	fmt.Fprintf(out, "  Target: %s\n", valueOr(payload.TargetURL, sessionTargetLabel(session.TunnelSession{Protocol: payload.Protocol, LocalPort: payload.LocalPort})))
+	if payload.TargetTLSInsecureSkipVerify {
+		fmt.Fprintln(out, "  Target TLS: certificate verification disabled")
+	}
 	if payload.BasicAuth != nil && payload.BasicAuth.Enabled {
 		fmt.Fprintf(out, "  Basic Auth: enabled")
 		if payload.BasicAuth.Username != "" {

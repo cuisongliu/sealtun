@@ -109,6 +109,28 @@ func TestExportSessionUsesTargetForRemoteHTTPUpstream(t *testing.T) {
 	}
 }
 
+func TestExportSessionPreservesTargetTLSInsecureSkipVerify(t *testing.T) {
+	t.Parallel()
+
+	item, warnings := exportSession(session.TunnelSession{
+		TunnelID:  "api",
+		Protocol:  "https",
+		LocalPort: "8443",
+		TargetURL: "https://10.0.0.12:8443",
+		TargetTLS: &session.TargetTLSConfig{InsecureSkipVerify: true},
+	}, false)
+
+	if item.Target != "https://10.0.0.12:8443" {
+		t.Fatalf("expected target export, got %#v", item)
+	}
+	if item.TargetTLS == nil || !item.TargetTLS.InsecureSkipVerify {
+		t.Fatalf("expected target TLS export, got %#v", item.TargetTLS)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+}
+
 func TestExportSessionRejectsInvalidLocalPort(t *testing.T) {
 	t.Parallel()
 

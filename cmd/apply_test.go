@@ -162,6 +162,37 @@ func TestNormalizeApplyTunnelAcceptsHTTPUpstreamTarget(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplyTunnelAcceptsHTTPSTargetTLSInsecureSkipVerify(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:   "api",
+		Target: "https://10.0.0.12:8443",
+		TargetTLS: &applyTargetTLS{
+			InsecureSkipVerify: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.TargetTLS == nil || !normalized.TargetTLS.InsecureSkipVerify {
+		t.Fatalf("expected target TLS option to be normalized: %#v", normalized.TargetTLS)
+	}
+}
+
+func TestNormalizeApplyTunnelRejectsTargetTLSWithoutHTTPSTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, item := range []applyTunnel{
+		{Name: "api", LocalPort: 8080, TargetTLS: &applyTargetTLS{InsecureSkipVerify: true}},
+		{Name: "api", Target: "http://10.0.0.12:8080", TargetTLS: &applyTargetTLS{InsecureSkipVerify: true}},
+	} {
+		if _, err := normalizeApplyTunnel(item); err == nil {
+			t.Fatalf("expected target TLS config to fail for %#v", item)
+		}
+	}
+}
+
 func TestNormalizeApplyTunnelRejectsMismatchedLocalPortAndTarget(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,8 @@ import (
 	"github.com/labring/sealtun/pkg/session"
 )
 
+var ensureDaemonRunningFn = ensureDaemonRunning
+
 func ensureDaemonRunning() error {
 	if daemonstate.Alive() {
 		return nil

@@ -32,25 +32,26 @@ type dashboardConfirmRequest struct {
 }
 
 type dashboardTunnelCreateRequest struct {
-	Confirm              string   `json:"confirm"`
-	Name                 string   `json:"name,omitempty"`
-	Protocol             string   `json:"protocol"`
-	LocalPort            int      `json:"localPort"`
-	Target               string   `json:"target,omitempty"`
-	Domain               string   `json:"domain,omitempty"`
-	WaitDomain           bool     `json:"waitDomain,omitempty"`
-	ReadyTimeout         string   `json:"readyTimeout,omitempty"`
-	DomainTimeout        string   `json:"domainTimeout,omitempty"`
-	BasicAuthCredential  string   `json:"basicAuth,omitempty"`
-	BasicAuthUser        string   `json:"basicAuthUser,omitempty"`
-	BasicAuthPassword    string   `json:"basicAuthPassword,omitempty"`
-	BearerToken          string   `json:"bearerToken,omitempty"`
-	IPAllowlist          []string `json:"ipAllowlist,omitempty"`
-	IPDenylist           []string `json:"ipDenylist,omitempty"`
-	TemporaryAccessToken string   `json:"temporaryAccessToken,omitempty"`
-	TemporaryAccessTTL   string   `json:"temporaryAccessTTL,omitempty"`
-	RateLimit            string   `json:"rateLimit,omitempty"`
-	AuditEnabled         bool     `json:"auditEnabled,omitempty"`
+	Confirm                     string   `json:"confirm"`
+	Name                        string   `json:"name,omitempty"`
+	Protocol                    string   `json:"protocol"`
+	LocalPort                   int      `json:"localPort"`
+	Target                      string   `json:"target,omitempty"`
+	TargetTLSInsecureSkipVerify bool     `json:"targetTlsInsecureSkipVerify,omitempty"`
+	Domain                      string   `json:"domain,omitempty"`
+	WaitDomain                  bool     `json:"waitDomain,omitempty"`
+	ReadyTimeout                string   `json:"readyTimeout,omitempty"`
+	DomainTimeout               string   `json:"domainTimeout,omitempty"`
+	BasicAuthCredential         string   `json:"basicAuth,omitempty"`
+	BasicAuthUser               string   `json:"basicAuthUser,omitempty"`
+	BasicAuthPassword           string   `json:"basicAuthPassword,omitempty"`
+	BearerToken                 string   `json:"bearerToken,omitempty"`
+	IPAllowlist                 []string `json:"ipAllowlist,omitempty"`
+	IPDenylist                  []string `json:"ipDenylist,omitempty"`
+	TemporaryAccessToken        string   `json:"temporaryAccessToken,omitempty"`
+	TemporaryAccessTTL          string   `json:"temporaryAccessTTL,omitempty"`
+	RateLimit                   string   `json:"rateLimit,omitempty"`
+	AuditEnabled                bool     `json:"auditEnabled,omitempty"`
 }
 
 type dashboardApplyRequest struct {
@@ -648,16 +649,8 @@ func stopTunnelByID(ctx context.Context, tunnelID string) error {
 	}
 	pauseCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := pauseSessionResources(pauseCtx, *sess); err != nil {
-		return fmt.Errorf("pause tunnel %s: %w", sess.TunnelID, err)
-	}
-	sess.PID = 0
-	sess.ConnectionState = session.ConnectionStateStopped
-	sess.LastError = ""
-	if err := session.Update(*sess); err != nil {
-		return fmt.Errorf("update local session %s: %w", sess.TunnelID, err)
-	}
-	return nil
+	_, err = stopTunnelSession(pauseCtx, sess)
+	return err
 }
 
 func cleanupTunnelByID(ctx context.Context, tunnelID string) error {
@@ -759,6 +752,7 @@ func createDashboardTunnel(ctx context.Context, req dashboardTunnelCreateRequest
 	result, err := applyOneTunnel(ctx, applyTunnel{
 		Name:          name,
 		Target:        req.Target,
+		TargetTLS:     sessionTargetTLSToApply(req.TargetTLSInsecureSkipVerify),
 		LocalPort:     localPort,
 		Protocol:      protocol,
 		Domain:        req.Domain,
@@ -771,7 +765,7 @@ func createDashboardTunnel(ctx context.Context, req dashboardTunnelCreateRequest
 	if err != nil {
 		return result, err
 	}
-	if err := ensureDaemonRunning(); err != nil {
+	if err := ensureDaemonRunningFn(); err != nil {
 		rollbackApplyResults(client, []applyResult{result})
 		return result, fmt.Errorf("failed to start local daemon: %w", err)
 	}
@@ -780,6 +774,13 @@ func createDashboardTunnel(ctx context.Context, req dashboardTunnelCreateRequest
 		return result, err
 	}
 	return result, nil
+}
+
+func sessionTargetTLSToApply(insecureSkipVerify bool) *applyTargetTLS {
+	if !insecureSkipVerify {
+		return nil
+	}
+	return &applyTargetTLS{InsecureSkipVerify: true}
 }
 
 func runDashboardApplyContent(ctx context.Context, data []byte, dryRun bool) ([]applyResult, error) {
@@ -809,7 +810,7 @@ func runDashboardApplyContent(ctx context.Context, data []byte, dryRun bool) ([]
 		}
 		results = append(results, result)
 	}
-	if err := ensureDaemonRunning(); err != nil {
+	if err := ensureDaemonRunningFn(); err != nil {
 		rollbackApplyResults(client, results)
 		return results, fmt.Errorf("failed to start local daemon: %w", err)
 	}

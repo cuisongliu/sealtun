@@ -190,9 +190,12 @@ sealtun expose 3000
 # 也可以把公网 HTTPS 入口转发到当前机器可访问的 HTTP upstream
 sealtun expose --target http://10.0.0.12:8080
 
+# 私有 HTTPS upstream 使用自签名证书时，显式关闭 upstream 证书校验
+sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
+
 ```
 
-`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。
+`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。`--target-insecure-skip-verify` 只影响 Sealtun 客户端到 HTTPS upstream 的证书校验，默认关闭，仅建议用于私有网络内的自签名证书 upstream。
 
 为公网业务流量启用 Basic Auth：
 ```bash
@@ -523,6 +526,17 @@ tunnels:
     protocol: https
 ```
 
+私有 HTTPS upstream 使用自签名证书时：
+```yaml
+version: v1
+tunnels:
+  - name: upstream-api
+    target: https://10.0.0.12:8443
+    protocol: https
+    targetTls:
+      insecureSkipVerify: true
+```
+
 应用配置：
 ```bash
 # 离线校验和预览，不需要登录
@@ -563,7 +577,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，如果同时写 `localPort`，端口必须和 `target` 端口一致。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
+`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，如果同时写 `localPort`，端口必须和 `target` 端口一致。`targetTls.insecureSkipVerify` 仅适用于 `https://` target，用于私有 upstream 自签名证书场景。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
 
 ## 📄 许可证
 

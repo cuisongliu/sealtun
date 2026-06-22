@@ -174,6 +174,7 @@ func daemonTunnelFingerprint(sess session.TunnelSession) string {
 		sessionControlHost(sess),
 		sess.LocalPort,
 		sess.TargetURL,
+		fmt.Sprint(targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS)),
 		sess.Protocol,
 		sess.Secret,
 		basicAuthEnabled,
@@ -248,7 +249,7 @@ func runDaemonTunnel(ctx context.Context, sess session.TunnelSession) {
 			err = fmt.Errorf("invalid tunnel control host: %w", hostErr)
 		} else {
 			wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", controlHost)
-			err = tunnel.DialServerAndServeTarget(ctx, wsURL, current.Secret, current.LocalPort, current.TargetURL, current.Protocol, func() {
+			err = tunnel.DialServerAndServeTargetWithOptions(ctx, wsURL, current.Secret, current.LocalPort, current.TargetURL, current.Protocol, targetOptionsForSession(*current), func() {
 				latest, getErr := session.Get(sess.TunnelID)
 				if getErr != nil {
 					return

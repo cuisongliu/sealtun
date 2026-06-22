@@ -51,6 +51,12 @@ and establishes a secure connection to forward traffic to the configured target.
 		if strings.TrimSpace(exposeTarget) != "" && !tunnelprotocol.IsHTTP(protocol) {
 			return fmt.Errorf("--target is only supported for https tunnels")
 		}
+		if targetTLSInsecureSkipVerify && strings.TrimSpace(exposeTarget) == "" {
+			return fmt.Errorf("--target-insecure-skip-verify requires --target with an https URL")
+		}
+		if err := validateTargetTLSOptions(targetURL, targetTLSInsecureSkipVerify); err != nil {
+			return err
+		}
 		if !tunnelprotocol.IsHTTP(protocol) {
 			if normalizedCustomDomain != "" || waitDomain {
 				return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
@@ -149,6 +155,7 @@ and establishes a secure connection to forward traffic to the configured target.
 			PublicPort:      hosts.PublicPort,
 			LocalPort:       localPort,
 			TargetURL:       targetURL,
+			TargetTLS:       sessionTargetTLSConfig(targetTLSInsecureSkipVerify),
 			Secret:          secret,
 			BasicAuth:       basicAuthConfig,
 			AccessPolicy:    accessPolicyConfig,
@@ -178,6 +185,9 @@ and establishes a secure connection to forward traffic to the configured target.
 		} else {
 			fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
 			fmt.Printf("[+] Target: %s\n", targetURL)
+			if targetTLSInsecureSkipVerify {
+				fmt.Printf("[!] Target TLS certificate verification is disabled for this upstream.\n")
+			}
 		}
 		if basicAuthConfig != nil && basicAuthConfig.Enabled {
 			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
@@ -239,7 +249,7 @@ and establishes a secure connection to forward traffic to the configured target.
 			if err := session.Update(sessionRecord); err != nil {
 				return fmt.Errorf("failed to update tunnel session for daemon mode: %w", err)
 			}
-			if err := ensureDaemonRunning(); err != nil {
+			if err := ensureDaemonRunningFn(); err != nil {
 				return fmt.Errorf("failed to start local daemon: %w", err)
 			}
 			if err := waitForDaemonSession(tunnelID, daemonConnectTimeout); err != nil {
@@ -255,11 +265,11 @@ and establishes a secure connection to forward traffic to the configured target.
 		ctx, stop := signal.NotifyContext(ctx, signalCleanupSignals()...)
 		defer stop()
 		rollback = false
-		defer cleanupTunnel(cleanupTarget, tunnelID)
+		defer cleanupTunnelForCurrentOwner(cleanupTarget, tunnelID)
 
 		// 4 & 5. Connect via WebSocket
 		wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(sessionRecord))
-		return tunnel.DialServerAndServeTarget(ctx, wsURL, secret, localPort, targetURL, protocol, func() {
+		return tunnel.DialServerAndServeTargetWithOptions(ctx, wsURL, secret, localPort, targetURL, protocol, targetOptionsForSession(sessionRecord), func() {
 			current, err := session.Get(tunnelID)
 			if err != nil {
 				return
@@ -295,6 +305,7 @@ var temporaryAccessTTL time.Duration
 var accessRateLimit string
 var accessAuditEnabled bool
 var exposeTarget string
+var targetTLSInsecureSkipVerify bool
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
@@ -304,6 +315,7 @@ func init() {
 	rootCmd.AddCommand(exposeCmd)
 	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https, ssh, or tcp")
 	exposeCmd.Flags().StringVar(&exposeTarget, "target", "", "HTTP upstream target URL to expose, e.g. http://10.0.0.12:8080")
+	exposeCmd.Flags().BoolVar(&targetTLSInsecureSkipVerify, "target-insecure-skip-verify", false, "Skip TLS certificate verification when --target uses https; use only for private/self-signed upstreams")
 	exposeCmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
 	exposeCmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
 	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
@@ -436,4 +448,33 @@ func cleanupTunnel(k8sClient *k8s.Client, tunnelID string) {
 func tunnelCleanupShouldPreserve(tunnelID string) bool {
 	sess, err := session.Get(tunnelID)
 	return err == nil && shouldPreserveStoppedSession(sess)
+}
+
+func cleanupTunnelForCurrentOwner(k8sClient *k8s.Client, tunnelID string) {
+	if !foregroundSessionOwnedByCurrentProcess(tunnelID) {
+		fmt.Printf("\r[+] Tunnel %s is no longer owned by this foreground process. Preserving remote resources.\n", tunnelID)
+		return
+	}
+	cleanupTunnel(k8sClient, tunnelID)
+}
+
+func foregroundSessionOwnedByCurrentProcess(tunnelID string) bool {
+	sess, err := session.Get(tunnelID)
+	if err != nil {
+		return true
+	}
+	if shouldPreserveStoppedSession(sess) {
+		return false
+	}
+	if sess.Mode != "foreground" {
+		return false
+	}
+	if sess.PID != os.Getpid() {
+		return false
+	}
+	if sess.PIDStartToken == "" {
+		return true
+	}
+	currentToken := session.ProcessStartToken(os.Getpid())
+	return currentToken == "" || currentToken == sess.PIDStartToken
 }

@@ -79,6 +79,38 @@ func sessionTargetLabel(sess session.TunnelSession) string {
 	return "unknown"
 }
 
+func sessionTargetTLSConfig(insecureSkipVerify bool) *session.TargetTLSConfig {
+	if !insecureSkipVerify {
+		return nil
+	}
+	return &session.TargetTLSConfig{InsecureSkipVerify: true}
+}
+
+func targetOptionsForSession(sess session.TunnelSession) tunnel.TargetOptions {
+	return tunnel.TargetOptions{TLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS)}
+}
+
+func targetTLSInsecureSkipVerifyEnabled(config *session.TargetTLSConfig) bool {
+	return config != nil && config.InsecureSkipVerify
+}
+
+func validateTargetTLSOptions(targetURL string, insecureSkipVerify bool) error {
+	if !insecureSkipVerify {
+		return nil
+	}
+	if strings.TrimSpace(targetURL) == "" {
+		return fmt.Errorf("target TLS insecure skip verify requires a target URL")
+	}
+	target, err := tunnel.ParseTargetWithOptions(targetURL, tunnel.TargetOptions{TLSInsecureSkipVerify: true})
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(target.URL, "https://") {
+		return fmt.Errorf("target TLS insecure skip verify is only supported for https targets")
+	}
+	return nil
+}
+
 func k8sClientForSession(sess session.TunnelSession) (*k8s.Client, error) {
 	if sess.Namespace == "" {
 		return nil, fmt.Errorf("session namespace is missing for tunnel %q", sess.TunnelID)
@@ -130,7 +162,7 @@ var cleanupSessionResources = func(ctx context.Context, sess session.TunnelSessi
 	return client.WithNamespace(sess.Namespace).CleanupTunnel(ctx, sess.TunnelID)
 }
 
-func pauseSessionResources(ctx context.Context, sess session.TunnelSession) error {
+var pauseSessionResources = func(ctx context.Context, sess session.TunnelSession) error {
 	client, err := k8sClientForSession(sess)
 	if err != nil {
 		return err
@@ -139,7 +171,7 @@ func pauseSessionResources(ctx context.Context, sess session.TunnelSession) erro
 	return client.WithNamespace(sess.Namespace).PauseTunnel(ctx, sess.TunnelID)
 }
 
-func resumeSessionResources(ctx context.Context, sess session.TunnelSession) error {
+var resumeSessionResources = func(ctx context.Context, sess session.TunnelSession) error {
 	client, err := k8sClientForSession(sess)
 	if err != nil {
 		return err

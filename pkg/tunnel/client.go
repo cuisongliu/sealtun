@@ -38,7 +38,11 @@ func DialServerAndServeProtocol(ctx context.Context, wsURL, secret, localPort, p
 }
 
 func DialServerAndServeTarget(ctx context.Context, wsURL, secret, localPort, targetURL, protocol string, onConnected func()) error {
-	target, err := TargetFor(localPort, targetURL)
+	return DialServerAndServeTargetWithOptions(ctx, wsURL, secret, localPort, targetURL, protocol, TargetOptions{}, onConnected)
+}
+
+func DialServerAndServeTargetWithOptions(ctx context.Context, wsURL, secret, localPort, targetURL, protocol string, targetOptions TargetOptions, onConnected func()) error {
+	target, err := TargetForWithOptions(localPort, targetURL, targetOptions)
 	if err != nil {
 		return err
 	}
@@ -129,7 +133,7 @@ func handleTargetForwarding(stream net.Conn, target Target, protocol string) {
 	if err != nil {
 		warningMu.Lock()
 		if time.Since(lastWarning) > 2*time.Second {
-			fmt.Printf("Hint: Request received, but target %s is not reachable yet. Please check it.\n", target.URL)
+			fmt.Printf("Hint: Request received, but target %s is not reachable yet: %v\n", target.URL, err)
 			lastWarning = time.Now()
 		}
 		warningMu.Unlock()
@@ -155,7 +159,7 @@ func dialTarget(target Target) (net.Conn, error) {
 			_ = conn.Close()
 			return nil, splitErr
 		}
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: host})
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: host, InsecureSkipVerify: target.TLSInsecureSkipVerify}) // #nosec G402 -- only enabled by an explicit per-target user option for private upstreams.
 		if err := tlsConn.Handshake(); err != nil {
 			_ = tlsConn.Close()
 			return nil, err

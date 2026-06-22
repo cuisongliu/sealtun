@@ -3,6 +3,8 @@ package tunnel
 import (
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,55 @@ func TestUnavailableResponse(t *testing.T) {
 	}
 	if !strings.Contains(response, "http://localhost:3000") {
 		t.Fatal("response should mention the target")
+	}
+}
+
+func TestDialTargetHTTPSRequiresValidCertificateByDefault(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	target, err := ParseTarget(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialTarget(target)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expected self-signed upstream certificate to fail by default")
+	}
+}
+
+func TestDialTargetHTTPSAllowsExplicitInsecureSkipVerify(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	target, err := ParseTargetWithOptions(upstream.URL, TargetOptions{TLSInsecureSkipVerify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialTarget(target)
+	if err != nil {
+		t.Fatalf("expected explicit insecure target TLS mode to connect: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), "ok") {
+		t.Fatalf("unexpected upstream response: %q", payload)
 	}
 }
 

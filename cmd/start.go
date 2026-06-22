@@ -72,7 +72,7 @@ func startTunnelSession(ctx context.Context, sess *session.TunnelSession) error 
 		return fmt.Errorf("update local session %s: %w", sess.TunnelID, err)
 	}
 
-	if err := ensureDaemonRunning(); err != nil {
+	if err := ensureDaemonRunningFn(); err != nil {
 		return rollbackStartedTunnelSession(*sess, fmt.Errorf("failed to start local daemon: %w", err))
 	}
 	if err := waitForDaemonSession(sess.TunnelID, daemonConnectTimeout); err != nil {
@@ -86,12 +86,17 @@ func rollbackStartedTunnelSession(sess session.TunnelSession, cause error) error
 	defer cancel()
 	rollbackErr := pauseSessionResources(pauseCtx, sess)
 	sess.PID = 0
-	sess.ConnectionState = session.ConnectionStateStopped
 	sess.LastError = cause.Error()
-	updateErr := session.Update(sess)
 	if rollbackErr != nil {
-		return fmt.Errorf("%w; rollback to stopped state failed: %v", cause, rollbackErr)
+		sess.ConnectionState = session.ConnectionStateError
+		updateErr := session.Update(sess)
+		if updateErr != nil {
+			return fmt.Errorf("%w; rollback pause failed: %v; rollback session update failed: %v", cause, rollbackErr, updateErr)
+		}
+		return fmt.Errorf("%w; rollback pause failed: %v", cause, rollbackErr)
 	}
+	sess.ConnectionState = session.ConnectionStateStopped
+	updateErr := session.Update(sess)
 	if updateErr != nil {
 		return fmt.Errorf("%w; rollback session update failed: %v", cause, updateErr)
 	}

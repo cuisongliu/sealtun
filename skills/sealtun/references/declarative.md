@@ -92,6 +92,7 @@ tunnels:
 - Use `localPort`; `port` is accepted as a compatibility alias. For HTTPS upstream forwarding, use `target: http://host:port` or `target: https://host:port` instead of `localPort`.
 - `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH, and `tcp` is supported for generic direct TCP NodePort tunnels. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh` and `tcp`.
 - `target` is HTTPS-only. It must not include userinfo, path, query, or fragment. If `localPort` is also set, it must match the target port.
+- `targetTls.insecureSkipVerify: true` is allowed only with `https://` target and skips certificate verification between the Sealtun client and the private upstream. Do not use it for public upstreams unless the user explicitly accepts the risk.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.
 - `readyTimeout` and `domainTimeout` use Go duration syntax and must be positive.
 - Multiple tunnels are applied in one run. On an apply failure, Sealtun attempts rollback for tunnels changed earlier in the batch.

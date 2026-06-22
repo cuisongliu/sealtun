@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,27 @@ func TestListShareLinksMarksExpired(t *testing.T) {
 	}
 	if !items[0].Expired || items[1].Expired {
 		t.Fatalf("unexpected expiration status: %#v", items)
+	}
+}
+
+func TestListShareLinksRejectsNonHTTPS(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "ssh",
+		Protocol:  "ssh",
+		Host:      "ssh.example.com",
+		LocalPort: "22",
+		AccessPolicy: &session.AccessPolicy{TemporaryTokens: []session.TemporaryToken{{
+			Name:      "review",
+			TokenHash: strings.Repeat("a", 71),
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := listShareLinks("ssh", time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "only supported for https") {
+		t.Fatalf("expected non-https rejection, got %v", err)
 	}
 }
 
@@ -160,5 +182,63 @@ func TestRotateShareLinkRequiresExistingNameBeforeRemoteMutation(t *testing.T) {
 	}
 	if _, err := rotateShareLink(context.Background(), "web", "missing", time.Hour); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected missing link rejection, got %v", err)
+	}
+}
+
+func TestCreateShareLinkRejectsDuplicateName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hash, err := accesspolicy.HashToken("old-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "webdup",
+		Protocol:  "https",
+		Host:      "web.example.com",
+		LocalPort: "3000",
+		Secret:    "secret",
+		AccessPolicy: &session.AccessPolicy{TemporaryTokens: []session.TemporaryToken{{
+			Name:      "review",
+			TokenHash: hash,
+			TTL:       "1h",
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createShareLink(context.Background(), "webdup", "review", time.Hour, "new-token"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected duplicate share name rejection, got %v", err)
+	}
+}
+
+func TestCreateShareLinkReturnsPayloadWhenCommittedWaitFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "webpartial",
+		Protocol:  "https",
+		Host:      "web.example.com",
+		LocalPort: "3000",
+		Secret:    "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousUpdate := updateHTTPSAccessPolicy
+	updateHTTPSAccessPolicy = func(_ context.Context, sess *session.TunnelSession, policy *session.AccessPolicy) error {
+		sess.AccessPolicy = policy
+		if err := session.Update(*sess); err != nil {
+			t.Fatal(err)
+		}
+		return committedAccessPolicyError{err: fmt.Errorf("wait failed")}
+	}
+	t.Cleanup(func() { updateHTTPSAccessPolicy = previousUpdate })
+
+	payload, err := createShareLink(context.Background(), "webpartial", "review", time.Hour, "review-token")
+	if err == nil || !strings.Contains(err.Error(), "wait failed") {
+		t.Fatalf("expected committed wait failure, got %v", err)
+	}
+	if payload == nil || !strings.Contains(payload.URL, "_sealtun_token=review-token") {
+		t.Fatalf("expected one-time URL payload despite committed wait failure, got %#v", payload)
 	}
 }

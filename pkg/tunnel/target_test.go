@@ -51,3 +51,18 @@ func TestParseTargetRejectsNonRootURL(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTargetWithTLSInsecureSkipVerifyRequiresHTTPS(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseTargetWithOptions("http://10.0.0.12:8080", TargetOptions{TLSInsecureSkipVerify: true}); err == nil {
+		t.Fatal("expected insecure target TLS option to reject http target")
+	}
+	target, err := ParseTargetWithOptions("https://api.internal:8443", TargetOptions{TLSInsecureSkipVerify: true})
+	if err != nil {
+		t.Fatalf("expected https target to accept insecure target TLS option: %v", err)
+	}
+	if !target.TLSInsecureSkipVerify {
+		t.Fatalf("expected target TLS option to be recorded: %#v", target)
+	}
+}

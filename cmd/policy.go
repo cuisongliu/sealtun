@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +48,18 @@ var policySetNoAudit bool
 var policyAuditSince time.Duration
 var policyAuditLimit int
 var policyAuditJSON bool
+
+const controlEndpointRetryTimeout = 20 * time.Second
+const controlEndpointRetryInterval = time.Second
+
+type remoteEndpointStatusError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e remoteEndpointStatusError) Error() string {
+	return fmt.Sprintf("remote endpoint returned %s", e.Status)
+}
 
 var policyCmd = &cobra.Command{
 	Use:          "policy",
@@ -218,24 +231,71 @@ func fetchServerAudit(ctx context.Context, sess session.TunnelSession, since tim
 		"since": []string{since.String()},
 		"limit": []string{fmt.Sprintf("%d", limit)},
 	}.Encode()}).String()
+	return fetchServerAuditURLWithRetry(ctx, client, auditURL, sess.Secret, controlEndpointRetryTimeout, controlEndpointRetryInterval)
+}
+
+func fetchServerAuditURLWithRetry(ctx context.Context, client *http.Client, auditURL, secret string, retryFor, retryEvery time.Duration) (*accesspolicy.AuditPayload, error) {
+	deadline := time.Now().Add(retryFor)
+	var lastErr error
+	for {
+		payload, err := fetchServerAuditURLOnce(ctx, client, auditURL, secret)
+		if err == nil {
+			return payload, nil
+		}
+		lastErr = err
+		if retryFor <= 0 || !retryableControlEndpointError(ctx, err) {
+			return nil, err
+		}
+		wait := retryEvery
+		if wait <= 0 {
+			wait = controlEndpointRetryInterval
+		}
+		if remaining := time.Until(deadline); remaining <= 0 {
+			return nil, fmt.Errorf("remote audit endpoint unavailable after %s: %w", retryFor.Round(time.Second), lastErr)
+		} else if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func fetchServerAuditURLOnce(ctx context.Context, client *http.Client, auditURL, secret string) (*accesspolicy.AuditPayload, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, auditURL, nil) // #nosec G107 -- host is validated as a DNS hostname before constructing the URL.
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+sess.Secret)
+	req.Header.Set("Authorization", "Bearer "+secret)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote endpoint returned %s", resp.Status)
+		return nil, remoteEndpointStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 	var payload accesspolicy.AuditPayload
 	if err := decodePolicyAuditJSON(resp.Body, &payload); err != nil {
 		return nil, err
 	}
 	return &payload, nil
+}
+
+func retryableControlEndpointError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var statusErr remoteEndpointStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusBadGateway ||
+			statusErr.StatusCode == http.StatusServiceUnavailable ||
+			statusErr.StatusCode == http.StatusGatewayTimeout
+	}
+	var urlErr *url.Error
+	return errors.As(err, &urlErr)
 }
 
 func decodePolicyAuditJSON(r io.Reader, v interface{}) error {

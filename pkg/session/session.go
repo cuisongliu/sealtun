@@ -39,6 +39,7 @@ type TunnelSession struct {
 	PublicPort   int32            `json:"publicPort,omitempty"`
 	LocalPort    string           `json:"localPort"`
 	TargetURL    string           `json:"targetUrl,omitempty"`
+	TargetTLS    *TargetTLSConfig `json:"targetTls,omitempty"`
 	Secret       string           `json:"secret,omitempty"`
 	BasicAuth    *BasicAuthConfig `json:"basicAuth,omitempty"`
 	AccessPolicy *AccessPolicy    `json:"accessPolicy,omitempty"`
@@ -61,6 +62,10 @@ type TunnelSession struct {
 	UpdatedAt           string   `json:"updatedAt,omitempty"`
 	CreatedAt           string   `json:"createdAt"`
 	Resources           []string `json:"resources"`
+}
+
+type TargetTLSConfig struct {
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
 
 type BasicAuthConfig struct {

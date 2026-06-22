@@ -190,9 +190,12 @@ sealtun expose 3000
 # Or forward the public HTTPS entry to an HTTP upstream reachable from this machine
 sealtun expose --target http://10.0.0.12:8080
 
+# Private HTTPS upstreams with self-signed certificates can explicitly skip upstream certificate verification
+sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
+
 ```
 
-`--target` applies only to default HTTPS tunnels. The target must be a `http://` or `https://` address reachable from the machine running the Sealtun CLI. SSH/TCP L4 tunnels continue to use the local port plus NodePort model.
+`--target` applies only to default HTTPS tunnels. The target must be a `http://` or `https://` address reachable from the machine running the Sealtun CLI. SSH/TCP L4 tunnels continue to use the local port plus NodePort model. `--target-insecure-skip-verify` affects only the Sealtun client to HTTPS upstream TLS check, is off by default, and should be used only for private/self-signed upstreams.
 
 Enable Basic Auth for public application traffic:
 ```bash
@@ -523,6 +526,17 @@ tunnels:
     protocol: https
 ```
 
+For a private HTTPS upstream with a self-signed certificate:
+```yaml
+version: v1
+tunnels:
+  - name: upstream-api
+    target: https://10.0.0.12:8443
+    protocol: https
+    targetTls:
+      insecureSkipVerify: true
+```
+
 Apply it:
 ```bash
 # Offline validation and preview; no login required
@@ -563,7 +577,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `target` is HTTPS-only and must be a `http://` or `https://` URL; if `localPort` is also set, it must match the target port. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
+`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `target` is HTTPS-only and must be a `http://` or `https://` URL; if `localPort` is also set, it must match the target port. `targetTls.insecureSkipVerify` applies only to `https://` targets and is intended for private upstreams with self-signed certificates. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
 
 ## License
 

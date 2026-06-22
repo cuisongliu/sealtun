@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,16 +33,19 @@ var rotateCmd = &cobra.Command{
 			return fmt.Errorf("choose what to rotate, e.g. --server-secret")
 		}
 		payload, err := rotateTunnelServerSecret(cmd.Context(), args[0])
-		if err != nil {
+		if err != nil && payload == nil {
 			return err
 		}
 		if rotateJSON {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
-			return enc.Encode(payload)
+			if encodeErr := enc.Encode(payload); encodeErr != nil {
+				return encodeErr
+			}
+			return err
 		}
 		printRotateServerSecret(cmd, payload)
-		return nil
+		return err
 	},
 }
 
@@ -68,6 +72,13 @@ func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServ
 	newSecret := uuid.New().String()
 	mutatedAt := nowUTC().Add(-time.Second)
 	if err := updateTunnelServerSecret(ctx, sess, newSecret, mutatedAt); err != nil {
+		if serverSecretCommitted(err) {
+			return &rotateServerSecretPayload{
+				TunnelID:     sess.TunnelID,
+				ServerSecret: newSecret,
+				Message:      "New server secret is shown once and saved locally, but rollout confirmation failed.",
+			}, err
+		}
 		return nil, err
 	}
 	return &rotateServerSecretPayload{
@@ -77,7 +88,24 @@ func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServ
 	}, nil
 }
 
-func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, newSecret string, mutatedAt time.Time) error {
+type committedServerSecretError struct {
+	err error
+}
+
+func (e committedServerSecretError) Error() string {
+	return e.err.Error()
+}
+
+func (e committedServerSecretError) Unwrap() error {
+	return e.err
+}
+
+func serverSecretCommitted(err error) bool {
+	var committed committedServerSecretError
+	return errors.As(err, &committed)
+}
+
+var updateTunnelServerSecret = func(ctx context.Context, sess *session.TunnelSession, newSecret string, mutatedAt time.Time) error {
 	client, err := k8sClientForSession(*sess)
 	if err != nil {
 		return err
@@ -104,10 +132,10 @@ func updateTunnelServerSecret(ctx context.Context, sess *session.TunnelSession, 
 	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
 	defer cancelReady()
 	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
-		return fmt.Errorf("wait for rotated server secret rollout: %w", err)
+		return committedServerSecretError{err: fmt.Errorf("server secret was rotated, but rollout readiness was not confirmed: %w", err)}
 	}
 	if err := waitForDaemonSessionAfter(sess.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
-		return fmt.Errorf("wait for local daemon to reconnect after server secret rotation: %w", err)
+		return committedServerSecretError{err: fmt.Errorf("server secret was rotated, but local daemon reconnection was not confirmed: %w", err)}
 	}
 	return nil
 }

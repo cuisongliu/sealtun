@@ -120,6 +120,14 @@ curl -v http://10.0.0.12:8080/
 
 Use `sealtun discover` when the user is unsure which local port is actually listening; it scans local TCP listening ports only and provides protocol/template hints without creating a tunnel. For `--target`, do not use discovery; verify the explicit upstream URL from the machine running Sealtun. Fix the local service or upstream reachability first. Sealtun forwards to `localhost:<localPort>` for local tunnels, or to `target` for HTTPS upstream tunnels.
 
+If an HTTPS upstream works through a local reverse proxy but direct `--target https://...` returns the Sealtun 502 page, check the upstream certificate from the machine running Sealtun:
+
+```bash
+curl -vk https://10.0.0.12:8443/
+```
+
+For private/self-signed HTTPS upstreams, use `--target-insecure-skip-verify` or YAML `targetTls.insecureSkipVerify: true` only when skipping upstream certificate verification is acceptable. This does not weaken the public Sealtun HTTPS URL; it only changes the local client to upstream TLS check.
+
 ## Remote Kubernetes Or Pod Problems
 
 Symptoms:

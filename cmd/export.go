@@ -112,6 +112,9 @@ func exportSession(sess session.TunnelSession, includeSecretPlaceholders bool) (
 	if strings.TrimSpace(sess.TargetURL) != "" && sess.TargetURL != defaultLocalTargetURL(sess.LocalPort) {
 		item.Target = sess.TargetURL
 		item.LocalPort = 0
+		if targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS) {
+			item.TargetTLS = &applyTargetTLS{InsecureSkipVerify: true}
+		}
 	}
 	warnings := []string{}
 	if item.LocalPort == 0 && item.Target == "" {

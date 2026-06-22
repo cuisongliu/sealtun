@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +122,76 @@ func TestPolicyAuditValidation(t *testing.T) {
 	if _, err := collectPolicyAudit(context.Background(), "web", time.Minute, 0); err == nil {
 		t.Fatal("expected invalid limit to fail")
 	}
+}
+
+func TestFetchServerAuditRetriesTransientEndpointFailures(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if req.Header.Get("Authorization") != "Bearer secret" {
+				t.Fatalf("expected bearer secret, got %q", req.Header.Get("Authorization"))
+			}
+			if attempts == 1 {
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Status:     "503 Service Unavailable",
+					Body:       io.NopCloser(strings.NewReader("starting")),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader(`{"events":[{"decision":"allow","reason":"basic-auth"}],"total":1}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	payload, err := fetchServerAuditURLWithRetry(context.Background(), client, "https://example.test/_sealtun/audit", "secret", time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected two attempts, got %d", attempts)
+	}
+	if payload.Total != 1 || len(payload.Events) != 1 || payload.Events[0].Reason != "basic-auth" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestFetchServerAuditDoesNotRetryAuthFailures(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Status:     "401 Unauthorized",
+				Body:       io.NopCloser(strings.NewReader("unauthorized")),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	_, err := fetchServerAuditURLWithRetry(context.Background(), client, "https://example.test/_sealtun/audit", "wrong", time.Second, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "401 Unauthorized") {
+		t.Fatalf("expected unauthorized error, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected no retry for auth failure, got %d attempts", attempts)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestPrintPolicyAudit(t *testing.T) {

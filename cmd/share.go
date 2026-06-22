@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -54,19 +55,22 @@ var shareCreateCmd = &cobra.Command{
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload, err := createShareLink(cmd.Context(), args[0], shareName, shareTTL, shareToken)
-		if err != nil {
+		if err != nil && payload == nil {
 			return err
 		}
 		if shareJSON {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
-			return enc.Encode(payload)
+			if encodeErr := enc.Encode(payload); encodeErr != nil {
+				return encodeErr
+			}
+			return err
 		}
 		printShareCreate(cmd, payload)
 		if shareOpen {
 			openBrowser(payload.URL)
 		}
-		return nil
+		return err
 	},
 }
 
@@ -112,19 +116,22 @@ var shareRotateCmd = &cobra.Command{
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload, err := rotateShareLink(cmd.Context(), args[0], args[1], shareTTL)
-		if err != nil {
+		if err != nil && payload == nil {
 			return err
 		}
 		if shareJSON {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
-			return enc.Encode(payload)
+			if encodeErr := enc.Encode(payload); encodeErr != nil {
+				return encodeErr
+			}
+			return err
 		}
 		printShareCreate(cmd, payload)
 		if shareOpen {
 			openBrowser(payload.URL)
 		}
-		return nil
+		return err
 	},
 }
 
@@ -174,29 +181,39 @@ func createShareLink(ctx context.Context, tunnelID, name string, ttl time.Durati
 	if err != nil {
 		return nil, fmt.Errorf("share token: %w", err)
 	}
+	if temporaryTokenNameExists(sess.AccessPolicy, name) {
+		return nil, fmt.Errorf("temporary access link %q already exists for tunnel %s; use `sealtun share rotate %s %s` to replace it", name, sess.TunnelID, sess.TunnelID, name)
+	}
 	expiresAt := nowUTC().Add(ttl).UTC().Format(time.RFC3339)
 	next := cloneAccessPolicy(sess.AccessPolicy)
-	next.TemporaryTokens = replaceTemporaryToken(next.TemporaryTokens, session.TemporaryToken{
+	next.TemporaryTokens = append(next.TemporaryTokens, session.TemporaryToken{
 		Name:      name,
 		TokenHash: hash,
 		TTL:       ttl.String(),
 		ExpiresAt: expiresAt,
 	})
-	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
-		return nil, err
-	}
-	return &shareCreatePayload{
+	payload := &shareCreatePayload{
 		TunnelID:  sess.TunnelID,
 		Name:      name,
 		URL:       temporaryAccessURL(sharePublicHost(*sess), token),
 		ExpiresAt: expiresAt,
-	}, nil
+	}
+	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
+		if accessPolicyCommitted(err) {
+			return payload, err
+		}
+		return nil, err
+	}
+	return payload, nil
 }
 
 func listShareLinks(tunnelID string, now time.Time) ([]shareListItem, error) {
 	sess, err := findSession(tunnelID)
 	if err != nil {
 		return nil, err
+	}
+	if !sessionUsesHTTP(*sess) {
+		return nil, fmt.Errorf("temporary share links are only supported for https tunnels")
 	}
 	if sess.AccessPolicy == nil {
 		return nil, nil
@@ -296,18 +313,39 @@ func rotateShareLink(ctx context.Context, tunnelID, name string, ttl time.Durati
 		TTL:       ttl.String(),
 		ExpiresAt: expiresAt,
 	})
-	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
-		return nil, err
-	}
-	return &shareCreatePayload{
+	payload := &shareCreatePayload{
 		TunnelID:  sess.TunnelID,
 		Name:      name,
 		URL:       temporaryAccessURL(sharePublicHost(*sess), token),
 		ExpiresAt: expiresAt,
-	}, nil
+	}
+	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
+		if accessPolicyCommitted(err) {
+			return payload, err
+		}
+		return nil, err
+	}
+	return payload, nil
 }
 
-func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, policy *session.AccessPolicy) error {
+type committedAccessPolicyError struct {
+	err error
+}
+
+func (e committedAccessPolicyError) Error() string {
+	return e.err.Error()
+}
+
+func (e committedAccessPolicyError) Unwrap() error {
+	return e.err
+}
+
+func accessPolicyCommitted(err error) bool {
+	var committed committedAccessPolicyError
+	return errors.As(err, &committed)
+}
+
+var updateHTTPSAccessPolicy = func(ctx context.Context, sess *session.TunnelSession, policy *session.AccessPolicy) error {
 	if strings.TrimSpace(sess.Secret) == "" {
 		return fmt.Errorf("tunnel %s has no local secret; recreate it before updating access policy", sess.TunnelID)
 	}
@@ -339,11 +377,11 @@ func updateHTTPSAccessPolicy(ctx context.Context, sess *session.TunnelSession, p
 	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
 	defer cancelReady()
 	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
-		return fmt.Errorf("wait for updated access policy rollout: %w", err)
+		return committedAccessPolicyError{err: fmt.Errorf("access policy was updated, but rollout readiness was not confirmed: %w", err)}
 	}
 	if policyChanged {
 		if err := waitForDaemonSessionAfter(sess.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
-			return fmt.Errorf("wait for local daemon to reconnect after access policy update: %w", err)
+			return committedAccessPolicyError{err: fmt.Errorf("access policy was updated, but local daemon reconnection was not confirmed: %w", err)}
 		}
 	}
 	return nil
@@ -385,6 +423,18 @@ func replaceTemporaryToken(tokens []session.TemporaryToken, next session.Tempora
 		}
 	}
 	return append(tokens, next)
+}
+
+func temporaryTokenNameExists(policy *session.AccessPolicy, name string) bool {
+	if policy == nil {
+		return false
+	}
+	for _, token := range policy.TemporaryTokens {
+		if token.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func generateShareToken() (string, error) {

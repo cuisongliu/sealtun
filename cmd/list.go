@@ -11,24 +11,25 @@ import (
 )
 
 type listItem struct {
-	TunnelID     string `json:"tunnelId"`
-	Status       string `json:"status"`
-	Host         string `json:"host"`
-	SealosHost   string `json:"sealosHost,omitempty"`
-	CustomDomain string `json:"customDomain,omitempty"`
-	PublicPort   int32  `json:"publicPort,omitempty"`
-	LocalPort    string `json:"localPort"`
-	TargetURL    string `json:"targetUrl"`
-	PID          int    `json:"pid"`
-	Mode         string `json:"mode"`
-	Namespace    string `json:"namespace"`
-	Protocol     string `json:"protocol"`
-	Endpoint     string `json:"endpoint"`
-	BasicAuth    bool   `json:"basicAuth"`
-	AccessPolicy bool   `json:"accessPolicy"`
-	TTL          string `json:"ttl,omitempty"`
-	ExpiresAt    string `json:"expiresAt,omitempty"`
-	CreatedAt    string `json:"createdAt"`
+	TunnelID                    string `json:"tunnelId"`
+	Status                      string `json:"status"`
+	Host                        string `json:"host"`
+	SealosHost                  string `json:"sealosHost,omitempty"`
+	CustomDomain                string `json:"customDomain,omitempty"`
+	PublicPort                  int32  `json:"publicPort,omitempty"`
+	LocalPort                   string `json:"localPort"`
+	TargetURL                   string `json:"targetUrl"`
+	TargetTLSInsecureSkipVerify bool   `json:"targetTlsInsecureSkipVerify,omitempty"`
+	PID                         int    `json:"pid"`
+	Mode                        string `json:"mode"`
+	Namespace                   string `json:"namespace"`
+	Protocol                    string `json:"protocol"`
+	Endpoint                    string `json:"endpoint"`
+	BasicAuth                   bool   `json:"basicAuth"`
+	AccessPolicy                bool   `json:"accessPolicy"`
+	TTL                         string `json:"ttl,omitempty"`
+	ExpiresAt                   string `json:"expiresAt,omitempty"`
+	CreatedAt                   string `json:"createdAt"`
 }
 
 var listJSON bool
@@ -83,24 +84,25 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 	for _, sess := range sessions {
 		snapshot := classifySession(sess, checkLocalPort)
 		items = append(items, listItem{
-			TunnelID:     sess.TunnelID,
-			Status:       snapshot.Status,
-			Host:         valueOr(sess.Host, "-"),
-			SealosHost:   sess.SealosHost,
-			CustomDomain: sess.CustomDomain,
-			PublicPort:   sess.PublicPort,
-			LocalPort:    valueOr(sess.LocalPort, "-"),
-			TargetURL:    sessionTargetLabel(sess),
-			PID:          sess.PID,
-			Mode:         valueOr(sess.Mode, "foreground"),
-			Namespace:    valueOr(sess.Namespace, "-"),
-			Protocol:     valueOr(sess.Protocol, "-"),
-			Endpoint:     endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort),
-			BasicAuth:    sess.BasicAuth != nil && sess.BasicAuth.Enabled,
-			AccessPolicy: sess.AccessPolicy != nil,
-			TTL:          sess.TTL,
-			ExpiresAt:    sess.ExpiresAt,
-			CreatedAt:    formatAuthTime(sess.CreatedAt),
+			TunnelID:                    sess.TunnelID,
+			Status:                      snapshot.Status,
+			Host:                        valueOr(sess.Host, "-"),
+			SealosHost:                  sess.SealosHost,
+			CustomDomain:                sess.CustomDomain,
+			PublicPort:                  sess.PublicPort,
+			LocalPort:                   valueOr(sess.LocalPort, "-"),
+			TargetURL:                   sessionTargetLabel(sess),
+			TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS),
+			PID:                         sess.PID,
+			Mode:                        valueOr(sess.Mode, "foreground"),
+			Namespace:                   valueOr(sess.Namespace, "-"),
+			Protocol:                    valueOr(sess.Protocol, "-"),
+			Endpoint:                    endpointLabel(sess.Protocol, sess.Host, sess.SealosHost, sess.PublicPort),
+			BasicAuth:                   sess.BasicAuth != nil && sess.BasicAuth.Enabled,
+			AccessPolicy:                sess.AccessPolicy != nil,
+			TTL:                         sess.TTL,
+			ExpiresAt:                   sess.ExpiresAt,
+			CreatedAt:                   formatAuthTime(sess.CreatedAt),
 		})
 	}
 

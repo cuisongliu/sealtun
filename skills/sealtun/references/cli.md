@@ -78,6 +78,7 @@ sealtun init --protocol auto --json
 sealtun init --protocol postgres --apply
 sealtun expose 3000
 sealtun expose --target http://10.0.0.12:8080
+sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
 sealtun expose 3000 --foreground
 sealtun expose 3000 --ready-timeout 2m
 ```
@@ -86,7 +87,7 @@ sealtun expose 3000 --ready-timeout 2m
 
 Use `https` when the user wants a browser URL, webhook callback URL, OAuth callback, payment callback, public preview link, Basic Auth, Bearer tokens, temporary access links, IP allowlist/denylist, or custom domain.
 
-Use `--target` when the public HTTPS URL should forward to an existing HTTP/HTTPS upstream address instead of `localhost:<port>`. The target must be reachable from the machine running the Sealtun CLI. `--target` is rejected for `--protocol ssh` and `--protocol tcp`; those remain direct L4 local-port tunnels.
+Use `--target` when the public HTTPS URL should forward to an existing HTTP/HTTPS upstream address instead of `localhost:<port>`. The target must be reachable from the machine running the Sealtun CLI. For private HTTPS upstreams with self-signed or name-mismatched certificates, use `--target-insecure-skip-verify` only when the user explicitly accepts skipping upstream TLS verification. `--target` is rejected for `--protocol ssh` and `--protocol tcp`; those remain direct L4 local-port tunnels.
 
 ## Public Access Controls
 

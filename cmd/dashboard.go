@@ -2223,6 +2223,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     function exposeCommandFromForm() {
       const port = Number(document.getElementById("new-port")?.value || 0);
       const target = document.getElementById("new-target")?.value.trim() || "";
+      const targetTLSInsecure = document.getElementById("new-target-tls-insecure")?.checked || false;
       const protocol = document.getElementById("new-protocol")?.value || "https";
       const domain = document.getElementById("new-domain")?.value.trim() || "";
       const basicAuth = document.getElementById("new-basic-auth")?.value.trim() || "";
@@ -2234,10 +2235,13 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       const rateLimit = document.getElementById("new-rate-limit")?.value.trim() || "";
       const auditEnabled = document.getElementById("new-audit")?.checked || false;
       const parts = ["sealtun", "expose"];
-      if (target && protocol === "https") parts.push("--target", target);
+      if (target && protocol === "https") {
+        parts.push("--target", target);
+        if (targetTLSInsecure) parts.push("--target-insecure-skip-verify");
+      }
       else parts.push(String(port || "<port>"));
       if (protocol !== "https") parts.push("--protocol", protocol);
-      if (domain) parts.push("--domain", domain, "--wait-domain");
+      if (domain) parts.push("--domain", domain);
       if (protocol === "https") {
         if (basicAuth) parts.push("--basic-auth", basicAuth);
         if (bearer) parts.push("--bearer-token", bearer);
@@ -2391,13 +2395,18 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
     function configYAMLFor(t) {
       if (!t) return "version: v1\ntunnels:\n  - name: web\n    localPort: 3000\n    protocol: https\n";
       const cfgDomain = safeHost(t.customDomain);
-      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + yamlTargetLine(t) + "\n    protocol: " + (t.protocol || "https") + (cfgDomain ? "\n    domain: " + cfgDomain : "") + "\n    readyTimeout: 90s\n";
+      return "version: v1\ntunnels:\n  - name: " + (t.tunnelId || "web") + yamlTargetLine(t) + "\n    protocol: " + (t.protocol || "https") + yamlTargetTLSLine(t) + (cfgDomain ? "\n    domain: " + cfgDomain : "") + "\n    readyTimeout: 90s\n";
     }
 
     function yamlTargetLine(t) {
       const localDefault = "http://localhost:" + (t?.localPort || "");
       if ((t?.protocol || "https") === "https" && t?.targetUrl && t.targetUrl !== localDefault) return "\n    target: " + t.targetUrl;
       return "\n    localPort: " + (t?.localPort || "3000");
+    }
+
+    function yamlTargetTLSLine(t) {
+      if ((t?.protocol || "https") !== "https" || !t?.targetTlsInsecureSkipVerify) return "";
+      return "\n    targetTls:\n      insecureSkipVerify: true";
     }
 
     function modal(titleText, bodyHTML, actionsHTML) {
@@ -2434,6 +2443,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           '<label class="field">Protocol<select class="select" id="new-protocol"><option value="https">https</option><option value="ssh">ssh</option><option value="tcp">tcp</option></select></label>' +
           '<label class="field">Local Port<input class="input" id="new-port" type="number" min="1" max="65535" value="' + esc(defaults.port) + '"></label>' +
           '<label class="field" data-http-field>Target URL<input class="input" id="new-target" placeholder="http://10.0.0.12:8080"></label>' +
+          '<label class="field" data-http-field>Target TLS<label class="checkline"><input id="new-target-tls-insecure" type="checkbox"> Skip upstream certificate verification</label></label>' +
           '<label class="field" data-http-field>Domain<input class="input" id="new-domain" placeholder="app.example.com"></label>' +
           '<label class="field" data-http-field>Basic Auth<input class="input" id="new-basic-auth" placeholder="user:password"></label>' +
           '<label class="field" data-http-field>Bearer Token<input class="input" id="new-bearer" placeholder="optional"></label>' +
@@ -2449,11 +2459,15 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       const backdrop = modal("New Tunnel", body, '<button class="btn" data-modal-close type="button">Cancel</button><button class="btn primary" id="create-tunnel" type="button">Create</button>');
       const updateProtocolFields = () => {
         const isHTTPS = document.getElementById("new-protocol").value === "https";
+        const hasTarget = !!document.getElementById("new-target").value.trim();
         backdrop.querySelectorAll("[data-http-field] input").forEach(input => {
           input.disabled = !isHTTPS;
           if (!isHTTPS && input.type === "checkbox") input.checked = false;
           if (!isHTTPS && input.type !== "checkbox") input.value = "";
         });
+        const targetTLS = document.getElementById("new-target-tls-insecure");
+        targetTLS.disabled = !isHTTPS || !hasTarget;
+        if (targetTLS.disabled) targetTLS.checked = false;
         document.getElementById("new-command").textContent = exposeCommandFromForm();
       };
       const setTemplate = (key) => {
@@ -2461,6 +2475,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
         document.getElementById("new-name").value = item.name;
         document.getElementById("new-port").value = item.port;
         document.getElementById("new-target").value = "";
+        document.getElementById("new-target-tls-insecure").checked = false;
         document.getElementById("new-protocol").value = item.protocol;
         updateProtocolFields();
       };
@@ -2494,7 +2509,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           target.innerHTML = '<div class="context-note">' + esc(err.message || String(err)) + '</div>';
         }
       };
-      ["new-name", "new-protocol", "new-port", "new-target", "new-domain", "new-basic-auth", "new-bearer", "new-allow", "new-deny", "new-temp-token", "new-temp-ttl", "new-rate-limit", "new-audit"].forEach(id => {
+      ["new-name", "new-protocol", "new-port", "new-target", "new-target-tls-insecure", "new-domain", "new-basic-auth", "new-bearer", "new-allow", "new-deny", "new-temp-token", "new-temp-ttl", "new-rate-limit", "new-audit"].forEach(id => {
         document.getElementById(id).oninput = updateProtocolFields;
         document.getElementById(id).onchange = updateProtocolFields;
       });
@@ -2510,6 +2525,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
           protocol: document.getElementById("new-protocol").value,
           localPort: Number(document.getElementById("new-port").value),
           target: document.getElementById("new-target").value.trim(),
+          targetTlsInsecureSkipVerify: document.getElementById("new-target-tls-insecure").checked,
           domain: document.getElementById("new-domain").value.trim(),
           basicAuth: document.getElementById("new-basic-auth").value.trim(),
           bearerToken: document.getElementById("new-bearer").value.trim(),

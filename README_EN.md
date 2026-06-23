@@ -20,7 +20,7 @@ Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It 
 - 📊 **Status, Diagnostics, and Workbench**: Use `doctor <tunnel-id>`, `inspect --remote`, `logs`, `events`, `metrics`, and `dashboard` to diagnose local ports, daemon state, remote Pods, Services, Ingresses, and certificates, or manage tunnels from the local workbench.
 - 🧭 **Guided UX and Safe Fixes**: Use `init` for first-run command/YAML recommendations, and `resources`, `watch`, or `doctor --fix --dry-run` to understand and conservatively repair tunnel state.
 - 🔌 **Cluster Service Access**: On Linux, `sudo sealtun connect` lets TCP clients directly reach Service FQDNs, Service ClusterIPs, and Pod IPs without SOCKS or client-side proxy config.
-- 🧩 **Protocol Templates**: Use `template https|ssh|tcp|mysql|postgres|redis|mqtt` to generate commands and `sealtun.yaml` examples.
+- 🧩 **Protocol Templates**: Use `template https|ssh|tcp|mysql|postgres|redis|mongodb|mqtt` to generate commands and `sealtun.yaml` examples.
 - 🧾 **Declarative Config**: Use `apply -f sealtun.yaml` to declare tunnels in YAML and create or update them with stable names; use `export` to turn local sessions back into YAML.
 - 🌐 **Optimized for Sealos**: Native support for Sealos Cloud domains, certificates, and Kubernetes resources.
 
@@ -482,9 +482,10 @@ sealtun template https --name web --port 3000 --domain app.example.com
 sealtun template ssh
 sealtun template postgres
 sealtun template redis --name cache
+sealtun template mongodb
 ```
 
-Templates print both a one-shot `sealtun expose` command and a `sealtun.yaml` snippet. `mysql`, `postgres`, `redis`, and `mqtt` templates default to generic TCP L4 entries; only HTTPS templates support custom domains and access controls.
+Templates print both a one-shot `sealtun expose` command and a `sealtun.yaml` snippet. `mysql`, `postgres`, `redis`, `mongodb`, and `mqtt` templates default to generic TCP L4 entries; only HTTPS templates support custom domains and access controls.
 
 ### 9. Declarative config
 Create `sealtun.yaml`:

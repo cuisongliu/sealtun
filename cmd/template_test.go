@@ -21,6 +21,24 @@ func TestBuildProtocolTemplateForPostgres(t *testing.T) {
 	}
 }
 
+func TestBuildProtocolTemplateForMongoDB(t *testing.T) {
+	tmpl, err := buildProtocolTemplate("mongodb", "", 0, "")
+	if err != nil {
+		t.Fatalf("buildProtocolTemplate returned error: %v", err)
+	}
+	if tmpl.Protocol != "tcp" || tmpl.Name != "mongodb" || tmpl.LocalPort != 27017 {
+		t.Fatalf("unexpected mongodb template: %#v", tmpl)
+	}
+	if !strings.Contains(tmpl.Command, "sealtun expose 27017 --protocol tcp") {
+		t.Fatalf("unexpected command: %s", tmpl.Command)
+	}
+	for _, want := range []string{"name: mongodb", "protocol: tcp", "localPort: 27017"} {
+		if !strings.Contains(tmpl.Config, want) {
+			t.Fatalf("expected %q in YAML, got:\n%s", want, tmpl.Config)
+		}
+	}
+}
+
 func TestBuildProtocolTemplateForHTTPSDomain(t *testing.T) {
 	tmpl, err := buildProtocolTemplate("https", "api", 8080, "API.Example.COM.")
 	if err != nil {
@@ -38,6 +56,11 @@ func TestBuildProtocolTemplateRejectsDomainForTCP(t *testing.T) {
 	_, err := buildProtocolTemplate("redis", "", 0, "redis.example.com")
 	if err == nil || !strings.Contains(err.Error(), "only supported for https") {
 		t.Fatalf("expected tcp domain rejection, got %v", err)
+	}
+
+	_, err = buildProtocolTemplate("mongodb", "", 0, "db.example.com")
+	if err == nil || !strings.Contains(err.Error(), "only supported for https") {
+		t.Fatalf("expected mongodb domain rejection, got %v", err)
 	}
 }
 

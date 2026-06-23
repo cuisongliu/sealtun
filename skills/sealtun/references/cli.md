@@ -13,7 +13,7 @@ Use these paths before listing every available flag:
 | "Help me get started" / "第一次怎么用" | `sealtun status`; `sealtun init`; `sealtun init --apply` only if creation is requested | `init` is read-only by default and prints a recommended command plus YAML. |
 | "Give my local app a public domain" / "给本地服务一个公网域名" | `sealtun expose <port> --domain <domain>` or `sealtun domain plan <id> <domain>` | If the tunnel already exists, plan first, then add/set only when mutation is requested. |
 | "Expose SSH publicly" / "公网 SSH" | `sealtun expose 22 --protocol ssh` | Return `ssh <user>@<public-host> -p <node-port>`. Do not add HTTPS auth/domain features. |
-| "Expose Postgres/MySQL/Redis/MQTT" | `sealtun template postgres`; `sealtun expose 5432 --protocol tcp` | Common protocol templates map to generic TCP. Return `<host>:<node-port>`. |
+| "Expose Postgres/MySQL/Redis/MongoDB/MQTT" | `sealtun template postgres`; `sealtun expose 5432 --protocol tcp` | Common protocol templates map to generic TCP. Return `<host>:<node-port>`. |
 | "Access a cluster Service from my laptop" / "本机访问集群内服务" | `sealtun connect --check`; Linux `sudo sealtun connect` | Direct TCP access to Service FQDN, Service ClusterIP, and Pod IP. No SOCKS/proxy setup. |
 | "Secure this public URL" | HTTPS `expose`, `policy set`, or `share` with Basic Auth, Bearer token, IP rules, rate limit, audit, or temporary links | Prefer env-backed secrets. HTTP access controls do not protect SSH/TCP NodePort. |
 | "Show or operate everything in a UI" | `sealtun dashboard --open` | Remote dashboard needs `--allow-remote` and should use dashboard Basic Auth. |
@@ -219,10 +219,11 @@ sealtun template tcp --name debug --port 9000
 sealtun template mysql
 sealtun template postgres
 sealtun template redis --name cache
+sealtun template mongodb
 sealtun template mqtt
 ```
 
-Use templates when the user asks how to expose a common protocol or wants a starter `sealtun.yaml`. Templates are read-only and print both a one-shot `sealtun expose` command and a YAML snippet. `mysql`, `postgres`, `redis`, and `mqtt` map to generic `tcp`; only `https` templates accept `--domain`.
+Use templates when the user asks how to expose a common protocol or wants a starter `sealtun.yaml`. Templates are read-only and print both a one-shot `sealtun expose` command and a YAML snippet. `mysql`, `postgres`, `redis`, `mongodb`, and `mqtt` map to generic `tcp`; only `https` templates accept `--domain`.
 
 ## SSH Over Sealtun
 
@@ -312,7 +313,7 @@ sealtun doctor --fix
 
 Dashboard is a local workbench by default. It can create HTTPS/SSH/TCP tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events/resources, and run domain plan/add/verify/clear. It uses only the current active profile/region/namespace and does not switch login scope.
 
-`sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port` or the dashboard HTTPS `Target URL` field. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
+`sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port` or the dashboard HTTPS `Target URL` field. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `27017 -> mongodb/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
 
 `sealtun resources` uses the current active profile/region/namespace and shows Kubernetes resource occupancy for one tunnel: Deployment replicas, Pod count, Service type, NodePort, Ingress host count, Certificate presence, Issuer, and Secret metadata. It is not a cloud billing estimate, and Secret data is not displayed.
 

@@ -90,6 +90,15 @@ func TestInitExplicitProtocolUsesTemplatePortUnlessPortProvided(t *testing.T) {
 	if rec.Template != "postgres" || rec.Protocol != "tcp" || rec.LocalPort != 5432 {
 		t.Fatalf("explicit postgres should use template default, got %#v", rec)
 	}
+
+	rec, err = initRecommendationFromOptions(initOptions{Protocol: "mongodb"}, []discoverItem{{Port: 1082, TemplateHint: "https", ProtocolHint: "https"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Template != "mongodb" || rec.Protocol != "tcp" || rec.LocalPort != 27017 {
+		t.Fatalf("explicit mongodb should use template default, got %#v", rec)
+	}
+
 	rec, err = initRecommendationFromOptions(initOptions{Protocol: "postgres", Port: 15432}, []discoverItem{{Port: 1082, TemplateHint: "https", ProtocolHint: "https"}})
 	if err != nil {
 		t.Fatal(err)

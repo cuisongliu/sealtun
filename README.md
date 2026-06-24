@@ -149,6 +149,9 @@ sudo sealtun connect
 ```bash
 sealtun login
 
+# 非交互脚本或想直接指定区域时
+sealtun login gzg
+
 # 查看支持的 region
 sealtun region list
 
@@ -172,7 +175,7 @@ sealtun profile use hzh-dev
 | `cloud` | `https://cloud.sealos.io` | `cloud.sealos.io` |
 | `usw` | `https://usw-1.sealos.io` | `usw-1.sealos.app` |
 
-*注：目前仅支持内置的 Sealos Cloud region。登录会获取 Kubernetes 凭据和当前 region 的 `SEALOS_DOMAIN`，并安全地存储在 `~/.sealtun` 目录中。命名 profile 会保存到 `~/.sealtun/profiles/<name>`，切换 profile 时会同步切换 active `auth.json` 与 `kubeconfig`。*
+*注：目前仅支持内置的 Sealos Cloud region。交互终端里执行 `sealtun login` 会先用键盘选择 region；脚本、CI 或明确要固定区域时使用 `sealtun login <region>`。登录会获取 Kubernetes 凭据和当前 region 的 `SEALOS_DOMAIN`，并安全地存储在 `~/.sealtun` 目录中。命名 profile 会保存到 `~/.sealtun/profiles/<name>`，切换 profile 时会同步切换 active `auth.json` 与 `kubeconfig`。*
 
 ### 2. 暴露本地端口
 例如，让运行在本地 `3000` 端口的 Web 服务可以被公网访问：

@@ -149,6 +149,9 @@ Perform the device authentication (which operates smoothly without passwords sim
 ```bash
 sealtun login
 
+# For scripts or when you want to pick a region directly
+sealtun login gzg
+
 # List supported regions
 sealtun region list
 
@@ -172,7 +175,7 @@ Built-in regions:
 | `cloud` | `https://cloud.sealos.io` | `cloud.sealos.io` |
 | `usw` | `https://usw-1.sealos.io` | `usw-1.sealos.app` |
 
-*Note: Only built-in Sealos Cloud regions are currently supported. Login retrieves your Kubernetes credentials and the region's `SEALOS_DOMAIN`, then stores them under `~/.sealtun`. Named profiles are stored under `~/.sealtun/profiles/<name>`, and switching profiles replaces the active `auth.json` and `kubeconfig`.*
+*Note: Only built-in Sealos Cloud regions are currently supported. In an interactive terminal, `sealtun login` first opens a keyboard region selector; in scripts, CI, or when you want a fixed region, use `sealtun login <region>`. Login retrieves your Kubernetes credentials and the region's `SEALOS_DOMAIN`, then stores them under `~/.sealtun`. Named profiles are stored under `~/.sealtun/profiles/<name>`, and switching profiles replaces the active `auth.json` and `kubeconfig`.*
 
 ### 2. Expose a local port
 For instance, to make your local Web Server running on Port `3000` accessible to everyone on the Internet:

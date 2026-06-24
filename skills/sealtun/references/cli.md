@@ -47,6 +47,7 @@ Use the generated script according to the user's shell. If the user only asks wh
 
 ```bash
 sealtun login
+sealtun login gzg
 sealtun status
 sealtun region list
 sealtun region current
@@ -60,12 +61,12 @@ sealtun profile use hzh-dev
 sealtun profile delete hzh-dev
 ```
 
-Known regions include `gzg`, `hzh`, `bja`, `cloud`, and `usw`. Login state, kubeconfig, and profiles live under `~/.sealtun`.
+Known regions include `gzg`, `hzh`, `bja`, `cloud`, and `usw`. In an interactive terminal, bare `sealtun login` shows a keyboard selector for these regions; in scripts, CI, or when the user wants a specific region, use `sealtun login <region>` such as `sealtun login gzg`. Login state, kubeconfig, and profiles live under `~/.sealtun`.
 
 First-use behavior:
 
 - Before creating cloud resources, check `sealtun status` when feasible.
-- If the user is not logged in, explain that `sealtun login` opens a Sealos authorization flow and stores the resulting auth/kubeconfig under `~/.sealtun`.
+- If the user is not logged in, explain that interactive `sealtun login` first asks for a region, then opens a Sealos authorization flow and stores the resulting auth/kubeconfig under `~/.sealtun`.
 - If a browser/device authorization flow opens, wait for the user to finish it. Do not retry repeatedly while the user is authorizing.
 - After login, verify with `sealtun status`, `sealtun region current`, and `sealtun profile current` when profiles are involved.
 - For multiple accounts, regions, or workspaces, prefer `sealtun login <region> --profile <name>` and `sealtun profile use <name>` instead of overwriting the active login without explanation.

@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -11,6 +15,7 @@ import (
 
 	"github.com/labring/sealtun/pkg/auth"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // userCodePattern restricts the server-supplied device user code to a safe
@@ -20,14 +25,19 @@ import (
 var userCodePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 var loginCmd = &cobra.Command{
-	Use:   "login [region]",
-	Short: "Log in to Sealos Cloud",
+	Use:          "login [region]",
+	Short:        "Log in to Sealos Cloud",
+	SilenceUsage: true,
 	Long: `Log in to Sealos Cloud using the OAuth2 Device Grant Flow.
-If region is not provided, it defaults to the configured default region.`,
+If region is not provided in an interactive terminal, choose a built-in region
+from the keyboard selector. In scripts or CI, pass the region explicitly.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		region := ""
-		if len(args) > 0 {
-			region = args[0]
+		region, err := resolveLoginRegionInput(args, func() (string, error) {
+			return selectLoginRegionFn(cmd)
+		})
+		if err != nil {
+			return err
 		}
 		return runLoginFlowWithProfile(region, insecure, loginProfile)
 	},
@@ -35,11 +45,188 @@ If region is not provided, it defaults to the configured default region.`,
 
 var insecure bool
 var loginProfile string
+var selectLoginRegionFn = selectLoginRegionFromCommand
+
+var errLoginRegionSelectionCanceled = errors.New("region selection canceled")
 
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification")
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "Save and activate this login as a named profile")
+}
+
+func resolveLoginRegionInput(args []string, selectRegion func() (string, error)) (string, error) {
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	if selectRegion == nil {
+		return "", fmt.Errorf("region is required when no interactive selector is available; run `sealtun region list` and then `sealtun login <region>`")
+	}
+	region, err := selectRegion()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(region) == "" {
+		return "", fmt.Errorf("region selection returned an empty region")
+	}
+	return region, nil
+}
+
+func selectLoginRegionFromCommand(cmd *cobra.Command) (string, error) {
+	in := cmd.InOrStdin()
+	out := cmd.OutOrStdout()
+	file, ok := in.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		return "", fmt.Errorf("region is required in non-interactive mode; run `sealtun region list` and then `sealtun login <region>`")
+	}
+	return selectLoginRegion(file, out, auth.KnownRegions(), auth.DefaultRegion)
+}
+
+func selectLoginRegion(input *os.File, out io.Writer, regions []auth.RegionOption, defaultRegion string) (string, error) {
+	if len(regions) == 0 {
+		return "", fmt.Errorf("no built-in regions are available")
+	}
+	selected := 0
+	for i, region := range regions {
+		if region.URL == defaultRegion {
+			selected = i
+			break
+		}
+	}
+
+	oldState, err := term.MakeRaw(int(input.Fd()))
+	if err != nil {
+		return selectLoginRegionLine(input, out, regions, selected)
+	}
+	defer func() {
+		_ = term.Restore(int(input.Fd()), oldState)
+	}()
+
+	reader := bufio.NewReader(input)
+	renderLoginRegionSelector(out, regions, selected, true)
+	for {
+		key, err := readLoginSelectorKey(reader)
+		if err != nil {
+			return "", err
+		}
+		switch key {
+		case loginSelectorKeyUp:
+			if selected > 0 {
+				selected--
+			} else {
+				selected = len(regions) - 1
+			}
+			renderLoginRegionSelector(out, regions, selected, true)
+		case loginSelectorKeyDown:
+			if selected < len(regions)-1 {
+				selected++
+			} else {
+				selected = 0
+			}
+			renderLoginRegionSelector(out, regions, selected, true)
+		case loginSelectorKeyEnter:
+			fmt.Fprint(out, "\n")
+			return regions[selected].Name, nil
+		case loginSelectorKeyCancel:
+			fmt.Fprint(out, "\n")
+			return "", errLoginRegionSelectionCanceled
+		}
+	}
+}
+
+func selectLoginRegionLine(input io.Reader, out io.Writer, regions []auth.RegionOption, selected int) (string, error) {
+	renderLoginRegionSelector(out, regions, selected, false)
+	fmt.Fprint(out, "Select region number: ")
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	value := strings.TrimSpace(line)
+	if value == "" {
+		return regions[selected].Name, nil
+	}
+	for i, region := range regions {
+		if value == region.Name || value == region.URL || value == fmt.Sprintf("%d", i+1) {
+			return region.Name, nil
+		}
+	}
+	return "", fmt.Errorf("unknown region selection %q; run `sealtun region list` to see supported regions", value)
+}
+
+type loginSelectorKey int
+
+const (
+	loginSelectorKeyUnknown loginSelectorKey = iota
+	loginSelectorKeyUp
+	loginSelectorKeyDown
+	loginSelectorKeyEnter
+	loginSelectorKeyCancel
+)
+
+func readLoginSelectorKey(reader *bufio.Reader) (loginSelectorKey, error) {
+	b, err := reader.ReadByte()
+	if err != nil {
+		return loginSelectorKeyUnknown, err
+	}
+	switch b {
+	case '\r', '\n':
+		return loginSelectorKeyEnter, nil
+	case 3, 27:
+		if b == 3 {
+			return loginSelectorKeyCancel, nil
+		}
+		next, err := reader.ReadByte()
+		if err != nil {
+			return loginSelectorKeyCancel, nil
+		}
+		if next != '[' {
+			return loginSelectorKeyCancel, nil
+		}
+		code, err := reader.ReadByte()
+		if err != nil {
+			return loginSelectorKeyUnknown, err
+		}
+		switch code {
+		case 'A':
+			return loginSelectorKeyUp, nil
+		case 'B':
+			return loginSelectorKeyDown, nil
+		default:
+			return loginSelectorKeyUnknown, nil
+		}
+	case 'k', 'K':
+		return loginSelectorKeyUp, nil
+	case 'j', 'J':
+		return loginSelectorKeyDown, nil
+	case 'q', 'Q':
+		return loginSelectorKeyCancel, nil
+	default:
+		return loginSelectorKeyUnknown, nil
+	}
+}
+
+func renderLoginRegionSelector(out io.Writer, regions []auth.RegionOption, selected int, redraw bool) {
+	if redraw {
+		fmt.Fprint(out, "\r\033[2J\033[H")
+	}
+	fmt.Fprint(out, "Choose a Sealos region with Up/Down, Enter to continue:\r\n")
+	for i, region := range regions {
+		writeLoginRegionLine(out, region, i == selected, i+1)
+		fmt.Fprint(out, "\r\n")
+	}
+	fmt.Fprint(out, "Press q or Ctrl-C to cancel.\r\n")
+}
+
+func writeLoginRegionLine(out io.Writer, region auth.RegionOption, selected bool, index int) {
+	prefix := "  "
+	if selected {
+		prefix = "> "
+	}
+	defaultMark := ""
+	if region.URL == auth.DefaultRegion {
+		defaultMark = " default"
+	}
+	fmt.Fprintf(out, "%s%d. %s%s\n     %s · %s", prefix, index, region.Name, defaultMark, region.URL, valueOr(region.SealosDomain, "domain unknown"))
 }
 
 func runLoginFlowWithProfile(regionInput string, insecure bool, profileName string) error {

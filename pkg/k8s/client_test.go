@@ -587,6 +587,62 @@ func TestEnsureTunnelStoresAuthSecretOutsideDeploymentArgs(t *testing.T) {
 	}
 }
 
+func TestEnsureTunnelUsesHardenedPodSecurityContext(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset()
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	if _, err := client.EnsureTunnel(context.Background(), "abc123", "raw-secret", "https", "3000"); err != nil {
+		t.Fatalf("EnsureTunnel returned error: %v", err)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	podSpec := deployment.Spec.Template.Spec
+	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
+		t.Fatalf("expected service account token automount to be disabled, got %#v", podSpec.AutomountServiceAccountToken)
+	}
+	if len(podSpec.Volumes) != 1 || podSpec.Volumes[0].Name != "tmp" || podSpec.Volumes[0].EmptyDir == nil {
+		t.Fatalf("expected writable /tmp emptyDir volume, got %#v", podSpec.Volumes)
+	}
+
+	container := podSpec.Containers[0]
+	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].Name != "tmp" || container.VolumeMounts[0].MountPath != "/tmp" {
+		t.Fatalf("expected /tmp volume mount, got %#v", container.VolumeMounts)
+	}
+	securityContext := container.SecurityContext
+	if securityContext == nil {
+		t.Fatal("expected container security context")
+	}
+	if securityContext.ReadOnlyRootFilesystem == nil || !*securityContext.ReadOnlyRootFilesystem {
+		t.Fatalf("expected read-only root filesystem, got %#v", securityContext.ReadOnlyRootFilesystem)
+	}
+	if securityContext.RunAsGroup == nil || *securityContext.RunAsGroup != 1001 {
+		t.Fatalf("expected runAsGroup 1001, got %#v", securityContext.RunAsGroup)
+	}
+	if securityContext.RunAsUser == nil || *securityContext.RunAsUser != 1001 {
+		t.Fatalf("expected runAsUser 1001, got %#v", securityContext.RunAsUser)
+	}
+	if securityContext.RunAsNonRoot == nil || !*securityContext.RunAsNonRoot {
+		t.Fatalf("expected runAsNonRoot true, got %#v", securityContext.RunAsNonRoot)
+	}
+	if securityContext.AllowPrivilegeEscalation == nil || *securityContext.AllowPrivilegeEscalation {
+		t.Fatalf("expected privilege escalation disabled, got %#v", securityContext.AllowPrivilegeEscalation)
+	}
+	if securityContext.SeccompProfile == nil || securityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("expected RuntimeDefault seccomp profile, got %#v", securityContext.SeccompProfile)
+	}
+	if securityContext.Capabilities == nil || len(securityContext.Capabilities.Drop) != 1 || securityContext.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("expected all capabilities to be dropped, got %#v", securityContext.Capabilities)
+	}
+}
+
 func TestEnsureTunnelInjectsTargetURLAndRollsPodsOnTargetChange(t *testing.T) {
 	name := "sealtun-abc123"
 	clientset := fake.NewSimpleClientset()

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -87,6 +89,38 @@ func TestValidateTargetTLSOptionsRequiresHTTPSTarget(t *testing.T) {
 	}
 	if err := validateTargetTLSOptions("https://10.0.0.12:8443", true); err != nil {
 		t.Fatalf("expected https target to accept insecure TLS option: %v", err)
+	}
+}
+
+func TestDialForegroundTunnelWithRetry(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	err := dialForegroundTunnelWithRetry(context.Background(), time.Second, time.Millisecond, func(ctx context.Context, onConnected func()) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("failed to dial tunnel server wss://example/_sealtun/ws: websocket: bad handshake")
+		}
+		onConnected()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected retry to connect, got %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestDialForegroundTunnelWithRetryStopsAfterConnectedSessionEnds(t *testing.T) {
+	t.Parallel()
+
+	err := dialForegroundTunnelWithRetry(context.Background(), time.Second, time.Millisecond, func(ctx context.Context, onConnected func()) error {
+		onConnected()
+		return errors.New("accept stream error: use of closed network connection")
+	})
+	if err == nil {
+		t.Fatal("expected connected session error to be returned without retrying")
 	}
 }
 

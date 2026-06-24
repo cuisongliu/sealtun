@@ -269,18 +269,21 @@ and establishes a secure connection to forward traffic to the configured target.
 
 		// 4 & 5. Connect via WebSocket
 		wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(sessionRecord))
-		return tunnel.DialServerAndServeTargetWithOptions(ctx, wsURL, secret, localPort, targetURL, protocol, targetOptionsForSession(sessionRecord), func() {
-			current, err := session.Get(tunnelID)
-			if err != nil {
-				return
-			}
-			if shouldPreserveStoppedSession(current) {
-				return
-			}
-			current.ConnectionState = session.ConnectionStateConnected
-			current.LastError = ""
-			current.LastConnectedAt = time.Now().Format(time.RFC3339)
-			_ = session.Update(*current)
+		return dialForegroundTunnelWithRetry(ctx, foregroundConnectTimeout, foregroundConnectRetryInterval, func(dialCtx context.Context, onConnected func()) error {
+			return tunnel.DialServerAndServeTargetWithOptions(dialCtx, wsURL, secret, localPort, targetURL, protocol, targetOptionsForSession(sessionRecord), func() {
+				onConnected()
+				current, err := session.Get(tunnelID)
+				if err != nil {
+					return
+				}
+				if shouldPreserveStoppedSession(current) {
+					return
+				}
+				current.ConnectionState = session.ConnectionStateConnected
+				current.LastError = ""
+				current.LastConnectedAt = time.Now().Format(time.RFC3339)
+				_ = session.Update(*current)
+			})
 		})
 	},
 }
@@ -309,7 +312,11 @@ var targetTLSInsecureSkipVerify bool
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
+const foregroundConnectTimeout = 60 * time.Second
+const foregroundConnectRetryInterval = 2 * time.Second
 const tunnelCleanupTimeout = 30 * time.Second
+
+type foregroundDialFunc func(context.Context, func()) error
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
@@ -381,6 +388,39 @@ func printAccessPolicySummary(config *session.AccessPolicy) {
 	}
 	if config.Audit != nil && config.Audit.Enabled {
 		fmt.Printf("[+] Access audit enabled for public traffic.\n")
+	}
+}
+
+func dialForegroundTunnelWithRetry(ctx context.Context, timeout, interval time.Duration, dial foregroundDialFunc) error {
+	if timeout <= 0 {
+		return dial(ctx, func() {})
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		connected := false
+		err := dial(dialCtx, func() {
+			connected = true
+		})
+		if err == nil || connected {
+			return err
+		}
+		lastErr = err
+
+		select {
+		case <-dialCtx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return dialCtx.Err()
+		case <-time.After(interval):
+		}
 	}
 }
 

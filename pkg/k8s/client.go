@@ -708,13 +708,18 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 							Args:            args,
 							Env:             env,
 							Ports:           containerPortsForProtocol(protocol),
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "tmp", MountPath: "/tmp"},
+							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &f,
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
-								RunAsNonRoot: &t,
-								RunAsUser:    &u,
+								ReadOnlyRootFilesystem: &t,
+								RunAsNonRoot:           &t,
+								RunAsUser:              &u,
+								RunAsGroup:             &u,
 								SeccompProfile: &corev1.SeccompProfile{
 									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
@@ -727,6 +732,14 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 								},
 								InitialDelaySeconds: 1,
 								PeriodSeconds:       2,
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 					},

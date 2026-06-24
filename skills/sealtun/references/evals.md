@@ -50,7 +50,7 @@ These should trigger the Sealtun skill and choose the expected path. This set sh
 | "用 sealtun 停掉再恢复这个隧道" | `stop` then `start/resume`, with preservation semantics. |
 | "用 sealtun 清理停止的隧道" | `cleanup`, not `cleanup --all` unless explicitly requested. |
 | "用 sealtun 切换 profile 或 region" | `profile` / `region` path with status verification. |
-| "用 sealtun 生成 MySQL/Redis/MQTT 模板" | `template mysql|redis|mqtt` path. |
+| "用 sealtun 生成 MySQL/Redis/MongoDB/MQTT 模板" | `template mysql|redis|mongodb|mqtt` path. |
 | "用 sealtun 创建临时分享链接" | `share create/list/revoke` path, one-time token warning. |
 | "用 sealtun ssh connect 走 fallback" | SSH WebSocket ProxyCommand fallback path. |
 | "用 sealtun discover 找本地端口" | `discover`, no tunnel creation unless explicitly asked. |
@@ -90,7 +90,7 @@ User-facing commands and workflows that must remain represented in the skill:
 
 - Core: `sealtun --version`, shell completion, install through npm/npx or release binaries.
 - Auth and scope: `login`, `logout`, `status`, `region list/current/use`, `profile list/current/save/use/delete`.
-- Tunnel creation: `init`, `discover`, `expose`, `template https|ssh|tcp|mysql|postgres|redis|mqtt`.
+- Tunnel creation: `init`, `discover`, `expose`, `template https|ssh|tcp|mysql|postgres|redis|mongodb|mqtt`.
 - Declarative: `apply -f`, `apply --dry-run`, `diff -f`, `export`.
 - Domain: `domain plan/add/set/verify/status/doctor/clear`.
 - Access and sharing: Basic Auth, Bearer token, IP allowlist/denylist, temporary access token, `share create/list/revoke/rotate`, `policy show/set/audit`, `rotate --server-secret`.

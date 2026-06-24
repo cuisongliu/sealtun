@@ -1633,6 +1633,7 @@ var dashboardHTML = template.Must(template.New("dashboard").Parse(`<!doctype htm
       mysql: { name: "mysql", port: 3306, protocol: "tcp" },
       postgres: { name: "postgres", port: 5432, protocol: "tcp" },
       redis: { name: "redis", port: 6379, protocol: "tcp" },
+      mongodb: { name: "mongodb", port: 27017, protocol: "tcp" },
       mqtt: { name: "mqtt", port: 1883, protocol: "tcp" }
     };
 

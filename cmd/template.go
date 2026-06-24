@@ -25,7 +25,7 @@ var templatePort int
 var templateDomain string
 
 var templateCmd = &cobra.Command{
-	Use:          "template [https|ssh|tcp|mysql|postgres|redis|mqtt]",
+	Use:          "template [https|ssh|tcp|mysql|postgres|redis|mongodb|mqtt]",
 	Short:        "Generate protocol-specific Sealtun command and YAML templates",
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
@@ -56,7 +56,7 @@ func buildProtocolTemplate(kind, name string, port int, domain string) (*protoco
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	spec, ok := protocolTemplateSpec(kind)
 	if !ok {
-		return nil, fmt.Errorf("unsupported template %q; use https, ssh, tcp, mysql, postgres, redis, or mqtt", kind)
+		return nil, fmt.Errorf("unsupported template %q; use https, ssh, tcp, mysql, postgres, redis, mongodb, or mqtt", kind)
 	}
 	if name == "" {
 		name = spec.name
@@ -133,6 +133,8 @@ func protocolTemplateSpec(kind string) (templateSpec, bool) {
 		return templateSpec{name: "postgres", port: 5432, protocol: tunnelprotocol.TCP, description: "Expose a local PostgreSQL service over raw TCP."}, true
 	case "redis":
 		return templateSpec{name: "redis", port: 6379, protocol: tunnelprotocol.TCP, description: "Expose a local Redis service over raw TCP."}, true
+	case "mongodb":
+		return templateSpec{name: "mongodb", port: 27017, protocol: tunnelprotocol.TCP, description: "Expose a local MongoDB service over raw TCP."}, true
 	case "mqtt":
 		return templateSpec{name: "mqtt", port: 1883, protocol: tunnelprotocol.TCP, description: "Expose a local MQTT broker over raw TCP."}, true
 	default:

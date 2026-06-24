@@ -24,6 +24,7 @@ func TestDiscoverLocalPortsAppliesProtocolTemplateHints(t *testing.T) {
 		{Port: 3306, Address: "127.0.0.1"},
 		{Port: 5432, Address: "127.0.0.1"},
 		{Port: 6379, Address: "127.0.0.1"},
+		{Port: 27017, Address: "127.0.0.1"},
 		{Port: 1883, Address: "127.0.0.1"},
 		{Port: 3000, Address: "127.0.0.1"},
 	}})
@@ -53,6 +54,9 @@ func TestDiscoverLocalPortsAppliesProtocolTemplateHints(t *testing.T) {
 		if item.ProtocolHint != want.protocol || item.TemplateHint != want.template || item.Command == "" {
 			t.Fatalf("unexpected hint for %d: %#v", port, item)
 		}
+	}
+	if item, ok := got[27017]; !ok || item.ProtocolHint != "tcp" || item.TemplateHint != "mongodb" || item.Command == "" {
+		t.Fatalf("unexpected mongodb hint: %#v", item)
 	}
 }
 

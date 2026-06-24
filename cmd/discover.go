@@ -139,6 +139,8 @@ func applyPortHints(item discoverItem) discoverItem {
 		item.ProtocolHint, item.TemplateHint, item.Confidence = tunnelprotocol.TCP, "postgres", 0.95
 	case 6379:
 		item.ProtocolHint, item.TemplateHint, item.Confidence = tunnelprotocol.TCP, "redis", 0.95
+	case 27017:
+		item.ProtocolHint, item.TemplateHint, item.Confidence = tunnelprotocol.TCP, "mongodb", 0.95
 	case 1883:
 		item.ProtocolHint, item.TemplateHint, item.Confidence = tunnelprotocol.TCP, "mqtt", 0.95
 	default:

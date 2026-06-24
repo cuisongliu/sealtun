@@ -188,6 +188,33 @@ func TestDashboardDiscoverReturnsProviderResults(t *testing.T) {
 	}
 }
 
+func TestDashboardDiscoverReturnsMongoDBHint(t *testing.T) {
+	previous := dashboardPortDiscoverer
+	dashboardPortDiscoverer = fakePortDiscoverer{items: []discoverItem{{Port: 27017, Address: "127.0.0.1", PID: 123, ProcessName: "mongod"}}}
+	t.Cleanup(func() { dashboardPortDiscoverer = previous })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/discover?limit=1", nil)
+	req.Header.Set("X-Sealtun-Dashboard-Token", "secret")
+	rec := httptest.NewRecorder()
+	dashboardServer{token: "secret"}.serveAPI(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload dashboardAPIResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := payload.Data.([]interface{})
+	if !ok || len(data) != 1 {
+		t.Fatalf("expected one discovery item, got %#v", payload.Data)
+	}
+	item, ok := data[0].(map[string]interface{})
+	if !ok || item["templateHint"] != "mongodb" || item["protocolHint"] != "tcp" {
+		t.Fatalf("unexpected discovery payload: %#v", payload.Data)
+	}
+}
+
 func TestDashboardWatchRequiresToken(t *testing.T) {
 	t.Parallel()
 

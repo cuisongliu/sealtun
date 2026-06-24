@@ -79,7 +79,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().BoolVar(&initOpts.JSON, "json", false, "Output onboarding recommendation as JSON")
 	initCmd.Flags().BoolVar(&initOpts.Apply, "apply", false, "Create the recommended tunnel")
-	initCmd.Flags().StringVar(&initOpts.Protocol, "protocol", "auto", "Recommended protocol: auto, https, ssh, tcp, mysql, postgres, redis, or mqtt")
+	initCmd.Flags().StringVar(&initOpts.Protocol, "protocol", "auto", "Recommended protocol: auto, https, ssh, tcp, mysql, postgres, redis, mongodb, or mqtt")
 	initCmd.Flags().IntVar(&initOpts.Port, "port", 0, "Local port to use for the recommendation")
 	initCmd.Flags().StringVar(&initOpts.Name, "name", "", "Tunnel name for the generated sealtun.yaml")
 	initCmd.Flags().StringVar(&initOpts.Domain, "domain", "", "Custom domain for an HTTPS recommendation")
@@ -139,7 +139,7 @@ func initRecommendationFromOptions(opts initOptions, ports []discoverItem) (init
 	}
 	spec, ok := protocolTemplateSpec(kind)
 	if !ok {
-		return initRecommendation{}, fmt.Errorf("unsupported protocol %q; use auto, https, ssh, tcp, mysql, postgres, redis, or mqtt", opts.Protocol)
+		return initRecommendation{}, fmt.Errorf("unsupported protocol %q; use auto, https, ssh, tcp, mysql, postgres, redis, mongodb, or mqtt", opts.Protocol)
 	}
 	templateKind := canonicalInitTemplateKind(kind, spec)
 	if explicitKind && opts.Port == 0 {

@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -613,6 +614,18 @@ func TestEnsureTunnelUsesHardenedPodSecurityContext(t *testing.T) {
 	}
 
 	container := podSpec.Containers[0]
+	if got := container.Resources.Requests[corev1.ResourceCPU]; got.String() != DefaultRequestCPU {
+		t.Fatalf("expected default cpu request %s, got %s", DefaultRequestCPU, got.String())
+	}
+	if got := container.Resources.Requests[corev1.ResourceMemory]; got.String() != DefaultRequestMemory {
+		t.Fatalf("expected default memory request %s, got %s", DefaultRequestMemory, got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceCPU]; got.String() != DefaultLimitCPU {
+		t.Fatalf("expected default cpu limit %s, got %s", DefaultLimitCPU, got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceMemory]; got.String() != DefaultLimitMemory {
+		t.Fatalf("expected default memory limit %s, got %s", DefaultLimitMemory, got.String())
+	}
 	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].Name != "tmp" || container.VolumeMounts[0].MountPath != "/tmp" {
 		t.Fatalf("expected /tmp volume mount, got %#v", container.VolumeMounts)
 	}
@@ -640,6 +653,43 @@ func TestEnsureTunnelUsesHardenedPodSecurityContext(t *testing.T) {
 	}
 	if securityContext.Capabilities == nil || len(securityContext.Capabilities.Drop) != 1 || securityContext.Capabilities.Drop[0] != "ALL" {
 		t.Fatalf("expected all capabilities to be dropped, got %#v", securityContext.Capabilities)
+	}
+}
+
+func TestEnsureTunnelUsesCustomPodResources(t *testing.T) {
+	name := "sealtun-abc123"
+	clientset := fake.NewSimpleClientset()
+	client := &Client{
+		clientset: clientset,
+		namespace: "default",
+		domain:    "example.com",
+	}
+
+	if _, err := client.EnsureTunnelWithOptions(context.Background(), "abc123", "secret", "https", "3000", TunnelOptions{
+		Resources: &ResourceConfig{
+			Requests: ResourceValues{CPU: "25m", Memory: "48Mi"},
+			Limits:   ResourceValues{CPU: "300m", Memory: "192Mi"},
+		},
+	}); err != nil {
+		t.Fatalf("EnsureTunnelWithOptions returned error: %v", err)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	container := deployment.Spec.Template.Spec.Containers[0]
+	if got := container.Resources.Requests[corev1.ResourceCPU]; got.String() != "25m" {
+		t.Fatalf("expected custom cpu request, got %s", got.String())
+	}
+	if got := container.Resources.Requests[corev1.ResourceMemory]; got.String() != "48Mi" {
+		t.Fatalf("expected custom memory request, got %s", got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceCPU]; got.String() != "300m" {
+		t.Fatalf("expected custom cpu limit, got %s", got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceMemory]; got.String() != "192Mi" {
+		t.Fatalf("expected custom memory limit, got %s", got.String())
 	}
 }
 
@@ -1497,6 +1547,51 @@ func TestResumeTunnelScalesManagedDeploymentToOne(t *testing.T) {
 	}
 	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 1 {
 		t.Fatalf("expected deployment replicas to be 1, got %v", deployment.Spec.Replicas)
+	}
+}
+
+func TestUpdateTunnelResourcesPreservesReplicas(t *testing.T) {
+	name := "sealtun-abc123"
+	replicas := int32(0)
+	clientset := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: managedLabels(name)},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name: name,
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
+					Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")},
+				},
+			}}}},
+		},
+	})
+	client := &Client{
+		clientset:     clientset,
+		dynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		namespace:     "default",
+	}
+
+	if err := client.UpdateTunnelResources(context.Background(), "abc123", &ResourceConfig{
+		Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+		Limits:   ResourceValues{CPU: "400m", Memory: "256Mi"},
+	}); err != nil {
+		t.Fatalf("UpdateTunnelResources returned error: %v", err)
+	}
+
+	deployment, err := clientset.AppsV1().Deployments("default").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deployment should remain: %v", err)
+	}
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 0 {
+		t.Fatalf("expected replicas to stay 0, got %v", deployment.Spec.Replicas)
+	}
+	container := deployment.Spec.Template.Spec.Containers[0]
+	if got := container.Resources.Requests[corev1.ResourceCPU]; got.String() != "50m" {
+		t.Fatalf("expected updated cpu request, got %s", got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceMemory]; got.String() != "256Mi" {
+		t.Fatalf("expected updated memory limit, got %s", got.String())
 	}
 }
 

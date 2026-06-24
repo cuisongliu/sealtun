@@ -36,6 +36,47 @@ func TestPrintTunnelResourcesHidesSecretDataAndShowsHints(t *testing.T) {
 	}
 }
 
+func TestNormalizeResourceConfigDefaultsAndValidates(t *testing.T) {
+	got, err := normalizeResourceConfig(&session.ResourceConfig{
+		Requests: &session.ResourceValues{CPU: "20m"},
+		Limits:   &session.ResourceValues{Memory: "256Mi"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Requests.CPU != "20m" || got.Requests.Memory != k8s.DefaultRequestMemory {
+		t.Fatalf("unexpected request defaults: %#v", got.Requests)
+	}
+	if got.Limits.CPU != k8s.DefaultLimitCPU || got.Limits.Memory != "256Mi" {
+		t.Fatalf("unexpected limit defaults: %#v", got.Limits)
+	}
+
+	if _, err := normalizeResourceConfig(&session.ResourceConfig{
+		Requests: &session.ResourceValues{CPU: "500m"},
+		Limits:   &session.ResourceValues{CPU: "100m"},
+	}); err == nil || !strings.Contains(err.Error(), "limit must be greater than or equal") {
+		t.Fatalf("expected limit/request validation error, got %v", err)
+	}
+	if _, err := normalizeResourceConfig(&session.ResourceConfig{
+		Requests: &session.ResourceValues{Memory: "bad-unit"},
+	}); err == nil || !strings.Contains(err.Error(), "invalid memory request quantity") {
+		t.Fatalf("expected invalid quantity error, got %v", err)
+	}
+}
+
+func TestMergeResourceSetInputKeepsExistingValues(t *testing.T) {
+	got, err := mergeResourceSetInput(&session.ResourceConfig{
+		Requests: &session.ResourceValues{CPU: "30m", Memory: "64Mi"},
+		Limits:   &session.ResourceValues{CPU: "300m", Memory: "256Mi"},
+	}, resourceSetInput{LimitMemory: "384Mi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Requests.CPU != "30m" || got.Requests.Memory != "64Mi" || got.Limits.CPU != "300m" || got.Limits.Memory != "384Mi" {
+		t.Fatalf("unexpected merged resources: %#v", got)
+	}
+}
+
 func TestActiveScopedSessionRejectsOutsideScope(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

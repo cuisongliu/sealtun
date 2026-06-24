@@ -413,7 +413,10 @@ sealtun discover --json --limit 20
 ```bash
 sealtun resources <tunnel-id>
 sealtun resources <tunnel-id> --json
+sealtun resources set <tunnel-id> --request-cpu 20m --request-memory 64Mi --limit-cpu 300m --limit-memory 256Mi
+sealtun resources unset <tunnel-id>
 ```
+默认远端 Pod 使用 `requests: cpu=10m memory=32Mi` 和 `limits: cpu=200m memory=128Mi`。`resources set` 会更新 Deployment 模板；如果隧道已经 stopped，不会启动 Pod，下一次 `start` 会沿用新资源配置。
 
 一键诊断本地与远端状态：
 ```bash
@@ -539,6 +542,13 @@ tunnels:
     protocol: https
     targetTls:
       insecureSkipVerify: true
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
 ```
 
 应用配置：
@@ -581,7 +591,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，如果同时写 `localPort`，端口必须和 `target` 端口一致。`targetTls.insecureSkipVerify` 仅适用于 `https://` target，用于私有 upstream 自签名证书场景。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
+`name` 会作为稳定 tunnel ID 使用，因此重复执行 `apply` 会更新同一个 `sealtun-<name>` 资源。`tunnels` 支持一次声明多条隧道；`target` 只支持 HTTPS 隧道，目标必须是 `http://` 或 `https://` URL，如果同时写 `localPort`，端口必须和 `target` 端口一致。`targetTls.insecureSkipVerify` 仅适用于 `https://` target，用于私有 upstream 自签名证书场景。`resources` 可声明远端 Pod 的 CPU/内存 requests 和 limits，未写字段会使用 Sealtun 默认值。`ttl` 会写入本地 session 的 `expiresAt`，本地 daemon 发现过期后会自动删除远端资源和本地记录。自定义域名仍然遵循 CNAME 先验证再绑定的规则；新隧道如果 CNAME 未就绪，`apply` 会先保留 Sealos 官方域名并输出后续 `domain set` 指令；已有隧道则会拒绝未验证的自定义域名变更，避免误清理或覆盖正在使用的域名配置。
 
 ## 📄 许可证
 

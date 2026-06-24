@@ -28,25 +28,26 @@ const (
 )
 
 type TunnelSession struct {
-	TunnelID     string           `json:"tunnelId"`
-	Region       string           `json:"region"`
-	Namespace    string           `json:"namespace"`
-	Kubeconfig   string           `json:"kubeconfig,omitempty"`
-	Protocol     string           `json:"protocol"`
-	Host         string           `json:"host"`
-	SealosHost   string           `json:"sealosHost,omitempty"`
-	CustomDomain string           `json:"customDomain,omitempty"`
-	PublicPort   int32            `json:"publicPort,omitempty"`
-	LocalPort    string           `json:"localPort"`
-	TargetURL    string           `json:"targetUrl,omitempty"`
-	TargetTLS    *TargetTLSConfig `json:"targetTls,omitempty"`
-	Secret       string           `json:"secret,omitempty"`
-	BasicAuth    *BasicAuthConfig `json:"basicAuth,omitempty"`
-	AccessPolicy *AccessPolicy    `json:"accessPolicy,omitempty"`
-	TTL          string           `json:"ttl,omitempty"`
-	ExpiresAt    string           `json:"expiresAt,omitempty"`
-	Mode         string           `json:"mode,omitempty"`
-	PID          int              `json:"pid"`
+	TunnelID       string           `json:"tunnelId"`
+	Region         string           `json:"region"`
+	Namespace      string           `json:"namespace"`
+	Kubeconfig     string           `json:"kubeconfig,omitempty"`
+	Protocol       string           `json:"protocol"`
+	Host           string           `json:"host"`
+	SealosHost     string           `json:"sealosHost,omitempty"`
+	CustomDomain   string           `json:"customDomain,omitempty"`
+	PublicPort     int32            `json:"publicPort,omitempty"`
+	LocalPort      string           `json:"localPort"`
+	TargetURL      string           `json:"targetUrl,omitempty"`
+	TargetTLS      *TargetTLSConfig `json:"targetTls,omitempty"`
+	Secret         string           `json:"secret,omitempty"`
+	BasicAuth      *BasicAuthConfig `json:"basicAuth,omitempty"`
+	AccessPolicy   *AccessPolicy    `json:"accessPolicy,omitempty"`
+	ResourceConfig *ResourceConfig  `json:"resourceConfig,omitempty"`
+	TTL            string           `json:"ttl,omitempty"`
+	ExpiresAt      string           `json:"expiresAt,omitempty"`
+	Mode           string           `json:"mode,omitempty"`
+	PID            int              `json:"pid"`
 	// PIDStartToken is a best-effort fingerprint of the owning process (e.g. its
 	// start time). It is verified alongside PID so a reused PID belonging to an
 	// unrelated process is not mistaken for a still-alive tunnel owner.
@@ -62,6 +63,16 @@ type TunnelSession struct {
 	UpdatedAt           string   `json:"updatedAt,omitempty"`
 	CreatedAt           string   `json:"createdAt"`
 	Resources           []string `json:"resources"`
+}
+
+type ResourceConfig struct {
+	Requests *ResourceValues `json:"requests,omitempty"`
+	Limits   *ResourceValues `json:"limits,omitempty"`
+}
+
+type ResourceValues struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 type TargetTLSConfig struct {

@@ -159,6 +159,7 @@ and establishes a secure connection to forward traffic to the configured target.
 			Secret:          secret,
 			BasicAuth:       basicAuthConfig,
 			AccessPolicy:    accessPolicyConfig,
+			ResourceConfig:  resourcesFromK8s(k8s.DefaultResourceConfig()),
 			Mode:            "foreground",
 			PID:             os.Getpid(),
 			ConnectionState: session.ConnectionStatePending,

@@ -413,7 +413,10 @@ Show Kubernetes resource occupancy hints for one tunnel:
 ```bash
 sealtun resources <tunnel-id>
 sealtun resources <tunnel-id> --json
+sealtun resources set <tunnel-id> --request-cpu 20m --request-memory 64Mi --limit-cpu 300m --limit-memory 256Mi
+sealtun resources unset <tunnel-id>
 ```
+Remote Pods default to `requests: cpu=10m memory=32Mi` and `limits: cpu=200m memory=128Mi`. `resources set` updates the Deployment template; if the tunnel is stopped, it does not start replicas, and the next `start` uses the new resources.
 
 Run local and remote diagnostics:
 ```bash
@@ -539,6 +542,13 @@ tunnels:
     protocol: https
     targetTls:
       insecureSkipVerify: true
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
 ```
 
 Apply it:
@@ -581,7 +591,7 @@ basicAuth:
   passwordEnv: SEALTUN_BASIC_AUTH_PASSWORD
 ```
 
-`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `target` is HTTPS-only and must be a `http://` or `https://` URL; if `localPort` is also set, it must match the target port. `targetTls.insecureSkipVerify` applies only to `https://` targets and is intended for private upstreams with self-signed certificates. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
+`name` is used as the stable tunnel ID, so repeated `apply` runs update the same `sealtun-<name>` resources. `tunnels` can declare multiple tunnels in one file. `target` is HTTPS-only and must be a `http://` or `https://` URL; if `localPort` is also set, it must match the target port. `targetTls.insecureSkipVerify` applies only to `https://` targets and is intended for private upstreams with self-signed certificates. `resources` can declare remote Pod CPU/memory requests and limits; omitted fields use Sealtun defaults. `ttl` is persisted as `expiresAt` in the local session; the local daemon automatically removes expired remote resources and session records. Custom domains still require verified CNAME ownership before attachment; for a new tunnel, `apply` keeps the Sealos-managed host and prints the follow-up `domain set` command when DNS is not ready. For an existing tunnel, `apply` rejects unverified custom-domain changes so it does not accidentally clear or overwrite a working domain configuration.
 
 ## License
 

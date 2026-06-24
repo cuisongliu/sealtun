@@ -362,6 +362,7 @@ var updateHTTPSAccessPolicy = func(ctx context.Context, sess *session.TunnelSess
 		TargetURL:    sess.TargetURL,
 		BasicAuth:    basicAuthToK8s(sess.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(policy),
+		Resources:    resourcesToK8s(sess.ResourceConfig),
 	})
 	if err != nil {
 		return fmt.Errorf("update remote access policy: %w", err)

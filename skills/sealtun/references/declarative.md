@@ -35,6 +35,7 @@ Use declarative config when the user wants repeatability, multiple tunnels, stab
 | Public SSH | `protocol: ssh`, `localPort: 22` | output must show SSH host and port |
 | Generic TCP/database | `protocol: tcp`, protocol-specific port | output must show `<host>:<port>` |
 | Auto-expire | `ttl: 2h` or similar Go duration | verify `expiresAt` behavior in output/session |
+| Tune remote Pod resources | `resources.requests` and `resources.limits` | dry-run/diff, then `resources <id>` after apply |
 | Secure HTTPS | `basicAuth` and/or `accessPolicy` with tokens, IP rules, rate limit, audit, or temporary links | prefer env-backed secrets unless local-only inline config is intentional |
 
 Never add `target`, `domain`, `basicAuth`, or `accessPolicy` to `ssh` or `tcp` tunnels; those are HTTPS-layer features.
@@ -68,6 +69,13 @@ tunnels:
     waitDomain: false
     readyTimeout: 90s
     domainTimeout: 5m
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
 ```
 
 Remote HTTP upstream example:
@@ -93,6 +101,7 @@ tunnels:
 - `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH, and `tcp` is supported for generic direct TCP NodePort tunnels. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh` and `tcp`.
 - `target` is HTTPS-only. It must not include userinfo, path, query, or fragment. If `localPort` is also set, it must match the target port.
 - `targetTls.insecureSkipVerify: true` is allowed only with `https://` target and skips certificate verification between the Sealtun client and the private upstream. Do not use it for public upstreams unless the user explicitly accepts the risk.
+- `resources.requests.cpu`, `resources.requests.memory`, `resources.limits.cpu`, and `resources.limits.memory` configure the remote tunnel Pod. Omitted fields use Sealtun defaults: request CPU `10m`, request memory `32Mi`, limit CPU `200m`, limit memory `128Mi`. Limits must be greater than or equal to requests.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.
 - `readyTimeout` and `domainTimeout` use Go duration syntax and must be positive.
 - Multiple tunnels are applied in one run. On an apply failure, Sealtun attempts rollback for tunnels changed earlier in the batch.

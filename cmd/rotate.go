@@ -117,6 +117,7 @@ var updateTunnelServerSecret = func(ctx context.Context, sess *session.TunnelSes
 		TargetURL:    sess.TargetURL,
 		BasicAuth:    basicAuthToK8s(sess.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(sess.AccessPolicy),
+		Resources:    resourcesToK8s(sess.ResourceConfig),
 	})
 	if err != nil {
 		return fmt.Errorf("rotate remote server secret: %w", err)

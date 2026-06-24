@@ -94,6 +94,42 @@ func targetTLSInsecureSkipVerifyEnabled(config *session.TargetTLSConfig) bool {
 	return config != nil && config.InsecureSkipVerify
 }
 
+func resourcesToK8s(config *session.ResourceConfig) *k8s.ResourceConfig {
+	if config == nil {
+		return nil
+	}
+	out := &k8s.ResourceConfig{}
+	if config.Requests != nil {
+		out.Requests = k8s.ResourceValues{
+			CPU:    config.Requests.CPU,
+			Memory: config.Requests.Memory,
+		}
+	}
+	if config.Limits != nil {
+		out.Limits = k8s.ResourceValues{
+			CPU:    config.Limits.CPU,
+			Memory: config.Limits.Memory,
+		}
+	}
+	return out
+}
+
+func resourcesFromK8s(config *k8s.ResourceConfig) *session.ResourceConfig {
+	if config == nil {
+		return nil
+	}
+	return &session.ResourceConfig{
+		Requests: &session.ResourceValues{
+			CPU:    config.Requests.CPU,
+			Memory: config.Requests.Memory,
+		},
+		Limits: &session.ResourceValues{
+			CPU:    config.Limits.CPU,
+			Memory: config.Limits.Memory,
+		},
+	}
+}
+
 func validateTargetTLSOptions(targetURL string, insecureSkipVerify bool) error {
 	if !insecureSkipVerify {
 		return nil

@@ -41,8 +41,19 @@ type applyTunnel struct {
 	ReadyTimeout  string             `json:"readyTimeout,omitempty" yaml:"readyTimeout,omitempty"`
 	DomainTimeout string             `json:"domainTimeout,omitempty" yaml:"domainTimeout,omitempty"`
 	TargetTLS     *applyTargetTLS    `json:"targetTls,omitempty" yaml:"targetTls,omitempty"`
+	Resources     *applyResources    `json:"resources,omitempty" yaml:"resources,omitempty"`
 	BasicAuth     *applyBasicAuth    `json:"basicAuth,omitempty" yaml:"basicAuth,omitempty"`
 	AccessPolicy  *applyAccessPolicy `json:"accessPolicy,omitempty" yaml:"accessPolicy,omitempty"`
+}
+
+type applyResources struct {
+	Requests *applyResourceValues `json:"requests,omitempty" yaml:"requests,omitempty"`
+	Limits   *applyResourceValues `json:"limits,omitempty" yaml:"limits,omitempty"`
+}
+
+type applyResourceValues struct {
+	CPU    string `json:"cpu,omitempty" yaml:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
 }
 
 type applyTargetTLS struct {
@@ -57,44 +68,47 @@ type applyBasicAuth struct {
 }
 
 type diffResult struct {
-	Name                               string   `json:"name"`
-	TunnelID                           string   `json:"tunnelId"`
-	Action                             string   `json:"action"`
-	Changes                            []string `json:"changes,omitempty"`
-	Warnings                           []string `json:"warnings,omitempty"`
-	DesiredPort                        string   `json:"desiredPort,omitempty"`
-	CurrentPort                        string   `json:"currentPort,omitempty"`
-	DesiredTarget                      string   `json:"desiredTarget,omitempty"`
-	CurrentTarget                      string   `json:"currentTarget,omitempty"`
-	DesiredHost                        string   `json:"desiredHost,omitempty"`
-	CurrentHost                        string   `json:"currentHost,omitempty"`
-	ExpiresAt                          string   `json:"expiresAt,omitempty"`
-	TargetTLSInsecureSkipVerify        bool     `json:"targetTlsInsecureSkipVerify,omitempty"`
-	CurrentTargetTLSInsecureSkipVerify bool     `json:"currentTargetTlsInsecureSkipVerify,omitempty"`
-	AccessPolicy                       bool     `json:"accessPolicy"`
-	BasicAuth                          bool     `json:"basicAuth"`
+	Name                               string                  `json:"name"`
+	TunnelID                           string                  `json:"tunnelId"`
+	Action                             string                  `json:"action"`
+	Changes                            []string                `json:"changes,omitempty"`
+	Warnings                           []string                `json:"warnings,omitempty"`
+	DesiredPort                        string                  `json:"desiredPort,omitempty"`
+	CurrentPort                        string                  `json:"currentPort,omitempty"`
+	DesiredTarget                      string                  `json:"desiredTarget,omitempty"`
+	CurrentTarget                      string                  `json:"currentTarget,omitempty"`
+	DesiredHost                        string                  `json:"desiredHost,omitempty"`
+	CurrentHost                        string                  `json:"currentHost,omitempty"`
+	ExpiresAt                          string                  `json:"expiresAt,omitempty"`
+	TargetTLSInsecureSkipVerify        bool                    `json:"targetTlsInsecureSkipVerify,omitempty"`
+	CurrentTargetTLSInsecureSkipVerify bool                    `json:"currentTargetTlsInsecureSkipVerify,omitempty"`
+	DesiredResources                   *session.ResourceConfig `json:"desiredResources,omitempty"`
+	CurrentResources                   *session.ResourceConfig `json:"currentResources,omitempty"`
+	AccessPolicy                       bool                    `json:"accessPolicy"`
+	BasicAuth                          bool                    `json:"basicAuth"`
 }
 
 type applyResult struct {
-	Name                        string                 `json:"name"`
-	TunnelID                    string                 `json:"tunnelId"`
-	Protocol                    string                 `json:"protocol"`
-	Host                        string                 `json:"host"`
-	SealosHost                  string                 `json:"sealosHost,omitempty"`
-	CustomDomain                string                 `json:"customDomain,omitempty"`
-	PublicPort                  int32                  `json:"publicPort,omitempty"`
-	LocalPort                   string                 `json:"localPort"`
-	TargetURL                   string                 `json:"targetUrl,omitempty"`
-	TargetTLSInsecureSkipVerify bool                   `json:"targetTlsInsecureSkipVerify,omitempty"`
-	BasicAuth                   bool                   `json:"basicAuth"`
-	BasicAuthUser               string                 `json:"basicAuthUser,omitempty"`
-	AccessPolicy                bool                   `json:"accessPolicy"`
-	ExpiresAt                   string                 `json:"expiresAt,omitempty"`
-	TemporaryURLs               []string               `json:"temporaryUrls,omitempty"`
-	Status                      string                 `json:"status"`
-	Warnings                    []string               `json:"warnings,omitempty"`
-	NewTunnel                   bool                   `json:"-"`
-	Previous                    *session.TunnelSession `json:"-"`
+	Name                        string                  `json:"name"`
+	TunnelID                    string                  `json:"tunnelId"`
+	Protocol                    string                  `json:"protocol"`
+	Host                        string                  `json:"host"`
+	SealosHost                  string                  `json:"sealosHost,omitempty"`
+	CustomDomain                string                  `json:"customDomain,omitempty"`
+	PublicPort                  int32                   `json:"publicPort,omitempty"`
+	LocalPort                   string                  `json:"localPort"`
+	TargetURL                   string                  `json:"targetUrl,omitempty"`
+	TargetTLSInsecureSkipVerify bool                    `json:"targetTlsInsecureSkipVerify,omitempty"`
+	Resources                   *session.ResourceConfig `json:"resources,omitempty"`
+	BasicAuth                   bool                    `json:"basicAuth"`
+	BasicAuthUser               string                  `json:"basicAuthUser,omitempty"`
+	AccessPolicy                bool                    `json:"accessPolicy"`
+	ExpiresAt                   string                  `json:"expiresAt,omitempty"`
+	TemporaryURLs               []string                `json:"temporaryUrls,omitempty"`
+	Status                      string                  `json:"status"`
+	Warnings                    []string                `json:"warnings,omitempty"`
+	NewTunnel                   bool                    `json:"-"`
+	Previous                    *session.TunnelSession  `json:"-"`
 }
 
 type normalizedApplyTunnel struct {
@@ -107,6 +121,7 @@ type normalizedApplyTunnel struct {
 	BasicAuth     *session.BasicAuthConfig
 	BasicAuthPass string
 	TargetTLS     *session.TargetTLSConfig
+	Resources     *session.ResourceConfig
 	AccessPolicy  *session.AccessPolicy
 	TTL           string
 	ExpiresAt     string
@@ -216,6 +231,7 @@ func runApplyConfig(ctx context.Context, config *applyFile, dryRun bool) ([]appl
 				LocalPort:                   normalized.LocalPort,
 				TargetURL:                   normalized.TargetURL,
 				TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS),
+				Resources:                   normalized.Resources,
 				BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 				BasicAuthUser:               basicAuthUsername(normalized.BasicAuth),
 				AccessPolicy:                normalized.AccessPolicy != nil,
@@ -342,6 +358,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 		BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		BasicAuthUser:               basicAuthUsername(normalized.BasicAuth),
 		AccessPolicy:                normalized.AccessPolicy != nil,
+		Resources:                   normalized.Resources,
 		ExpiresAt:                   normalized.ExpiresAt,
 		Status:                      "planned",
 	}
@@ -426,6 +443,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 	options.BasicAuth = basicAuthToK8s(normalized.BasicAuth)
 	options.AccessPolicy = accessPolicyToK8s(normalized.AccessPolicy)
 	options.TargetURL = normalized.TargetURL
+	options.Resources = resourcesToK8s(normalized.Resources)
 	if customDomainVerified {
 		options.CustomDomain = desiredCustomDomain
 		options.SealosHost = sealosHost
@@ -516,6 +534,7 @@ func buildApplySessionRecord(normalized normalizedApplyTunnel, authData *auth.Au
 		Secret:          secret,
 		BasicAuth:       normalized.BasicAuth,
 		AccessPolicy:    normalized.AccessPolicy,
+		ResourceConfig:  normalized.Resources,
 		TTL:             normalized.TTL,
 		ExpiresAt:       normalized.ExpiresAt,
 		Mode:            "daemon",
@@ -570,6 +589,7 @@ func restoreExistingApplyTunnel(client *k8s.Client, previous session.TunnelSessi
 		TargetURL:    previous.TargetURL,
 		BasicAuth:    basicAuthToK8s(previous.BasicAuth),
 		AccessPolicy: accessPolicyToK8s(previous.AccessPolicy),
+		Resources:    resourcesToK8s(previous.ResourceConfig),
 	})
 	return err
 }
@@ -648,6 +668,10 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
 	}
+	resourceConfig, err := resolveApplyResources(item.Resources)
+	if err != nil {
+		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s resources: %w", tunnelID, err)
+	}
 	if !tunnelprotocol.IsHTTP(protocol) {
 		if strings.TrimSpace(item.Target) != "" {
 			return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: target is only supported for https tunnels", tunnelID)
@@ -680,6 +704,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 		BasicAuth:     basicAuth,
 		BasicAuthPass: basicAuthPass,
 		TargetTLS:     targetTLS,
+		Resources:     resourceConfig,
 		AccessPolicy:  accessPolicy,
 		TTL:           ttl,
 		ExpiresAt:     expiresAt,
@@ -725,6 +750,26 @@ func resolveApplyTargetTLS(rawTarget string, config *applyTargetTLS) (*session.T
 		return nil, err
 	}
 	return sessionTargetTLSConfig(true), nil
+}
+
+func resolveApplyResources(config *applyResources) (*session.ResourceConfig, error) {
+	if config == nil {
+		return resourcesFromK8s(k8s.DefaultResourceConfig()), nil
+	}
+	input := session.ResourceConfig{}
+	if config.Requests != nil {
+		input.Requests = &session.ResourceValues{
+			CPU:    config.Requests.CPU,
+			Memory: config.Requests.Memory,
+		}
+	}
+	if config.Limits != nil {
+		input.Limits = &session.ResourceValues{
+			CPU:    config.Limits.CPU,
+			Memory: config.Limits.Memory,
+		}
+	}
+	return normalizeResourceConfig(&input)
 }
 
 func resolveApplyTunnelExpiresAt(ttl string, now time.Time) (string, error) {
@@ -982,6 +1027,7 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			DesiredHost:                 normalized.CustomDomain,
 			ExpiresAt:                   normalized.ExpiresAt,
 			TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(normalized.TargetTLS),
+			DesiredResources:            normalized.Resources,
 			AccessPolicy:                normalized.AccessPolicy != nil,
 			BasicAuth:                   normalized.BasicAuth != nil && normalized.BasicAuth.Enabled,
 		}
@@ -994,6 +1040,7 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			result.CurrentTarget = sessionTargetURL(*existing)
 			result.CurrentHost = existing.CustomDomain
 			result.CurrentTargetTLSInsecureSkipVerify = targetTLSInsecureSkipVerifyEnabled(existing.TargetTLS)
+			result.CurrentResources = effectiveSessionResourceConfig(existing.ResourceConfig)
 			result.Action = "no-op"
 			if existing.LocalPort != normalized.LocalPort {
 				result.Changes = append(result.Changes, fmt.Sprintf("localPort: %s -> %s", valueOr(existing.LocalPort, "-"), normalized.LocalPort))
@@ -1015,6 +1062,9 @@ func runDiffConfigWithSessionLookup(config *applyFile, lookup func(string) (*ses
 			}
 			if accessPolicyChanged(existing.AccessPolicy, normalized.AccessPolicy) {
 				result.Changes = append(result.Changes, "accessPolicy")
+			}
+			if resourceConfigChanged(existing.ResourceConfig, normalized.Resources) {
+				result.Changes = append(result.Changes, "resources")
 			}
 			if existing.ExpiresAt != normalized.ExpiresAt {
 				result.Changes = append(result.Changes, fmt.Sprintf("ttl/expiresAt: %s -> %s", valueOr(existing.ExpiresAt, "-"), valueOr(normalized.ExpiresAt, "-")))

@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	klabels "k8s.io/apimachinery/pkg/labels"
@@ -61,6 +62,56 @@ type TunnelOptions struct {
 	TargetURL    string
 	BasicAuth    *BasicAuthOptions
 	AccessPolicy *accesspolicy.Policy
+	Resources    *ResourceConfig
+}
+
+type ResourceConfig struct {
+	Requests ResourceValues
+	Limits   ResourceValues
+}
+
+type ResourceValues struct {
+	CPU    string
+	Memory string
+}
+
+const (
+	DefaultRequestCPU    = "10m"
+	DefaultRequestMemory = "32Mi"
+	DefaultLimitCPU      = "200m"
+	DefaultLimitMemory   = "128Mi"
+)
+
+func DefaultResourceConfig() *ResourceConfig {
+	return &ResourceConfig{
+		Requests: ResourceValues{CPU: DefaultRequestCPU, Memory: DefaultRequestMemory},
+		Limits:   ResourceValues{CPU: DefaultLimitCPU, Memory: DefaultLimitMemory},
+	}
+}
+
+func EffectiveResourceConfig(config *ResourceConfig) *ResourceConfig {
+	if config == nil {
+		return DefaultResourceConfig()
+	}
+	defaults := DefaultResourceConfig()
+	out := &ResourceConfig{
+		Requests: ResourceValues{
+			CPU:    defaultResourceValue(config.Requests.CPU, defaults.Requests.CPU),
+			Memory: defaultResourceValue(config.Requests.Memory, defaults.Requests.Memory),
+		},
+		Limits: ResourceValues{
+			CPU:    defaultResourceValue(config.Limits.CPU, defaults.Limits.CPU),
+			Memory: defaultResourceValue(config.Limits.Memory, defaults.Limits.Memory),
+		},
+	}
+	return out
+}
+
+func defaultResourceValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 type BasicAuthOptions struct {
@@ -423,7 +474,7 @@ func (c *Client) EnsureTunnelWithOptions(ctx context.Context, tunnelID string, s
 	}
 
 	// Create or Update Deployment
-	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.TargetURL, digestSalt, opts.BasicAuth, opts.AccessPolicy)
+	deploymentCreated, err := c.ensureDeployment(ctx, name, secret, protocol, localPort, opts.TargetURL, digestSalt, opts.BasicAuth, opts.AccessPolicy, opts.Resources)
 	if err != nil {
 		return empty, fmt.Errorf("failed to ensure deployment: %w", err)
 	}
@@ -623,7 +674,7 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 	return false, nil, getErr
 }
 
-func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort, targetURL string, salt []byte, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy) (bool, error) {
+func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, localPort, targetURL string, salt []byte, basicAuth *BasicAuthOptions, policy *accesspolicy.Policy, resources *ResourceConfig) (bool, error) {
 	replicas := int32(1)
 	labels := managedLabels(name)
 
@@ -686,6 +737,10 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 		})
 	}
 	podAnnotations[serverConfigDigestKey] = serverConfigDigest(salt, secret, targetURL, basicAuth, policy)
+	resourceRequirements, err := resourceRequirementsForConfig(resources)
+	if err != nil {
+		return false, err
+	}
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -708,6 +763,7 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 							Args:            args,
 							Env:             env,
 							Ports:           containerPortsForProtocol(protocol),
+							Resources:       resourceRequirements,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "tmp", MountPath: "/tmp"},
 							},
@@ -787,6 +843,72 @@ func containerPortsForProtocol(protocol string) []corev1.ContainerPort {
 		ports = append(ports, corev1.ContainerPort{Name: "tcp", ContainerPort: 2222})
 	}
 	return ports
+}
+
+func resourceRequirementsForConfig(config *ResourceConfig) (corev1.ResourceRequirements, error) {
+	effective := EffectiveResourceConfig(config)
+	requirements := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+	if err := setResourceQuantity(requirements.Requests, corev1.ResourceCPU, effective.Requests.CPU); err != nil {
+		return corev1.ResourceRequirements{}, fmt.Errorf("request cpu: %w", err)
+	}
+	if err := setResourceQuantity(requirements.Requests, corev1.ResourceMemory, effective.Requests.Memory); err != nil {
+		return corev1.ResourceRequirements{}, fmt.Errorf("request memory: %w", err)
+	}
+	if err := setResourceQuantity(requirements.Limits, corev1.ResourceCPU, effective.Limits.CPU); err != nil {
+		return corev1.ResourceRequirements{}, fmt.Errorf("limit cpu: %w", err)
+	}
+	if err := setResourceQuantity(requirements.Limits, corev1.ResourceMemory, effective.Limits.Memory); err != nil {
+		return corev1.ResourceRequirements{}, fmt.Errorf("limit memory: %w", err)
+	}
+	return requirements, nil
+}
+
+func setResourceQuantity(list corev1.ResourceList, name corev1.ResourceName, value string) error {
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(value))
+	if err != nil {
+		return err
+	}
+	list[name] = quantity
+	return nil
+}
+
+// UpdateTunnelResources patches the remote Deployment pod template resources
+// without changing the current replica count. This lets stopped tunnels keep
+// their public routing resources while updating the template used on next start.
+func (c *Client) UpdateTunnelResources(ctx context.Context, tunnelID string, resources *ResourceConfig) error {
+	if err := validateTunnelID(tunnelID); err != nil {
+		return err
+	}
+	name := fmt.Sprintf("sealtun-%s", tunnelID)
+	requirements, err := resourceRequirementsForConfig(resources)
+	if err != nil {
+		return err
+	}
+
+	deployClient := c.clientset.AppsV1().Deployments(c.namespace)
+	existing, err := deployClient.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("remote deployment %s is missing", name)
+	}
+	if err != nil {
+		return fmt.Errorf("get deployment %s: %w", name, err)
+	}
+	if err := rejectUnmanagedExisting("deployment", name, name, existing.Labels); err != nil {
+		return err
+	}
+	if len(existing.Spec.Template.Spec.Containers) == 0 {
+		return fmt.Errorf("deployment %s has no containers", name)
+	}
+
+	next := existing.DeepCopy()
+	next.Spec.Template.Spec.Containers[0].Resources = requirements
+	if _, err := deployClient.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update deployment %s resources: %w", name, err)
+	}
+	return nil
 }
 
 func tcpServiceName(name string) string {
@@ -1856,6 +1978,7 @@ func (c *Client) TunnelResources(ctx context.Context, tunnelID string) (*TunnelR
 		}
 		resource.Status = fmt.Sprintf("%d/%d ready", deployment.Status.ReadyReplicas, desired)
 		resource.CostHints = append(resource.CostHints, fmt.Sprintf("deployment desired replicas: %d", desired))
+		resource.CostHints = append(resource.CostHints, resourceHintsForRequirements(deployment.Spec.Template.Spec.Containers)...)
 		if deployment.Status.ReadyReplicas == 0 && desired > 0 {
 			resource.Warnings = append(resource.Warnings, "deployment has no ready replicas")
 		}
@@ -1979,6 +2102,27 @@ func objectTunnelResource(kind, name, namespace string, labels map[string]string
 		Managed:   managed,
 		Labels:    copyStringMap(labels),
 	}
+}
+
+func resourceHintsForRequirements(containers []corev1.Container) []string {
+	if len(containers) == 0 {
+		return nil
+	}
+	requirements := containers[0].Resources
+	hints := []string{}
+	if cpu, ok := requirements.Requests[corev1.ResourceCPU]; ok {
+		hints = append(hints, "request cpu: "+cpu.String())
+	}
+	if memory, ok := requirements.Requests[corev1.ResourceMemory]; ok {
+		hints = append(hints, "request memory: "+memory.String())
+	}
+	if cpu, ok := requirements.Limits[corev1.ResourceCPU]; ok {
+		hints = append(hints, "limit cpu: "+cpu.String())
+	}
+	if memory, ok := requirements.Limits[corev1.ResourceMemory]; ok {
+		hints = append(hints, "limit memory: "+memory.String())
+	}
+	return hints
 }
 
 func (c *Client) dynamicTunnelResource(ctx context.Context, kind string, gvr schema.GroupVersionResource, name string, optional bool) []TunnelResource {

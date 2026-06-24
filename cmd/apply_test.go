@@ -362,6 +362,40 @@ func TestNormalizeApplyTunnelResolvesAccessPolicyAndTTL(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplyTunnelResources(t *testing.T) {
+	normalized, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		Resources: &applyResources{
+			Requests: &applyResourceValues{CPU: "25m"},
+			Limits:   &applyResourceValues{Memory: "192Mi"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Resources == nil || normalized.Resources.Requests == nil || normalized.Resources.Limits == nil {
+		t.Fatalf("expected resources to be normalized, got %#v", normalized.Resources)
+	}
+	if normalized.Resources.Requests.CPU != "25m" || normalized.Resources.Requests.Memory != k8s.DefaultRequestMemory {
+		t.Fatalf("unexpected requests: %#v", normalized.Resources.Requests)
+	}
+	if normalized.Resources.Limits.CPU != k8s.DefaultLimitCPU || normalized.Resources.Limits.Memory != "192Mi" {
+		t.Fatalf("unexpected limits: %#v", normalized.Resources.Limits)
+	}
+
+	if _, err := normalizeApplyTunnel(applyTunnel{
+		Name:      "api",
+		LocalPort: 8080,
+		Resources: &applyResources{
+			Requests: &applyResourceValues{Memory: "512Mi"},
+			Limits:   &applyResourceValues{Memory: "128Mi"},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "resources") {
+		t.Fatalf("expected invalid resources error, got %v", err)
+	}
+}
+
 func TestTemporaryAccessURLEscapesToken(t *testing.T) {
 	got := temporaryAccessURL("app.example.com", "token with&symbols?")
 	want := "https://app.example.com/?_sealtun_token=token+with%26symbols%3F"

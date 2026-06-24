@@ -271,6 +271,8 @@ sealtun discover --json --limit 20
 
 sealtun resources <tunnel-id>
 sealtun resources <tunnel-id> --json
+sealtun resources set <tunnel-id> --request-cpu 20m --request-memory 64Mi --limit-cpu 300m --limit-memory 256Mi
+sealtun resources unset <tunnel-id>
 
 sealtun watch
 sealtun watch <tunnel-id>
@@ -316,7 +318,7 @@ Dashboard is a local workbench by default. It can create HTTPS/SSH/TCP tunnels, 
 
 `sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port` or the dashboard HTTPS `Target URL` field. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `27017 -> mongodb/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
 
-`sealtun resources` uses the current active profile/region/namespace and shows Kubernetes resource occupancy for one tunnel: Deployment replicas, Pod count, Service type, NodePort, Ingress host count, Certificate presence, Issuer, and Secret metadata. It is not a cloud billing estimate, and Secret data is not displayed.
+`sealtun resources` uses the current active profile/region/namespace and shows Kubernetes resource occupancy for one tunnel: Deployment replicas, Pod count, Service type, NodePort, Ingress host count, Certificate presence, Issuer, Secret metadata, and Pod CPU/memory requests/limits. It is not a cloud billing estimate, and Secret data is not displayed. `resources set` updates the remote Deployment template and stores the config in the local session; stopped tunnels stay scaled to 0 and use the new resources on the next `start`. `resources unset` resets to Sealtun defaults: request CPU `10m`, request memory `32Mi`, limit CPU `200m`, limit memory `128Mi`.
 
 `sealtun watch` refreshes tunnel or global status until interrupted. Use `--json` for newline-delimited events when another tool needs to consume state changes.
 

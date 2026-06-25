@@ -187,6 +187,13 @@ sealtun init --protocol auto --json
 # Create the recommended tunnel only when you are ready
 sealtun init --apply
 
+# Daily development shortcut: reuse the current project tunnel, or start the guided creation flow
+sealtun up
+sealtun up --guided
+sealtun up 3000
+sealtun up --target https://10.0.0.12:8443 --insecure
+sealtun up 3000 --rate-limit 60/m --audit
+
 # Default https protocol (compatible with WebSocket)
 sealtun expose 3000
 
@@ -198,7 +205,7 @@ sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
 
 ```
 
-`--target` applies only to default HTTPS tunnels. The target must be a `http://` or `https://` address reachable from the machine running the Sealtun CLI. SSH/TCP L4 tunnels continue to use the local port plus NodePort model. `--target-insecure-skip-verify` affects only the Sealtun client to HTTPS upstream TLS check, is off by default, and should be used only for private/self-signed upstreams.
+`sealtun up` is the smart entrypoint for `expose`: it first reuses the tunnel recorded in the current directory's `.sealtun/state.json`; without project state in an interactive terminal, it guides the user through login check, port selection, protocol, optional authentication, rate limit, domain, config save, and creation. In scripts or when a port/`--target` is already explicit, `up` directly uses the same `expose` creation engine; pass `--guided` to force the wizard. `--target` applies only to default HTTPS tunnels. The target must be a `http://` or `https://` address reachable from the machine running the Sealtun CLI. SSH/TCP L4 tunnels continue to use the local port plus NodePort model. `--target-insecure-skip-verify`/`up --insecure` affects only the Sealtun client to HTTPS upstream TLS check, is off by default, and should be used only for private/self-signed upstreams.
 
 Enable Basic Auth for public application traffic:
 ```bash

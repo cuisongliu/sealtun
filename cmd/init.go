@@ -227,7 +227,7 @@ func discoveredPortForTemplate(templateKind, protocol string, ports []discoverIt
 
 func initTemplateUsesDiscoveredPort(templateKind string) bool {
 	switch templateKind {
-	case "https", "ssh", "tcp":
+	case "https", "ssh", "tcp", "mysql", "postgres", "redis", "mongodb", "mqtt":
 		return true
 	default:
 		return false

@@ -51,6 +51,9 @@ func TestCollectInspectPayload(t *testing.T) {
 	if payload.CustomDomain != "abc.example.com" {
 		t.Fatalf("unexpected custom domain: %s", payload.CustomDomain)
 	}
+	if payload.ProcessAlive {
+		t.Fatal("expected pid 0 session to report process not alive")
+	}
 }
 
 func TestCollectInspectPayloadDegradesForegroundTunnelWhenLocalPortIsDown(t *testing.T) {

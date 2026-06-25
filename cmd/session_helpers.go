@@ -257,6 +257,9 @@ func sessionSealosHostForDomain(sess session.TunnelSession, computed string) str
 }
 
 func sessionOwnerAlive(sess session.TunnelSession) bool {
+	if sess.PID <= 0 {
+		return false
+	}
 	if sess.Mode == "daemon" {
 		return daemonstate.Alive()
 	}

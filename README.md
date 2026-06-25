@@ -187,6 +187,13 @@ sealtun init --protocol auto --json
 # 确认后再创建推荐隧道
 sealtun init --apply
 
+# 日常开发推荐：自动复用当前项目隧道；没有状态时进入完整创建引导
+sealtun up
+sealtun up --guided
+sealtun up 3000
+sealtun up --target https://10.0.0.12:8443 --insecure
+sealtun up 3000 --rate-limit 60/m --audit
+
 # 默认使用 https 协议 (兼容普通 HTTP 与 WebSocket 应用流量)
 sealtun expose 3000
 
@@ -198,7 +205,7 @@ sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
 
 ```
 
-`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。`--target-insecure-skip-verify` 只影响 Sealtun 客户端到 HTTPS upstream 的证书校验，默认关闭，仅建议用于私有网络内的自签名证书 upstream。
+`sealtun up` 是 `expose` 的智能入口：它会优先复用当前目录 `.sealtun/state.json` 记录的 tunnel；没有状态且处于交互终端时，会按“登录检查 -> 选择端口 -> 选择协议 -> 是否加认证 -> 是否加限流 -> 是否加域名 -> 是否保存配置 -> 创建”的流程引导。非交互脚本或已明确端口/`--target` 时，`up` 直接调用同一套 `expose` 创建逻辑；也可以用 `--guided` 强制进入引导。`--target` 只适用于默认 HTTPS 隧道，目标必须是运行 Sealtun CLI 的机器可访问的 `http://` 或 `https://` 地址；SSH/TCP 四层隧道仍使用本地端口和 NodePort 模型。`--target-insecure-skip-verify`/`up --insecure` 只影响 Sealtun 客户端到 HTTPS upstream 的证书校验，默认关闭，仅建议用于私有网络内的自签名证书 upstream。
 
 为公网业务流量启用 Basic Auth：
 ```bash

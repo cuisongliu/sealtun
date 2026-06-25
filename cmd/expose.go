@@ -28,265 +28,271 @@ and establishes a secure connection to forward traffic to the configured target.
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		localPort, targetURL, err := resolveExposeTarget(args, exposeTarget)
-		if err != nil {
-			return err
-		}
-		normalizedCustomDomain, err := validateCustomDomain(customDomain)
-		if err != nil {
-			return err
-		}
-		if waitDomain {
-			if normalizedCustomDomain == "" {
-				return fmt.Errorf("--wait-domain requires --domain")
-			}
-			if domainWaitTimeout <= 0 {
-				return fmt.Errorf("--domain-timeout must be greater than 0 when --wait-domain is set")
-			}
-		}
-		if err := validateProtocol(protocol); err != nil {
-			return err
-		}
-		protocol = tunnelprotocol.Normalize(protocol)
-		if strings.TrimSpace(exposeTarget) != "" && !tunnelprotocol.IsHTTP(protocol) {
-			return fmt.Errorf("--target is only supported for https tunnels")
-		}
-		if targetTLSInsecureSkipVerify && strings.TrimSpace(exposeTarget) == "" {
-			return fmt.Errorf("--target-insecure-skip-verify requires --target with an https URL")
-		}
-		if err := validateTargetTLSOptions(targetURL, targetTLSInsecureSkipVerify); err != nil {
-			return err
-		}
-		if !tunnelprotocol.IsHTTP(protocol) {
-			if normalizedCustomDomain != "" || waitDomain {
-				return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
-			}
-			if basicAuthCredential != "" || basicAuthUser != "" || basicAuthPassword != "" || basicAuthPasswordEnv != "" {
-				return fmt.Errorf("basic auth flags are only supported for https tunnels")
-			}
-			if bearerToken != "" || bearerTokenEnv != "" || len(ipAllowlist) > 0 || len(ipDenylist) > 0 || temporaryAccessToken != "" || temporaryAccessTokenEnv != "" || accessRateLimit != "" || accessAuditEnabled {
-				return fmt.Errorf("access policy flags are only supported for https tunnels")
-			}
-		}
-
-		// 1. Check if logged in.
-		authData, err := auth.LoadAuthData()
-		if err != nil {
-			return fmt.Errorf("not logged in. Please run 'sealtun login' first: %w", err)
-		}
-
-		sealtunDir, err := auth.GetSealosDir()
-		if err != nil {
-			return err
-		}
-		kcPath := filepath.Join(sealtunDir, "kubeconfig")
-		kubeconfig, err := auth.ActiveKubeconfig()
-		if err != nil {
-			return fmt.Errorf("failed to read kubeconfig: %w", err)
-		}
-
-		// 2. Generate tunnel ID & secret.
-		tunnelID := uuid.New().String()[:8]
-		secret := uuid.New().String()
-		fmt.Printf("[+] Preparing tunnel %s...\n", tunnelID)
-
-		// 3. Create K8s Resources (Deployment, Service, Ingress)
-		k8sClient, err := k8s.NewClient(kcPath, authData)
-		if err != nil {
-			return fmt.Errorf("failed to init k8s client: %w", err)
-		}
-
-		ctx := cmd.Context()
-		if err := recoverStaleSessions(ctx); err != nil {
-			return err
-		}
-
-		warnPlaintextPasswordFlag(basicAuthCredential, basicAuthPassword)
-		basicAuthConfig, err := resolveBasicAuth(basicAuthInput{
-			Credential:  basicAuthCredential,
-			Username:    basicAuthUser,
-			Password:    basicAuthPassword,
-			PasswordEnv: basicAuthPasswordEnv,
-		}, getenv)
-		if err != nil {
-			return err
-		}
-		accessPolicyConfig, err := resolveAccessPolicy(accessPolicyInput{
-			BearerToken:       bearerToken,
-			BearerTokenEnv:    bearerTokenEnv,
-			IPAllowlist:       ipAllowlist,
-			IPDenylist:        ipDenylist,
-			TemporaryToken:    temporaryAccessToken,
-			TemporaryTokenEnv: temporaryAccessTokenEnv,
-			TemporaryTTL:      temporaryAccessTTL,
-			TemporaryName:     "default",
-			RateLimit:         accessRateLimit,
-			AuditEnabled:      accessAuditEnabled,
-		}, nowUTC(), getenv)
-		if err != nil {
-			return err
-		}
-
-		hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{
-			BasicAuth:    basicAuthToK8s(basicAuthConfig),
-			AccessPolicy: accessPolicyToK8s(accessPolicyConfig),
-			TargetURL:    targetURL,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to provision tunnel on Sealos: %w", err)
-		}
-		cleanupTarget := k8sClient.WithNamespace(k8sClient.Namespace())
-		rollback := true
-		defer func() {
-			if rollback {
-				cleanupTunnel(cleanupTarget, tunnelID)
-			}
-		}()
-
-		sessionRecord := session.TunnelSession{
-			TunnelID:        tunnelID,
-			Region:          authData.Region,
-			Namespace:       k8sClient.Namespace(),
-			Kubeconfig:      kubeconfig,
-			Protocol:        protocol,
-			Host:            hosts.PublicHost,
-			SealosHost:      hosts.SealosHost,
-			CustomDomain:    hosts.CustomDomain,
-			PublicPort:      hosts.PublicPort,
-			LocalPort:       localPort,
-			TargetURL:       targetURL,
-			TargetTLS:       sessionTargetTLSConfig(targetTLSInsecureSkipVerify),
-			Secret:          secret,
-			BasicAuth:       basicAuthConfig,
-			AccessPolicy:    accessPolicyConfig,
-			ResourceConfig:  resourcesFromK8s(k8s.DefaultResourceConfig()),
-			Mode:            "foreground",
-			PID:             os.Getpid(),
-			ConnectionState: session.ConnectionStatePending,
-			Resources: []string{
-				fmt.Sprintf("sealtun-%s", tunnelID),
-			},
-		}
-		if err := session.Save(sessionRecord); err != nil {
-			return fmt.Errorf("failed to persist tunnel session: %w", err)
-		}
-
-		if protocol == tunnelprotocol.SSH {
-			endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
-			fmt.Printf("[+] Public SSH host: %s\n", endpoint.Host)
-			fmt.Printf("[+] Public SSH port: %d\n", endpoint.Port)
-			fmt.Printf("[+] Connect with: %s\n", endpoint.Command)
-			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
-		} else if protocol == tunnelprotocol.TCP {
-			endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
-			fmt.Printf("[+] Public TCP host: %s\n", endpoint.Host)
-			fmt.Printf("[+] Public TCP port: %d\n", endpoint.Port)
-			fmt.Printf("[+] Public TCP endpoint: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
-			fmt.Printf("[+] Local target: localhost:%s\n", localPort)
-		} else {
-			fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
-			fmt.Printf("[+] Target: %s\n", targetURL)
-			if targetTLSInsecureSkipVerify {
-				fmt.Printf("[!] Target TLS certificate verification is disabled for this upstream.\n")
-			}
-		}
-		if basicAuthConfig != nil && basicAuthConfig.Enabled {
-			fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
-		}
-		if accessPolicyConfig != nil {
-			printAccessPolicySummary(accessPolicyConfig)
-			if temporaryAccessToken != "" || temporaryAccessTokenEnv != "" {
-				token, tokenErr := resolveSecretValue(temporaryAccessToken, temporaryAccessTokenEnv, "temporary access token", getenv)
-				if tokenErr == nil {
-					fmt.Printf("[+] Temporary access URL: %s\n", temporaryAccessURL(hosts.PublicHost, token))
-				}
-			}
-		}
-		if normalizedCustomDomain != "" {
-			fmt.Printf("[+] Requested custom domain: %s\n", normalizedCustomDomain)
-			fmt.Printf("[+] Sealos CNAME target: %s\n", hosts.SealosHost)
-			fmt.Printf("[+] Configure DNS: CNAME %s -> %s\n", normalizedCustomDomain, hosts.SealosHost)
-			if !waitDomain {
-				fmt.Printf("[+] After DNS is ready, attach it with: sealtun domain set %s %s\n", tunnelID, normalizedCustomDomain)
-			}
-		}
-		fmt.Printf("[+] Waiting for tunnel server pod to be ready...\n")
-
-		readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
-		defer cancelReady()
-		if err := k8sClient.WaitForReady(readyCtx, tunnelID); err != nil {
-			return fmt.Errorf("timed out waiting for tunnel server: %w", err)
-		}
-		if waitDomain && normalizedCustomDomain != "" {
-			fmt.Printf("[+] Waiting for custom domain DNS, Ingress, and certificate readiness (timeout %s)...\n", domainWaitTimeout)
-			if err := waitForDomainCNAMEReady(ctx, normalizedCustomDomain, hosts.SealosHost, domainWaitTimeout); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain DNS is not ready yet: %v\n", err)
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run on the Sealos host. Re-run `sealtun domain set %s %s` after CNAME is ready.\n", tunnelID, normalizedCustomDomain)
-			} else if payload, err := configureSessionCustomDomain(ctx, tunnelID, normalizedCustomDomain); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain could not be attached: %v\n", err)
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run on the Sealos host. Recheck DNS and retry `sealtun domain set %s %s`.\n", tunnelID, normalizedCustomDomain)
-			} else if current, err := session.Get(tunnelID); err == nil {
-				sessionRecord = *current
-				if printErr := printDomainPayload(cmd, payload); printErr != nil {
-					return printErr
-				}
-			}
-		}
-		if waitDomain && sessionRecord.CustomDomain != "" {
-			payload, err := waitForDomainReady(ctx, sessionRecord, domainWaitTimeout)
-			if payload != nil {
-				_ = printDomainVerifyPayload(cmd, payload)
-			}
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain is not ready yet: %v\n", err)
-				fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run. Recheck later with `sealtun domain verify %s --wait`.\n", tunnelID)
-			}
-		}
-
-		if !foreground {
-			sessionRecord.Mode = "daemon"
-			sessionRecord.PID = 0
-			sessionRecord.ConnectionState = session.ConnectionStatePending
-			if err := session.Update(sessionRecord); err != nil {
-				return fmt.Errorf("failed to update tunnel session for daemon mode: %w", err)
-			}
-			if err := ensureDaemonRunningFn(); err != nil {
-				return fmt.Errorf("failed to start local daemon: %w", err)
-			}
-			if err := waitForDaemonSession(tunnelID, daemonConnectTimeout); err != nil {
-				return err
-			}
-
-			rollback = false
-			fmt.Printf("[+] Tunnel is running in the background via the local daemon.\n")
-			fmt.Printf("[+] Use `sealtun list` or `sealtun inspect %s` to view it later.\n", tunnelID)
-			return nil
-		}
-
-		ctx, stop := signal.NotifyContext(ctx, signalCleanupSignals()...)
-		defer stop()
-		rollback = false
-		defer cleanupTunnelForCurrentOwner(cleanupTarget, tunnelID)
-
-		// 4 & 5. Connect via WebSocket
-		wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(sessionRecord))
-		return dialForegroundTunnelWithRetry(ctx, foregroundConnectTimeout, foregroundConnectRetryInterval, func(dialCtx context.Context, onConnected func()) error {
-			return tunnel.DialServerAndServeTargetWithOptions(dialCtx, wsURL, secret, localPort, targetURL, protocol, targetOptionsForSession(sessionRecord), func() {
-				onConnected()
-				current, err := session.Get(tunnelID)
-				if err != nil {
-					return
-				}
-				if shouldPreserveStoppedSession(current) {
-					return
-				}
-				current.ConnectionState = session.ConnectionStateConnected
-				current.LastError = ""
-				current.LastConnectedAt = time.Now().Format(time.RFC3339)
-				_ = session.Update(*current)
-			})
-		})
+		return runExpose(cmd, args)
 	},
+}
+
+var runExpose = runExposeCommand
+
+func runExposeCommand(cmd *cobra.Command, args []string) error {
+	localPort, targetURL, err := resolveExposeTarget(args, exposeTarget)
+	if err != nil {
+		return err
+	}
+	normalizedCustomDomain, err := validateCustomDomain(customDomain)
+	if err != nil {
+		return err
+	}
+	if waitDomain {
+		if normalizedCustomDomain == "" {
+			return fmt.Errorf("--wait-domain requires --domain")
+		}
+		if domainWaitTimeout <= 0 {
+			return fmt.Errorf("--domain-timeout must be greater than 0 when --wait-domain is set")
+		}
+	}
+	if err := validateProtocol(protocol); err != nil {
+		return err
+	}
+	protocol = tunnelprotocol.Normalize(protocol)
+	if strings.TrimSpace(exposeTarget) != "" && !tunnelprotocol.IsHTTP(protocol) {
+		return fmt.Errorf("--target is only supported for https tunnels")
+	}
+	if targetTLSInsecureSkipVerify && strings.TrimSpace(exposeTarget) == "" {
+		return fmt.Errorf("--target-insecure-skip-verify requires --target with an https URL")
+	}
+	if err := validateTargetTLSOptions(targetURL, targetTLSInsecureSkipVerify); err != nil {
+		return err
+	}
+	if !tunnelprotocol.IsHTTP(protocol) {
+		if normalizedCustomDomain != "" || waitDomain {
+			return fmt.Errorf("--domain and --wait-domain are only supported for https tunnels")
+		}
+		if basicAuthCredential != "" || basicAuthUser != "" || basicAuthPassword != "" || basicAuthPasswordEnv != "" {
+			return fmt.Errorf("basic auth flags are only supported for https tunnels")
+		}
+		if bearerToken != "" || bearerTokenEnv != "" || len(ipAllowlist) > 0 || len(ipDenylist) > 0 || temporaryAccessToken != "" || temporaryAccessTokenEnv != "" || accessRateLimit != "" || accessAuditEnabled {
+			return fmt.Errorf("access policy flags are only supported for https tunnels")
+		}
+	}
+
+	// 1. Check if logged in.
+	authData, err := auth.LoadAuthData()
+	if err != nil {
+		return fmt.Errorf("not logged in. Please run 'sealtun login' first: %w", err)
+	}
+
+	sealtunDir, err := auth.GetSealosDir()
+	if err != nil {
+		return err
+	}
+	kcPath := filepath.Join(sealtunDir, "kubeconfig")
+	kubeconfig, err := auth.ActiveKubeconfig()
+	if err != nil {
+		return fmt.Errorf("failed to read kubeconfig: %w", err)
+	}
+
+	// 2. Generate tunnel ID & secret.
+	tunnelID := uuid.New().String()[:8]
+	secret := uuid.New().String()
+	fmt.Printf("[+] Preparing tunnel %s...\n", tunnelID)
+
+	// 3. Create K8s Resources (Deployment, Service, Ingress)
+	k8sClient, err := k8s.NewClient(kcPath, authData)
+	if err != nil {
+		return fmt.Errorf("failed to init k8s client: %w", err)
+	}
+
+	ctx := cmd.Context()
+	if err := recoverStaleSessions(ctx); err != nil {
+		return err
+	}
+
+	warnPlaintextPasswordFlag(basicAuthCredential, basicAuthPassword)
+	basicAuthConfig, err := resolveBasicAuth(basicAuthInput{
+		Credential:  basicAuthCredential,
+		Username:    basicAuthUser,
+		Password:    basicAuthPassword,
+		PasswordEnv: basicAuthPasswordEnv,
+	}, getenv)
+	if err != nil {
+		return err
+	}
+	accessPolicyConfig, err := resolveAccessPolicy(accessPolicyInput{
+		BearerToken:       bearerToken,
+		BearerTokenEnv:    bearerTokenEnv,
+		IPAllowlist:       ipAllowlist,
+		IPDenylist:        ipDenylist,
+		TemporaryToken:    temporaryAccessToken,
+		TemporaryTokenEnv: temporaryAccessTokenEnv,
+		TemporaryTTL:      temporaryAccessTTL,
+		TemporaryName:     "default",
+		RateLimit:         accessRateLimit,
+		AuditEnabled:      accessAuditEnabled,
+	}, nowUTC(), getenv)
+	if err != nil {
+		return err
+	}
+
+	hosts, err := k8sClient.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, k8s.TunnelOptions{
+		BasicAuth:    basicAuthToK8s(basicAuthConfig),
+		AccessPolicy: accessPolicyToK8s(accessPolicyConfig),
+		TargetURL:    targetURL,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to provision tunnel on Sealos: %w", err)
+	}
+	cleanupTarget := k8sClient.WithNamespace(k8sClient.Namespace())
+	rollback := true
+	defer func() {
+		if rollback {
+			cleanupTunnel(cleanupTarget, tunnelID)
+		}
+	}()
+
+	sessionRecord := session.TunnelSession{
+		TunnelID:        tunnelID,
+		Region:          authData.Region,
+		Namespace:       k8sClient.Namespace(),
+		Kubeconfig:      kubeconfig,
+		Protocol:        protocol,
+		Host:            hosts.PublicHost,
+		SealosHost:      hosts.SealosHost,
+		CustomDomain:    hosts.CustomDomain,
+		PublicPort:      hosts.PublicPort,
+		LocalPort:       localPort,
+		TargetURL:       targetURL,
+		TargetTLS:       sessionTargetTLSConfig(targetTLSInsecureSkipVerify),
+		Secret:          secret,
+		BasicAuth:       basicAuthConfig,
+		AccessPolicy:    accessPolicyConfig,
+		ResourceConfig:  resourcesFromK8s(k8s.DefaultResourceConfig()),
+		Mode:            "foreground",
+		PID:             os.Getpid(),
+		ConnectionState: session.ConnectionStatePending,
+		Resources: []string{
+			fmt.Sprintf("sealtun-%s", tunnelID),
+		},
+	}
+	if err := session.Save(sessionRecord); err != nil {
+		return fmt.Errorf("failed to persist tunnel session: %w", err)
+	}
+
+	if protocol == tunnelprotocol.SSH {
+		endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
+		fmt.Printf("[+] Public SSH host: %s\n", endpoint.Host)
+		fmt.Printf("[+] Public SSH port: %d\n", endpoint.Port)
+		fmt.Printf("[+] Connect with: %s\n", endpoint.Command)
+		fmt.Printf("[+] Local target: localhost:%s\n", localPort)
+	} else if protocol == tunnelprotocol.TCP {
+		endpoint := endpointDisplay(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort)
+		fmt.Printf("[+] Public TCP host: %s\n", endpoint.Host)
+		fmt.Printf("[+] Public TCP port: %d\n", endpoint.Port)
+		fmt.Printf("[+] Public TCP endpoint: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
+		fmt.Printf("[+] Local target: localhost:%s\n", localPort)
+	} else {
+		fmt.Printf("[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
+		fmt.Printf("[+] Target: %s\n", targetURL)
+		if targetTLSInsecureSkipVerify {
+			fmt.Printf("[!] Target TLS certificate verification is disabled for this upstream.\n")
+		}
+	}
+	if basicAuthConfig != nil && basicAuthConfig.Enabled {
+		fmt.Printf("[+] Basic Auth enabled for public traffic as user %q.\n", basicAuthConfig.Username)
+	}
+	if accessPolicyConfig != nil {
+		printAccessPolicySummary(accessPolicyConfig)
+		if temporaryAccessToken != "" || temporaryAccessTokenEnv != "" {
+			token, tokenErr := resolveSecretValue(temporaryAccessToken, temporaryAccessTokenEnv, "temporary access token", getenv)
+			if tokenErr == nil {
+				fmt.Printf("[+] Temporary access URL: %s\n", temporaryAccessURL(hosts.PublicHost, token))
+			}
+		}
+	}
+	if normalizedCustomDomain != "" {
+		fmt.Printf("[+] Requested custom domain: %s\n", normalizedCustomDomain)
+		fmt.Printf("[+] Sealos CNAME target: %s\n", hosts.SealosHost)
+		fmt.Printf("[+] Configure DNS: CNAME %s -> %s\n", normalizedCustomDomain, hosts.SealosHost)
+		if !waitDomain {
+			fmt.Printf("[+] After DNS is ready, attach it with: sealtun domain set %s %s\n", tunnelID, normalizedCustomDomain)
+		}
+	}
+	fmt.Printf("[+] Waiting for tunnel server pod to be ready...\n")
+
+	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
+	defer cancelReady()
+	if err := k8sClient.WaitForReady(readyCtx, tunnelID); err != nil {
+		return fmt.Errorf("timed out waiting for tunnel server: %w", err)
+	}
+	if waitDomain && normalizedCustomDomain != "" {
+		fmt.Printf("[+] Waiting for custom domain DNS, Ingress, and certificate readiness (timeout %s)...\n", domainWaitTimeout)
+		if err := waitForDomainCNAMEReady(ctx, normalizedCustomDomain, hosts.SealosHost, domainWaitTimeout); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain DNS is not ready yet: %v\n", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run on the Sealos host. Re-run `sealtun domain set %s %s` after CNAME is ready.\n", tunnelID, normalizedCustomDomain)
+		} else if payload, err := configureSessionCustomDomain(ctx, tunnelID, normalizedCustomDomain); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain could not be attached: %v\n", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run on the Sealos host. Recheck DNS and retry `sealtun domain set %s %s`.\n", tunnelID, normalizedCustomDomain)
+		} else if current, err := session.Get(tunnelID); err == nil {
+			sessionRecord = *current
+			if printErr := printDomainPayload(cmd, payload); printErr != nil {
+				return printErr
+			}
+		}
+	}
+	if waitDomain && sessionRecord.CustomDomain != "" {
+		payload, err := waitForDomainReady(ctx, sessionRecord, domainWaitTimeout)
+		if payload != nil {
+			_ = printDomainVerifyPayload(cmd, payload)
+		}
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Custom domain is not ready yet: %v\n", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "[!] Tunnel will continue to run. Recheck later with `sealtun domain verify %s --wait`.\n", tunnelID)
+		}
+	}
+
+	if !foreground {
+		sessionRecord.Mode = "daemon"
+		sessionRecord.PID = 0
+		sessionRecord.ConnectionState = session.ConnectionStatePending
+		if err := session.Update(sessionRecord); err != nil {
+			return fmt.Errorf("failed to update tunnel session for daemon mode: %w", err)
+		}
+		if err := ensureDaemonRunningFn(); err != nil {
+			return fmt.Errorf("failed to start local daemon: %w", err)
+		}
+		if err := waitForDaemonSession(tunnelID, daemonConnectTimeout); err != nil {
+			return err
+		}
+
+		rollback = false
+		fmt.Printf("[+] Tunnel is running in the background via the local daemon.\n")
+		fmt.Printf("[+] Use `sealtun list` or `sealtun inspect %s` to view it later.\n", tunnelID)
+		return nil
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, signalCleanupSignals()...)
+	defer stop()
+	rollback = false
+	defer cleanupTunnelForCurrentOwner(cleanupTarget, tunnelID)
+
+	// 4 & 5. Connect via WebSocket
+	wsURL := fmt.Sprintf("wss://%s/_sealtun/ws", sessionControlHost(sessionRecord))
+	return dialForegroundTunnelWithRetry(ctx, foregroundConnectTimeout, foregroundConnectRetryInterval, func(dialCtx context.Context, onConnected func()) error {
+		return tunnel.DialServerAndServeTargetWithOptions(dialCtx, wsURL, secret, localPort, targetURL, protocol, targetOptionsForSession(sessionRecord), func() {
+			onConnected()
+			current, err := session.Get(tunnelID)
+			if err != nil {
+				return
+			}
+			if shouldPreserveStoppedSession(current) {
+				return
+			}
+			current.ConnectionState = session.ConnectionStateConnected
+			current.LastError = ""
+			current.LastConnectedAt = time.Now().Format(time.RFC3339)
+			_ = session.Update(*current)
+		})
+	})
 }
 
 var protocol string
@@ -321,27 +327,34 @@ type foregroundDialFunc func(context.Context, func()) error
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-	exposeCmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https, ssh, or tcp")
-	exposeCmd.Flags().StringVar(&exposeTarget, "target", "", "HTTP upstream target URL to expose, e.g. http://10.0.0.12:8080")
-	exposeCmd.Flags().BoolVar(&targetTLSInsecureSkipVerify, "target-insecure-skip-verify", false, "Skip TLS certificate verification when --target uses https; use only for private/self-signed upstreams")
-	exposeCmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
-	exposeCmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
-	exposeCmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
-	exposeCmd.Flags().BoolVar(&waitDomain, "wait-domain", false, "Wait for verified custom domain DNS, then attach it and wait for Ingress/certificate readiness")
-	exposeCmd.Flags().DurationVar(&domainWaitTimeout, "domain-timeout", 5*time.Minute, "Maximum time to wait for custom domain readiness")
-	exposeCmd.Flags().StringVar(&basicAuthCredential, "basic-auth", "", "Enable Basic Auth for public traffic as username:password")
-	exposeCmd.Flags().StringVar(&basicAuthUser, "basic-auth-user", "", "Basic Auth username for public traffic")
-	exposeCmd.Flags().StringVar(&basicAuthPassword, "basic-auth-password", "", "Basic Auth password for public traffic; prefer --basic-auth-password-env to avoid shell history")
-	exposeCmd.Flags().StringVar(&basicAuthPasswordEnv, "basic-auth-password-env", "", "Read Basic Auth password for public traffic from an environment variable")
-	exposeCmd.Flags().StringVar(&bearerToken, "bearer-token", "", "Require this bearer token for public traffic; prefer --bearer-token-env")
-	exposeCmd.Flags().StringVar(&bearerTokenEnv, "bearer-token-env", "", "Read bearer token for public traffic from an environment variable")
-	exposeCmd.Flags().StringSliceVar(&ipAllowlist, "ip-allowlist", nil, "Allow public traffic only from these IP/CIDR entries; repeat or comma-separate")
-	exposeCmd.Flags().StringSliceVar(&ipDenylist, "ip-denylist", nil, "Deny public traffic from these IP/CIDR entries; repeat or comma-separate")
-	exposeCmd.Flags().StringVar(&temporaryAccessToken, "temporary-access-token", "", "Enable a temporary access URL token; prefer --temporary-access-token-env")
-	exposeCmd.Flags().StringVar(&temporaryAccessTokenEnv, "temporary-access-token-env", "", "Read temporary access URL token from an environment variable")
-	exposeCmd.Flags().DurationVar(&temporaryAccessTTL, "temporary-access-ttl", time.Hour, "Temporary access URL lifetime")
-	exposeCmd.Flags().StringVar(&accessRateLimit, "rate-limit", "", "Rate limit HTTPS public traffic, e.g. 60/m or 1000/h")
-	exposeCmd.Flags().BoolVar(&accessAuditEnabled, "audit", false, "Enable HTTPS access audit for allow/deny decisions")
+	registerExposeFlags(exposeCmd, false)
+}
+
+func registerExposeFlags(cmd *cobra.Command, includeInsecureAlias bool) {
+	cmd.Flags().StringVar(&protocol, "protocol", "https", "Protocol to tunnel: https, ssh, or tcp")
+	cmd.Flags().StringVar(&exposeTarget, "target", "", "HTTP upstream target URL to expose, e.g. http://10.0.0.12:8080")
+	cmd.Flags().BoolVar(&targetTLSInsecureSkipVerify, "target-insecure-skip-verify", false, "Skip TLS certificate verification when --target uses https; use only for private/self-signed upstreams")
+	if includeInsecureAlias {
+		cmd.Flags().BoolVar(&targetTLSInsecureSkipVerify, "insecure", false, "Alias for --target-insecure-skip-verify")
+	}
+	cmd.Flags().DurationVar(&readyTimeout, "ready-timeout", 90*time.Second, "Maximum time to wait for the remote tunnel pod to become ready")
+	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run the tunnel in the current process instead of handing it off to the local daemon")
+	cmd.Flags().StringVar(&customDomain, "domain", "", "Custom domain to prepare; create a CNAME to the printed Sealos target before attaching")
+	cmd.Flags().BoolVar(&waitDomain, "wait-domain", false, "Wait for verified custom domain DNS, then attach it and wait for Ingress/certificate readiness")
+	cmd.Flags().DurationVar(&domainWaitTimeout, "domain-timeout", 5*time.Minute, "Maximum time to wait for custom domain readiness")
+	cmd.Flags().StringVar(&basicAuthCredential, "basic-auth", "", "Enable Basic Auth for public traffic as username:password")
+	cmd.Flags().StringVar(&basicAuthUser, "basic-auth-user", "", "Basic Auth username for public traffic")
+	cmd.Flags().StringVar(&basicAuthPassword, "basic-auth-password", "", "Basic Auth password for public traffic; prefer --basic-auth-password-env to avoid shell history")
+	cmd.Flags().StringVar(&basicAuthPasswordEnv, "basic-auth-password-env", "", "Read Basic Auth password for public traffic from an environment variable")
+	cmd.Flags().StringVar(&bearerToken, "bearer-token", "", "Require this bearer token for public traffic; prefer --bearer-token-env")
+	cmd.Flags().StringVar(&bearerTokenEnv, "bearer-token-env", "", "Read bearer token for public traffic from an environment variable")
+	cmd.Flags().StringSliceVar(&ipAllowlist, "ip-allowlist", nil, "Allow public traffic only from these IP/CIDR entries; repeat or comma-separate")
+	cmd.Flags().StringSliceVar(&ipDenylist, "ip-denylist", nil, "Deny public traffic from these IP/CIDR entries; repeat or comma-separate")
+	cmd.Flags().StringVar(&temporaryAccessToken, "temporary-access-token", "", "Enable a temporary access URL token; prefer --temporary-access-token-env")
+	cmd.Flags().StringVar(&temporaryAccessTokenEnv, "temporary-access-token-env", "", "Read temporary access URL token from an environment variable")
+	cmd.Flags().DurationVar(&temporaryAccessTTL, "temporary-access-ttl", time.Hour, "Temporary access URL lifetime")
+	cmd.Flags().StringVar(&accessRateLimit, "rate-limit", "", "Rate limit HTTPS public traffic, e.g. 60/m or 1000/h")
+	cmd.Flags().BoolVar(&accessAuditEnabled, "audit", false, "Enable HTTPS access audit for allow/deny decisions")
 }
 
 func resolveExposeTarget(args []string, explicitTarget string) (string, string, error) {

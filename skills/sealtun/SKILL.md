@@ -9,7 +9,7 @@ description: "Use for Sealtun CLI help: expose local HTTPS/SSH/TCP or HTTP upstr
 
 Classify the request before answering or editing:
 
-- User operation: install, shell completion, guided init, login, discover local ports, expose HTTPS, remote HTTP upstream targets, SSH, or generic TCP, access cluster-internal Services/Pods with `connect`, generate protocol templates, secure public HTTP traffic, show/set policy, audit access, create/list/revoke/rotate temporary share links, rotate server secret, plan/add/verify a custom domain, inspect state, watch status, view or tune resources, stop/start/resume, clean up, export YAML, or use the dashboard. Read `references/cli.md`.
+- User operation: install, shell completion, guided init, login, `up`, discover local ports, expose HTTPS, remote HTTP upstream targets, SSH, or generic TCP, access cluster-internal Services/Pods with `connect`, generate protocol templates, secure public HTTP traffic, show/set policy, audit access, create/list/revoke/rotate temporary share links, rotate server secret, plan/add/verify a custom domain, inspect state, watch status, view or tune resources, stop/start/resume, clean up, export YAML, or use the dashboard. Read `references/cli.md`.
 - Declarative configuration: `sealtun.yaml`, `apply -f`, `diff -f`, `export`, multi-tunnel management, stable names, `ttl`, Pod resources, HTTPS access policies, SSH tunnel declarations, or generic TCP tunnel declarations. Read `references/declarative.md`.
 - Troubleshooting: login/profile mismatch, daemon/session issues, local port discovery/failures, SSH/TCP direct NodePort problems, remote Kubernetes problems, resource lists/resource occupancy, DNS, Ingress, certificate, logs, metrics, events, dashboard live updates, or dashboard behavior. Read `references/troubleshooting.md`.
 - Skill maintenance or quality review: trigger precision, workflow scoring, or regression prompts for this skill. Read `references/evals.md`.
@@ -22,8 +22,8 @@ Use the user's intent to choose the shortest safe path:
 
 | User intent | Primary path | Verify with |
 | --- | --- | --- |
-| Make a local web app, dev server, callback, preview, or webhook public | `status` -> `discover` when port is unclear -> `expose <port>` | URL from output, `list --check`, `inspect <id>` |
-| Make an HTTP service reachable from this machine public | `status` -> `expose --target http://host:port` | URL from output, `inspect <id>`, protected request behavior |
+| Make a local web app, dev server, callback, preview, or webhook public | `status` -> `up` for interactive/dev use; `expose <port>` for scripts | URL from output, `list --check`, `inspect <id>` |
+| Make an HTTP service reachable from this machine public | `status` -> `up --target http://host:port` for dev use; `expose --target` for scripts | URL from output, `inspect <id>`, protected request behavior |
 | Add Basic Auth, Bearer token, IP rules, rate limit, audit, or temporary links | HTTPS `expose`, `policy`, `share`, or YAML access policy | `inspect <id>`, `policy show/audit`, protected request behavior |
 | Expose SSH directly | `expose 22 --protocol ssh` | printed SSH host/port, `inspect <id> --remote`, user SSH client output |
 | Expose database, queue, MQTT, or arbitrary TCP | `template <protocol>` for guidance, then `expose <port> --protocol tcp` | printed `<host>:<node-port>`, protocol client, `list --check` |
@@ -46,12 +46,12 @@ Follow this flow after the skill triggers:
    - Troubleshooting mode: user reports a problem. Run non-mutating diagnostics first, identify the likely layer, then propose or perform fixes only when the requested action is clear.
 3. Gather minimum context. Inside this repo, inspect current code/README before relying on references. Outside the repo, use the references as the command source. Prefer non-mutating checks such as `sealtun --version`, `sealtun status`, `sealtun init`, `sealtun profile current`, `sealtun region current`, `sealtun discover`, `sealtun list`, `sealtun inspect`, `sealtun resources`, and `sealtun doctor`.
 4. Handle first-use authorization gently. If `status` shows no login, explain that Sealtun needs Sealos authorization and kubeconfig before creating cloud resources. Guide the user through `sealtun login`, or `sealtun login <region> --profile <name>` when region/profile matters. If a browser/device authorization flow opens, tell the user to complete it in the browser and wait; do not treat the pause as a failure. After login, verify with `sealtun status`, `sealtun region current`, and optionally `sealtun profile current`.
-5. Control mutations. Do not run `sealtun expose`, real `sealtun apply`, `sealtun share create/revoke`, `sealtun domain add/set/clear`, `sealtun stop`, `sealtun cleanup`, `sealtun logout`, or dashboard write actions unless the user explicitly asked for that operation in the current task. `sealtun template`, `sealtun domain plan`, `sealtun share list`, `sealtun export`, dashboard viewing, `apply --dry-run`, `diff`, and read-only diagnostics are safe guidance steps. For declarative changes, prefer `apply --dry-run` and `diff` before real `apply`.
+5. Control mutations. Do not run `sealtun up`, `sealtun expose`, real `sealtun apply`, `sealtun share create/revoke`, `sealtun domain add/set/clear`, `sealtun stop`, `sealtun cleanup`, `sealtun logout`, or dashboard write actions unless the user explicitly asked for that operation in the current task. `sealtun template`, `sealtun domain plan`, `sealtun share list`, `sealtun export`, dashboard viewing, `apply --dry-run`, `diff`, and read-only diagnostics are safe guidance steps. For declarative changes, prefer `apply --dry-run` and `diff` before real `apply`.
 6. Verify completion. After live operations, use the contract below, then report the exact command sequence and final state without printing secrets.
 
 ## Verification Contracts
 
-- `expose`: capture tunnel ID, public endpoint, and protocol-specific output; verify with `sealtun list --check` and `sealtun inspect <tunnel-id>`.
+- `up`/`expose`: capture tunnel ID, public endpoint, and protocol-specific output; verify with `sealtun list --check` and `sealtun inspect <tunnel-id>`. For `up`, mention whether it reused `.sealtun/state.json`, selected a discovered port, or used explicit port/target input.
 - `apply`: run or recommend `apply --dry-run` and `diff` first; after real apply, verify every intended tunnel with `list` and `inspect`.
 - `domain add/set/clear`: verify with `domain status` or `domain verify`; for `add --wait`, report DNS/CNAME and certificate readiness separately.
 - `share create/revoke/rotate`: verify with `share list`; never repeat a one-time share token unless it is the command's immediate output.
@@ -73,7 +73,7 @@ Follow this flow after the skill triggers:
 - For exporting config, use `sealtun export <tunnel-id>` or `sealtun export --all -o sealtun.yaml`. Explain that stored password/token hashes cannot be recovered; `--include-secret-placeholders` emits env var placeholders.
 - For dashboard remote access, recommend `--basic-auth-user` plus `--basic-auth-password-env` with `--allow-remote`; `--open` is useful for local loopback dashboards. Dashboard live status uses a token-protected stream with polling fallback, and the Resources tab shows Kubernetes resource occupancy hints, not billing estimates.
 - For cluster-internal access, use `sealtun connect --check`, then on Linux `sudo sealtun connect`. Explain that it transparently redirects TCP Service FQDN, Service ClusterIP, and Pod IP traffic through Kubernetes `pods/portforward`; it is not SOCKS/HTTP proxy config and does not support ICMP/ping or UDP.
-- For first-time users, prioritize a clear path: install, `sealtun login`, `sealtun init`, confirm region/profile, then create or apply a tunnel. Mention that login stores credentials under `~/.sealtun` and that profiles are useful for multiple Sealos accounts, regions, or workspaces.
+- For first-time users, prioritize a clear path: install, `sealtun login`, `sealtun init`, then `sealtun up` for interactive local development or `sealtun expose` for exact scripted creation. Mention that login stores credentials under `~/.sealtun`, project tunnel state lives in `.sealtun/state.json`, and profiles are useful for multiple Sealos accounts, regions, or workspaces.
 - Use exact command names and flags from the repository when modifying instructions. Supported tunnel protocols are `https`, dedicated `ssh`, and generic `tcp`; UDP/gRPC are not supported unless the repo adds them.
 
 ## Response Shape

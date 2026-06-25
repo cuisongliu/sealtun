@@ -8,8 +8,8 @@ Use these paths before listing every available flag:
 
 | Request | Commands | Notes |
 | --- | --- | --- |
-| "I want my local app on the internet" / "让本地项目跑在公网" | `sealtun status`; `sealtun discover` if the port is unclear; `sealtun expose <port>` | Defaults to HTTPS and daemon mode. Return the public URL and tunnel ID. |
-| "Expose this remote HTTP address" / "把远端地址端口转公网" | `sealtun expose --target http://host:port` | HTTPS-only. The target must be reachable from the machine running Sealtun. |
+| "I want my local app on the internet" / "让本地项目跑在公网" | `sealtun status`; interactive/dev: `sealtun up`; scripted/exact: `sealtun expose <port>` | `up` reuses current project state or discovers/asks for a port. Defaults to HTTPS and daemon mode. |
+| "Expose this remote HTTP address" / "把远端地址端口转公网" | dev: `sealtun up --target http://host:port`; scripts: `sealtun expose --target http://host:port` | HTTPS-only. The target must be reachable from the machine running Sealtun. |
 | "Help me get started" / "第一次怎么用" | `sealtun status`; `sealtun init`; `sealtun init --apply` only if creation is requested | `init` is read-only by default and prints a recommended command plus YAML. |
 | "Give my local app a public domain" / "给本地服务一个公网域名" | `sealtun expose <port> --domain <domain>` or `sealtun domain plan <id> <domain>` | If the tunnel already exists, plan first, then add/set only when mutation is requested. |
 | "Expose SSH publicly" / "公网 SSH" | `sealtun expose 22 --protocol ssh` | Return `ssh <user>@<public-host> -p <node-port>`. Do not add HTTPS auth/domain features. |
@@ -77,6 +77,12 @@ First-use behavior:
 sealtun init
 sealtun init --protocol auto --json
 sealtun init --protocol postgres --apply
+sealtun up
+sealtun up --guided
+sealtun up 3000
+sealtun up --target http://10.0.0.12:8080
+sealtun up --target https://10.0.0.12:8443 --insecure
+sealtun up 3000 --rate-limit 60/m --audit
 sealtun expose 3000
 sealtun expose --target http://10.0.0.12:8080
 sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
@@ -84,7 +90,7 @@ sealtun expose 3000 --foreground
 sealtun expose 3000 --ready-timeout 2m
 ```
 
-`init` checks local status, discovers local listening ports, and prints a recommended `expose` command plus `sealtun.yaml`. It does not create resources unless `--apply` is present. `expose` defaults to `https` and daemon mode. The daemon maintains the local side in the background. Use `--foreground` when the current terminal should own the tunnel lifecycle.
+`init` checks local status, discovers local listening ports, and prints a recommended `expose` command plus `sealtun.yaml`. It does not create resources unless `--apply` is present. `up` is the convenience entrypoint: it reuses `.sealtun/state.json` for the current project; without state in an interactive terminal, it guides through login check, port selection, protocol, optional Basic Auth, optional rate limit/audit, optional custom domain, optional `sealtun.yaml` save, and final creation. Use `up --guided` when the user explicitly wants the wizard. Use `up 3000` or `up --target http://host:port` for direct creation, and `expose` for exact scripted creation. `expose` defaults to `https` and daemon mode. The daemon maintains the local side in the background. Use `--foreground` when the current terminal should own the tunnel lifecycle.
 
 Use `https` when the user wants a browser URL, webhook callback URL, OAuth callback, payment callback, public preview link, Basic Auth, Bearer tokens, temporary access links, IP allowlist/denylist, or custom domain.
 

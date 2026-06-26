@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"testing"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
+	"github.com/labring/sealtun/pkg/k8s"
 	"github.com/labring/sealtun/pkg/session"
 )
 
@@ -145,5 +148,46 @@ func TestExportSessionRejectsInvalidLocalPort(t *testing.T) {
 	}
 	if len(warnings) == 0 {
 		t.Fatal("expected warning for invalid local port")
+	}
+}
+
+func TestRunExportRefreshesRemoteState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	originalCollector := collectSessionRemoteState
+	collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+		return &k8s.TunnelRemoteState{
+			Protocol:   "https",
+			TargetURL:  "https://api.internal:8443",
+			AccessPolicy: &accesspolicy.Policy{RateLimit: "60/m"},
+			DeploymentOK: true,
+			AuthSecretOK: true,
+		}, nil
+	}
+	t.Cleanup(func() { collectSessionRemoteState = originalCollector })
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Protocol:  "https",
+		LocalPort: "3000",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "ns-demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := runExport([]string{"web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Tunnels) != 1 {
+		t.Fatalf("expected one tunnel, got %#v", config.Tunnels)
+	}
+	if config.Tunnels[0].Target != "https://api.internal:8443" {
+		t.Fatalf("expected refreshed remote target, got %#v", config.Tunnels[0])
+	}
+	if config.Tunnels[0].AccessPolicy == nil || config.Tunnels[0].AccessPolicy.RateLimit != "60/m" {
+		t.Fatalf("expected refreshed remote access policy, got %#v", config.Tunnels[0].AccessPolicy)
 	}
 }

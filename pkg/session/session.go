@@ -575,6 +575,22 @@ func validateTunnelID(tunnelID string) error {
 	return nil
 }
 
+func ValidateTunnelIDForExternalUse(tunnelID string) error {
+	return validateTunnelID(tunnelID)
+}
+
+func LockFileForExternalUse(file *os.File, timeout time.Duration) (func(), error) {
+	if file == nil {
+		return nil, fmt.Errorf("lock file is required")
+	}
+	if err := lockSessionFile(file, timeout); err != nil {
+		return nil, err
+	}
+	return func() {
+		_ = unlockSessionFile(file)
+	}, nil
+}
+
 func IsStale(sess TunnelSession, gracePeriod time.Duration) bool {
 	return IsStaleWithOwner(sess, gracePeriod, OwnerAlive(sess))
 }

@@ -74,7 +74,7 @@ func init() {
 }
 
 func collectMetricsPayloadWithContext(ctx context.Context, tunnelID string) (*metricsPayload, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(ctx, tunnelID)
 	if err != nil {
 		return nil, err
 	}

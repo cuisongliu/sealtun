@@ -40,6 +40,19 @@ func KnownRegions() []RegionOption {
 	return items
 }
 
+func knownRegionOption(input string) (RegionOption, bool) {
+	normalized, err := ResolveRegion(input)
+	if err != nil {
+		return RegionOption{}, false
+	}
+	for _, region := range knownRegions {
+		if region.URL == normalized {
+			return region, true
+		}
+	}
+	return RegionOption{}, false
+}
+
 func ResolveRegion(input string) (string, error) {
 	value := strings.TrimSpace(input)
 	if value == "" {
@@ -114,6 +127,7 @@ type NamespaceListResponse struct {
 type InitDataResponse struct {
 	Data struct {
 		SealosDomain string `json:"SEALOS_DOMAIN"`
+		Domain       string `json:"domain"`
 	} `json:"data"`
 }
 
@@ -300,29 +314,48 @@ func GetInitData(region string) (*InitDataResponse, error) {
 	if host == "" {
 		return nil, fmt.Errorf("invalid region %q", region)
 	}
-	apiURL := fmt.Sprintf("https://applaunchpad.%s/api/platform/getInitData", u.Host)
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	client := httpClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	for _, apiURL := range []string{
+		fmt.Sprintf("https://applaunchpad.%s/api/platform/getClientAppConfig", u.Host),
+		fmt.Sprintf("https://applaunchpad.%s/api/platform/getInitData", u.Host),
+	} {
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return nil, err
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := readLimitedResponseBody(resp.Body)
-		return nil, fmt.Errorf("get init data failed (%d): %s", resp.StatusCode, SanitizeServerText(string(body)))
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			_, _ = readLimitedResponseBody(resp.Body)
+			_ = resp.Body.Close()
+			continue
+		}
+
+		var res InitDataResponse
+		if err := decodeLimitedJSON(resp.Body, &res); err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		_ = resp.Body.Close()
+		if strings.TrimSpace(res.Data.SealosDomain) == "" && strings.TrimSpace(res.Data.Domain) != "" {
+			res.Data.SealosDomain = res.Data.Domain
+		}
+		if strings.TrimSpace(res.Data.SealosDomain) != "" {
+			return &res, nil
+		}
 	}
 
-	var res InitDataResponse
-	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
-		return nil, err
+	if known, ok := knownRegionOption(normalized); ok && known.SealosDomain != "" {
+		res := &InitDataResponse{}
+		res.Data.SealosDomain = known.SealosDomain
+		res.Data.Domain = known.SealosDomain
+		return res, nil
 	}
-	return &res, nil
+	return nil, fmt.Errorf("failed to get region app config")
 }
 
 func readLimitedResponseBody(r io.Reader) ([]byte, error) {

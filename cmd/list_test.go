@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labring/sealtun/pkg/k8s"
 	"github.com/labring/sealtun/pkg/session"
 )
 
@@ -244,4 +246,47 @@ func TestListJSONShape(t *testing.T) {
 
 func currentPIDForTest() int {
 	return sessionTestCurrentPID()
+}
+
+func TestCollectListItemsRefreshesRemoteHTTPSState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	originalCollector := collectSessionRemoteState
+	collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+		return &k8s.TunnelRemoteState{
+			PublicHost:   "ai-gateway.code05.com",
+			SealosHost:   "sealtun-abc123-ns-demo.bja.sealos.run",
+			CustomDomain: "ai-gateway.code05.com",
+		}, nil
+	}
+	t.Cleanup(func() { collectSessionRemoteState = originalCollector })
+
+	now := time.Now().Format(time.RFC3339)
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "abc123",
+		Host:      "old.example.com",
+		LocalPort: "3000",
+		PID:       0,
+		Region:    "https://bja.sealos.run",
+		Namespace: "ns-demo",
+		Protocol:  "https",
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	items, err := collectListItems()
+	if err != nil {
+		t.Fatalf("collectListItems returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Host != "ai-gateway.code05.com" || items[0].CustomDomain != "ai-gateway.code05.com" {
+		t.Fatalf("expected refreshed public host/custom domain, got %#v", items[0])
+	}
+	if items[0].SealosHost != "sealtun-abc123-ns-demo.bja.sealos.run" {
+		t.Fatalf("expected refreshed sealos host, got %#v", items[0])
+	}
 }

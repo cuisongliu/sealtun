@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/auth"
 	daemonstate "github.com/labring/sealtun/pkg/daemon"
 	"github.com/labring/sealtun/pkg/k8s"
@@ -216,6 +218,14 @@ var resumeSessionResources = func(ctx context.Context, sess session.TunnelSessio
 	return client.WithNamespace(sess.Namespace).ResumeTunnel(ctx, sess.TunnelID)
 }
 
+var collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+	client, err := k8sClientForSession(sess)
+	if err != nil {
+		return nil, err
+	}
+	return client.WithNamespace(sess.Namespace).TunnelRemoteState(ctx, sess.TunnelID)
+}
+
 func sessionControlHost(sess session.TunnelSession) string {
 	if sess.SealosHost != "" {
 		return sess.SealosHost
@@ -339,4 +349,150 @@ func ensureSessionPublicPort(ctx context.Context, sess *session.TunnelSession) {
 	}
 	sess.PublicPort = port
 	_ = session.Update(*sess)
+}
+
+func refreshSessionFromRemote(ctx context.Context, sess *session.TunnelSession) {
+	if sess == nil || sess.TunnelID == "" || sess.Namespace == "" {
+		return
+	}
+	state, err := collectSessionRemoteState(ctx, *sess)
+	if err != nil || state == nil {
+		return
+	}
+
+	changed := false
+	if state.SealosHost != "" && state.SealosHost != sess.SealosHost {
+		sess.SealosHost = state.SealosHost
+		changed = true
+	}
+	if state.CustomDomain != sess.CustomDomain {
+		sess.CustomDomain = state.CustomDomain
+		changed = true
+	}
+	if state.PublicPort != 0 && state.PublicPort != sess.PublicPort {
+		sess.PublicPort = state.PublicPort
+		changed = true
+	}
+	if state.Protocol != "" && state.Protocol != sess.Protocol {
+		sess.Protocol = state.Protocol
+		changed = true
+	}
+	if state.LocalPort != "" && state.LocalPort != sess.LocalPort {
+		sess.LocalPort = state.LocalPort
+		changed = true
+	}
+	if state.TargetURL != sess.TargetURL {
+		sess.TargetURL = state.TargetURL
+		changed = true
+	}
+	if state.AuthSecretOK && !sess.CredentialsScrubbed {
+		if state.Secret != "" && state.Secret != sess.Secret {
+			sess.Secret = state.Secret
+			changed = true
+		}
+		if !basicAuthConfigEqual(sess.BasicAuth, state.BasicAuth) {
+			sess.BasicAuth = basicAuthFromK8s(state.BasicAuth)
+			changed = true
+		}
+		if !accessPolicyEqual(sess.AccessPolicy, state.AccessPolicy) {
+			sess.AccessPolicy = accessPolicyFromK8s(state.AccessPolicy)
+			changed = true
+		}
+	}
+	if state.DeploymentOK {
+		if !resourceConfigEqual(sess.ResourceConfig, state.Resources) {
+			sess.ResourceConfig = resourcesFromK8s(state.Resources)
+			changed = true
+		}
+	}
+	wantHost := state.PublicHost
+	if wantHost == "" {
+		wantHost = state.SealosHost
+	}
+	if wantHost != "" && wantHost != sess.Host {
+		sess.Host = wantHost
+		changed = true
+	}
+	if changed {
+		_ = session.Update(*sess)
+	}
+}
+
+func findSessionRefreshed(ctx context.Context, tunnelID string) (*session.TunnelSession, error) {
+	sess, err := findSession(tunnelID)
+	if err != nil {
+		return nil, err
+	}
+	refreshSessionFromRemote(ctx, sess)
+	return sess, nil
+}
+
+func basicAuthFromK8s(config *k8s.BasicAuthOptions) *session.BasicAuthConfig {
+	if config == nil {
+		return nil
+	}
+	return &session.BasicAuthConfig{
+		Enabled:      true,
+		Username:     config.Username,
+		PasswordHash: config.PasswordHash,
+	}
+}
+
+func accessPolicyFromK8s(policy *accesspolicy.Policy) *session.AccessPolicy {
+	if policy == nil {
+		return nil
+	}
+	return &session.AccessPolicy{
+		BearerTokenHashes: append([]string(nil), policy.BearerTokenHashes...),
+		IPAllowlist:       append([]string(nil), policy.IPAllowlist...),
+		IPDenylist:        append([]string(nil), policy.IPDenylist...),
+		TemporaryTokens:   temporaryTokensFromRuntime(policy.TemporaryTokens),
+		RateLimit:         policy.RateLimit,
+		Audit:             auditConfigFromRuntime(policy.Audit),
+	}
+}
+
+func temporaryTokensFromRuntime(tokens []accesspolicy.TemporaryToken) []session.TemporaryToken {
+	if len(tokens) == 0 {
+		return nil
+	}
+	out := make([]session.TemporaryToken, 0, len(tokens))
+	for _, token := range tokens {
+		out = append(out, session.TemporaryToken{
+			Name:      token.Name,
+			TokenHash: token.TokenHash,
+			TTL:       token.TTL,
+			ExpiresAt: token.ExpiresAt,
+		})
+	}
+	return out
+}
+
+func auditConfigFromRuntime(config *accesspolicy.AuditConfig) *session.AuditConfig {
+	if config == nil {
+		return nil
+	}
+	return &session.AuditConfig{Enabled: config.Enabled}
+}
+
+func basicAuthConfigEqual(current *session.BasicAuthConfig, next *k8s.BasicAuthOptions) bool {
+	if current == nil && next == nil {
+		return true
+	}
+	if current == nil || next == nil {
+		return false
+	}
+	return current.Enabled && current.Username == next.Username && basicAuthPasswordHash(current) == next.PasswordHash
+}
+
+func accessPolicyEqual(current *session.AccessPolicy, next *accesspolicy.Policy) bool {
+	currentJSON, _ := json.Marshal(accessPolicyToRuntime(current))
+	nextJSON, _ := json.Marshal(next)
+	return string(currentJSON) == string(nextJSON)
+}
+
+func resourceConfigEqual(current *session.ResourceConfig, next *k8s.ResourceConfig) bool {
+	currentJSON, _ := json.Marshal(resourcesToK8s(current))
+	nextJSON, _ := json.Marshal(next)
+	return string(currentJSON) == string(nextJSON)
 }

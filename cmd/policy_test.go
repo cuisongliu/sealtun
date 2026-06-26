@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labring/sealtun/pkg/k8s"
 	"github.com/labring/sealtun/pkg/accesspolicy"
 	"github.com/labring/sealtun/pkg/session"
 )
@@ -121,6 +122,43 @@ func TestPolicyAuditValidation(t *testing.T) {
 	}
 	if _, err := collectPolicyAudit(context.Background(), "web", time.Minute, 0); err == nil {
 		t.Fatal("expected invalid limit to fail")
+	}
+}
+
+func TestShowPolicyRefreshesRemoteState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	originalCollector := collectSessionRemoteState
+	collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+		return &k8s.TunnelRemoteState{
+			Protocol: "https",
+			AccessPolicy: &accesspolicy.Policy{
+				RateLimit: "60/m",
+				Audit:     &accesspolicy.AuditConfig{Enabled: true},
+			},
+			DeploymentOK: true,
+			AuthSecretOK: true,
+		}, nil
+	}
+	t.Cleanup(func() { collectSessionRemoteState = originalCollector })
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Protocol:  "https",
+		LocalPort: "3000",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "ns-demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := showPolicy("web", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.RateLimit != "60/m" || !payload.AuditEnabled {
+		t.Fatalf("expected refreshed remote policy, got %#v", payload)
 	}
 }
 

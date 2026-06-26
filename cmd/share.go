@@ -158,57 +158,66 @@ func createShareLink(ctx context.Context, tunnelID, name string, ttl time.Durati
 	if ttl <= 0 {
 		return nil, fmt.Errorf("share ttl must be greater than 0")
 	}
-	sess, err := findSession(tunnelID)
-	if err != nil {
-		return nil, err
-	}
-	if !sessionUsesHTTP(*sess) {
-		return nil, fmt.Errorf("temporary share links are only supported for https tunnels")
-	}
-	if sess.ConnectionState == session.ConnectionStateStopped {
-		return nil, fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before creating share links", sess.TunnelID, sess.TunnelID)
-	}
-	if sessionExpired(*sess, nowUTC()) {
-		return nil, fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
-	}
-	if token == "" {
-		token, err = generateShareToken()
+	var payload *shareCreatePayload
+	err := withTunnelOperationLock(tunnelID, func() error {
+		sess, err := findSessionRefreshed(ctx, tunnelID)
 		if err != nil {
-			return nil, err
+			return err
 		}
-	}
-	hash, err := accesspolicy.HashToken(token)
-	if err != nil {
-		return nil, fmt.Errorf("share token: %w", err)
-	}
-	if temporaryTokenNameExists(sess.AccessPolicy, name) {
-		return nil, fmt.Errorf("temporary access link %q already exists for tunnel %s; use `sealtun share rotate %s %s` to replace it", name, sess.TunnelID, sess.TunnelID, name)
-	}
-	expiresAt := nowUTC().Add(ttl).UTC().Format(time.RFC3339)
-	next := cloneAccessPolicy(sess.AccessPolicy)
-	next.TemporaryTokens = append(next.TemporaryTokens, session.TemporaryToken{
-		Name:      name,
-		TokenHash: hash,
-		TTL:       ttl.String(),
-		ExpiresAt: expiresAt,
+		if !sessionUsesHTTP(*sess) {
+			return fmt.Errorf("temporary share links are only supported for https tunnels")
+		}
+		if sess.ConnectionState == session.ConnectionStateStopped {
+			return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before creating share links", sess.TunnelID, sess.TunnelID)
+		}
+		if sessionExpired(*sess, nowUTC()) {
+			return fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
+		}
+		resolvedToken := token
+		if resolvedToken == "" {
+			resolvedToken, err = generateShareToken()
+			if err != nil {
+				return err
+			}
+		}
+		hash, err := accesspolicy.HashToken(resolvedToken)
+		if err != nil {
+			return fmt.Errorf("share token: %w", err)
+		}
+		if temporaryTokenNameExists(sess.AccessPolicy, name) {
+			return fmt.Errorf("temporary access link %q already exists for tunnel %s; use `sealtun share rotate %s %s` to replace it", name, sess.TunnelID, sess.TunnelID, name)
+		}
+		expiresAt := nowUTC().Add(ttl).UTC().Format(time.RFC3339)
+		next := cloneAccessPolicy(sess.AccessPolicy)
+		next.TemporaryTokens = append(next.TemporaryTokens, session.TemporaryToken{
+			Name:      name,
+			TokenHash: hash,
+			TTL:       ttl.String(),
+			ExpiresAt: expiresAt,
+		})
+		payload = &shareCreatePayload{
+			TunnelID:  sess.TunnelID,
+			Name:      name,
+			URL:       temporaryAccessURL(sharePublicHost(*sess), resolvedToken),
+			ExpiresAt: expiresAt,
+		}
+		if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
+			if accessPolicyCommitted(err) {
+				return err
+			}
+			payload = nil
+			return err
+		}
+		return nil
 	})
-	payload := &shareCreatePayload{
-		TunnelID:  sess.TunnelID,
-		Name:      name,
-		URL:       temporaryAccessURL(sharePublicHost(*sess), token),
-		ExpiresAt: expiresAt,
-	}
-	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
-		if accessPolicyCommitted(err) {
-			return payload, err
-		}
+	if err != nil && payload == nil {
 		return nil, err
 	}
-	return payload, nil
+	return payload, err
 }
 
 func listShareLinks(tunnelID string, now time.Time) ([]shareListItem, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(context.Background(), tunnelID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,34 +245,36 @@ func revokeShareLink(ctx context.Context, tunnelID, name string) error {
 	if name == "" {
 		return fmt.Errorf("share name is required")
 	}
-	sess, err := findSession(tunnelID)
-	if err != nil {
-		return err
-	}
-	if !sessionUsesHTTP(*sess) {
-		return fmt.Errorf("temporary share links are only supported for https tunnels")
-	}
-	if sess.ConnectionState == session.ConnectionStateStopped {
-		return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before revoking share links", sess.TunnelID, sess.TunnelID)
-	}
-	if sessionExpired(*sess, nowUTC()) {
-		return fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
-	}
-	next := cloneAccessPolicy(sess.AccessPolicy)
-	filtered := next.TemporaryTokens[:0]
-	removed := false
-	for _, token := range next.TemporaryTokens {
-		if token.Name == name {
-			removed = true
-			continue
+	return withTunnelOperationLock(tunnelID, func() error {
+		sess, err := findSessionRefreshed(ctx, tunnelID)
+		if err != nil {
+			return err
 		}
-		filtered = append(filtered, token)
-	}
-	if !removed {
-		return fmt.Errorf("temporary access link %q not found for tunnel %s", name, sess.TunnelID)
-	}
-	next.TemporaryTokens = filtered
-	return updateHTTPSAccessPolicy(ctx, sess, emptyAccessPolicyAsNil(next))
+		if !sessionUsesHTTP(*sess) {
+			return fmt.Errorf("temporary share links are only supported for https tunnels")
+		}
+		if sess.ConnectionState == session.ConnectionStateStopped {
+			return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before revoking share links", sess.TunnelID, sess.TunnelID)
+		}
+		if sessionExpired(*sess, nowUTC()) {
+			return fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
+		}
+		next := cloneAccessPolicy(sess.AccessPolicy)
+		filtered := next.TemporaryTokens[:0]
+		removed := false
+		for _, token := range next.TemporaryTokens {
+			if token.Name == name {
+				removed = true
+				continue
+			}
+			filtered = append(filtered, token)
+		}
+		if !removed {
+			return fmt.Errorf("temporary access link %q not found for tunnel %s", name, sess.TunnelID)
+		}
+		next.TemporaryTokens = filtered
+		return updateHTTPSAccessPolicy(ctx, sess, emptyAccessPolicyAsNil(next))
+	})
 }
 
 func rotateShareLink(ctx context.Context, tunnelID, name string, ttl time.Duration) (*shareCreatePayload, error) {
@@ -274,58 +285,66 @@ func rotateShareLink(ctx context.Context, tunnelID, name string, ttl time.Durati
 	if ttl <= 0 {
 		return nil, fmt.Errorf("share ttl must be greater than 0")
 	}
-	sess, err := findSession(tunnelID)
-	if err != nil {
-		return nil, err
-	}
-	if !sessionUsesHTTP(*sess) {
-		return nil, fmt.Errorf("temporary share links are only supported for https tunnels")
-	}
-	if sess.ConnectionState == session.ConnectionStateStopped {
-		return nil, fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before rotating share links", sess.TunnelID, sess.TunnelID)
-	}
-	if sessionExpired(*sess, nowUTC()) {
-		return nil, fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
-	}
-	next := cloneAccessPolicy(sess.AccessPolicy)
-	found := false
-	for _, token := range next.TemporaryTokens {
-		if token.Name == name {
-			found = true
-			break
+	var payload *shareCreatePayload
+	err := withTunnelOperationLock(tunnelID, func() error {
+		sess, err := findSessionRefreshed(ctx, tunnelID)
+		if err != nil {
+			return err
 		}
-	}
-	if !found {
-		return nil, fmt.Errorf("temporary access link %q not found for tunnel %s", name, sess.TunnelID)
-	}
-	token, err := generateShareToken()
-	if err != nil {
-		return nil, err
-	}
-	hash, err := accesspolicy.HashToken(token)
-	if err != nil {
-		return nil, fmt.Errorf("share token: %w", err)
-	}
-	expiresAt := nowUTC().Add(ttl).UTC().Format(time.RFC3339)
-	next.TemporaryTokens = replaceTemporaryToken(next.TemporaryTokens, session.TemporaryToken{
-		Name:      name,
-		TokenHash: hash,
-		TTL:       ttl.String(),
-		ExpiresAt: expiresAt,
+		if !sessionUsesHTTP(*sess) {
+			return fmt.Errorf("temporary share links are only supported for https tunnels")
+		}
+		if sess.ConnectionState == session.ConnectionStateStopped {
+			return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before rotating share links", sess.TunnelID, sess.TunnelID)
+		}
+		if sessionExpired(*sess, nowUTC()) {
+			return fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
+		}
+		next := cloneAccessPolicy(sess.AccessPolicy)
+		found := false
+		for _, token := range next.TemporaryTokens {
+			if token.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("temporary access link %q not found for tunnel %s", name, sess.TunnelID)
+		}
+		token, err := generateShareToken()
+		if err != nil {
+			return err
+		}
+		hash, err := accesspolicy.HashToken(token)
+		if err != nil {
+			return fmt.Errorf("share token: %w", err)
+		}
+		expiresAt := nowUTC().Add(ttl).UTC().Format(time.RFC3339)
+		next.TemporaryTokens = replaceTemporaryToken(next.TemporaryTokens, session.TemporaryToken{
+			Name:      name,
+			TokenHash: hash,
+			TTL:       ttl.String(),
+			ExpiresAt: expiresAt,
+		})
+		payload = &shareCreatePayload{
+			TunnelID:  sess.TunnelID,
+			Name:      name,
+			URL:       temporaryAccessURL(sharePublicHost(*sess), token),
+			ExpiresAt: expiresAt,
+		}
+		if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
+			if accessPolicyCommitted(err) {
+				return err
+			}
+			payload = nil
+			return err
+		}
+		return nil
 	})
-	payload := &shareCreatePayload{
-		TunnelID:  sess.TunnelID,
-		Name:      name,
-		URL:       temporaryAccessURL(sharePublicHost(*sess), token),
-		ExpiresAt: expiresAt,
-	}
-	if err := updateHTTPSAccessPolicy(ctx, sess, next); err != nil {
-		if accessPolicyCommitted(err) {
-			return payload, err
-		}
+	if err != nil && payload == nil {
 		return nil, err
 	}
-	return payload, nil
+	return payload, err
 }
 
 type committedAccessPolicyError struct {

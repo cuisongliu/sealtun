@@ -380,6 +380,53 @@ curl http://10.96.0.12:8080      # Service ClusterIP
 curl http://10.244.0.22:3000     # Pod IP
 ```
 
+### 7. 计费说明
+Sealtun 本身不额外单独收取一笔“软件费”，实际成本来自 Sealos Cloud 为隧道远端 Pod 和公网入口分配的云资源。CLI 目前会在 `resources` / `dashboard` 里展示资源占用提示，但那不是账单估算；真实费用仍以 Sealos Cloud 控制台的计费表和账单为准。
+
+结合当前 Sealos Cloud 价格页，你至少可以按下面几个维度理解 Sealtun 隧道成本：
+
+- `CPU`：按核 / 小时计费
+- `内存`：按 GB / 小时计费
+- `端口`：按个 / 小时计费
+- `网络`：按流量计费
+
+Sealtun 的常见成本来源是：
+
+- 一个远端 tunnel Pod：消耗 `CPU + 内存`
+- HTTP/HTTPS 隧道和 TCP/SSH NodePort 暴露：会占用 `端口`
+- 公网访问流量：会产生 `网络` 成本
+
+不同区域单价不同。根据当前 Sealos Cloud 控制台截图，`杭州 H`、`新加坡 B`、`北京 A`、`广州 G`、`US West` 的 CPU / 内存 / 端口价格都不一样，所以同样一条隧道在不同区域的小时成本会有差异。
+
+当前可直接参考下面这张小时单价表：
+
+| 区域 | CPU (核/小时) | 内存 (GB/小时) | 端口 (个/小时) | 网络 |
+| --- | ---: | ---: | ---: | ---: |
+| `杭州 H` | `0.027671` | `0.013956` | `0.013900` | `0.000781 /M` |
+| `新加坡 B` | `0.067000` | `0.033792` | `0.013900` | `0.000781 /M` |
+| `北京 A` | `0.017125` | `0.008637` | `0.007000` | `0.000781 /M` |
+| `广州 G` | `0.017420` | `0.008786` | `0.007000` | `0.000781 /M` |
+| `US West` | `0.020833` | `0.012500` | `0.006944` | `0.000107 /M` |
+
+如果只做一个最小 HTTPS 隧道，通常至少会涉及：
+
+- 1 个远端 Pod 的 `CPU + 内存`
+- 1 个公网入口端口
+- 实际产生的公网流量
+
+估算时可以用这个思路：
+
+```text
+总成本 ~= Pod(CPU + 内存) + 公网端口 + 网络流量
+```
+
+如果你要压低成本，优先考虑：
+
+- 关闭不用的隧道，或用 `sealtun stop` 把副本缩容为 0
+- 用 `sealtun resources set/unset` 调低 Pod requests / limits
+- 避免给短时调试隧道分配过高资源
+- 对低流量场景优先按需开启，而不是长期常驻
+
 查看或停止当前 cluster connect：
 ```bash
 sealtun connect status
@@ -389,7 +436,7 @@ sudo sealtun disconnect
 
 限制：当前透明数据面仅支持 Linux + TCP，需要 root 权限和 `iptables`；不支持 ICMP/ping 和 UDP。macOS/Windows 会明确提示暂不支持。
 
-### 7. 观测和本地控制台
+### 8. 观测和本地控制台
 查看远端隧道 Pod 日志：
 ```bash
 sealtun logs <tunnel-id>
@@ -487,7 +534,7 @@ sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-
 
 远程模式不会把 dashboard token 写进 HTML；访问者需要 URL fragment 或请求头中的 token。启用 dashboard Basic Auth 后，HTML、静态资源和 API 都会先经过 Basic Auth。所有写操作仍要求页面确认，并由后端再次校验 `confirm` 字段，避免误触或脚本误调用。
 
-### 8. 协议模板
+### 9. 协议模板
 不确定该怎么写命令或声明式配置时，可以先生成模板：
 
 ```bash
@@ -500,7 +547,7 @@ sealtun template mongodb
 
 模板会同时输出一次性 `sealtun expose` 命令和可提交到项目内的 `sealtun.yaml` 片段。`mysql`、`postgres`、`redis`、`mongodb`、`mqtt` 模板默认走通用 TCP 四层入口；HTTPS 模板才支持自定义域名和访问控制。
 
-### 9. 声明式配置
+### 10. 声明式配置
 创建 `sealtun.yaml`：
 ```yaml
 version: v1

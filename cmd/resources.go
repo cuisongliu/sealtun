@@ -150,49 +150,57 @@ func updateTunnelResourceConfig(parent context.Context, sess *session.TunnelSess
 	if err != nil {
 		return nil, err
 	}
-	changed := resourceConfigChanged(sess.ResourceConfig, normalized)
-	client, err := k8sClientForSession(*sess)
-	if err != nil {
-		return nil, err
-	}
-	namespacedClient := client.WithNamespace(sess.Namespace)
-	mutatedAt := nowUTC().Add(-time.Second)
-	ctx, cancel := context.WithTimeout(parent, readyTimeout)
-	defer cancel()
-	if err := namespacedClient.UpdateTunnelResources(ctx, sess.TunnelID, resourcesToK8s(normalized)); err != nil {
-		return nil, err
-	}
-
-	sess.ResourceConfig = normalized
-	if err := session.Update(*sess); err != nil {
-		return nil, fmt.Errorf("save updated session resources: %w", err)
-	}
-
-	payload := &resourceUpdatePayload{
-		TunnelID:           sess.TunnelID,
-		Namespace:          sess.Namespace,
-		Deployment:         "sealtun-" + sess.TunnelID,
-		Resources:          normalized,
-		AppliedImmediately: sess.ConnectionState != session.ConnectionStateStopped,
-	}
-	if sess.ConnectionState == session.ConnectionStateStopped {
-		payload.Message = "Tunnel is stopped; deployment template was updated without starting replicas."
-		return payload, nil
-	}
-
-	readyCtx, cancelReady := context.WithTimeout(parent, readyTimeout)
-	defer cancelReady()
-	if err := namespacedClient.WaitForReady(readyCtx, sess.TunnelID); err != nil {
-		return payload, fmt.Errorf("resources were updated, but rollout readiness was not confirmed: %w", err)
-	}
-	payload.RolloutReady = true
-	if sess.Mode == "daemon" && changed {
-		if err := waitForDaemonSessionAfter(sess.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
-			return payload, fmt.Errorf("resources were updated, but local daemon reconnection was not confirmed: %w", err)
+	var payload *resourceUpdatePayload
+	err = withTunnelOperationLock(sess.TunnelID, func() error {
+		current, err := findSession(sess.TunnelID)
+		if err != nil {
+			return err
 		}
-		payload.DaemonReconnected = true
-	}
-	return payload, nil
+		changed := resourceConfigChanged(current.ResourceConfig, normalized)
+		client, err := k8sClientForSession(*current)
+		if err != nil {
+			return err
+		}
+		namespacedClient := client.WithNamespace(current.Namespace)
+		mutatedAt := nowUTC().Add(-time.Second)
+		ctx, cancel := context.WithTimeout(parent, readyTimeout)
+		defer cancel()
+		if err := namespacedClient.UpdateTunnelResources(ctx, current.TunnelID, resourcesToK8s(normalized)); err != nil {
+			return err
+		}
+
+		current.ResourceConfig = normalized
+		if err := session.Update(*current); err != nil {
+			return fmt.Errorf("save updated session resources: %w", err)
+		}
+
+		payload = &resourceUpdatePayload{
+			TunnelID:           current.TunnelID,
+			Namespace:          current.Namespace,
+			Deployment:         "sealtun-" + current.TunnelID,
+			Resources:          normalized,
+			AppliedImmediately: current.ConnectionState != session.ConnectionStateStopped,
+		}
+		if current.ConnectionState == session.ConnectionStateStopped {
+			payload.Message = "Tunnel is stopped; deployment template was updated without starting replicas."
+			return nil
+		}
+
+		readyCtx, cancelReady := context.WithTimeout(parent, readyTimeout)
+		defer cancelReady()
+		if err := namespacedClient.WaitForReady(readyCtx, current.TunnelID); err != nil {
+			return fmt.Errorf("resources were updated, but rollout readiness was not confirmed: %w", err)
+		}
+		payload.RolloutReady = true
+		if current.Mode == "daemon" && changed {
+			if err := waitForDaemonSessionAfter(current.TunnelID, daemonConnectTimeout, mutatedAt); err != nil {
+				return fmt.Errorf("resources were updated, but local daemon reconnection was not confirmed: %w", err)
+			}
+			payload.DaemonReconnected = true
+		}
+		return nil
+	})
+	return payload, err
 }
 
 func mergeResourceSetInput(existing *session.ResourceConfig, input resourceSetInput) (*session.ResourceConfig, error) {
@@ -318,7 +326,7 @@ func collectTunnelResources(parent context.Context, tunnelID string) (*k8s.Tunne
 }
 
 func activeScopedSession(tunnelID string) (*session.TunnelSession, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(context.Background(), tunnelID)
 	if err != nil {
 		return nil, err
 	}

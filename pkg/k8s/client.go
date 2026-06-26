@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/util/retry"
 )
 
 type Client struct {
@@ -136,6 +137,22 @@ type TunnelDiagnostics struct {
 	Pods        []PodDiagnostics        `json:"pods,omitempty"`
 	Events      []EventDiagnostic       `json:"events,omitempty"`
 	Warnings    []string                `json:"warnings,omitempty"`
+}
+
+type TunnelRemoteState struct {
+	PublicHost    string             `json:"publicHost,omitempty"`
+	SealosHost    string             `json:"sealosHost,omitempty"`
+	CustomDomain  string             `json:"customDomain,omitempty"`
+	PublicPort    int32              `json:"publicPort,omitempty"`
+	Secret        string             `json:"secret,omitempty"`
+	Protocol      string             `json:"protocol,omitempty"`
+	LocalPort     string             `json:"localPort,omitempty"`
+	TargetURL     string             `json:"targetUrl,omitempty"`
+	BasicAuth     *BasicAuthOptions  `json:"basicAuth,omitempty"`
+	AccessPolicy  *accesspolicy.Policy `json:"accessPolicy,omitempty"`
+	Resources     *ResourceConfig    `json:"resources,omitempty"`
+	AuthSecretOK  bool               `json:"-"`
+	DeploymentOK  bool               `json:"-"`
 }
 
 type DeploymentDiagnostics struct {
@@ -664,11 +681,19 @@ func (c *Client) ensureAuthSecret(ctx context.Context, name, secret string, basi
 		_, err := secretClient.Create(ctx, authSecret, metav1.CreateOptions{})
 		return err == nil, salt, err
 	} else if getErr == nil {
-		if err := rejectUnmanagedExisting("secret", authSecret.Name, name, existing.Labels); err != nil {
-			return false, nil, err
-		}
-		authSecret.ResourceVersion = existing.ResourceVersion
-		_, err := secretClient.Update(ctx, authSecret, metav1.UpdateOptions{})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current, err := secretClient.Get(ctx, authSecret.Name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			if err := rejectUnmanagedExisting("secret", authSecret.Name, name, current.Labels); err != nil {
+				return err
+			}
+			next := authSecret.DeepCopy()
+			next.ResourceVersion = current.ResourceVersion
+			_, err = secretClient.Update(ctx, next, metav1.UpdateOptions{})
+			return err
+		})
 		return false, salt, err
 	}
 	return false, nil, getErr
@@ -813,8 +838,19 @@ func (c *Client) ensureDeployment(ctx context.Context, name, secret, protocol, l
 		if err := rejectUnmanagedExisting("deployment", name, name, existing.Labels); err != nil {
 			return false, err
 		}
-		deployment.ResourceVersion = existing.ResourceVersion
-		_, err = deployClient.Update(ctx, deployment, metav1.UpdateOptions{})
+		err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current, err := deployClient.Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			if err := rejectUnmanagedExisting("deployment", name, name, current.Labels); err != nil {
+				return err
+			}
+			next := deployment.DeepCopy()
+			next.ResourceVersion = current.ResourceVersion
+			_, err = deployClient.Update(ctx, next, metav1.UpdateOptions{})
+			return err
+		})
 	}
 	return false, err
 }
@@ -889,23 +925,22 @@ func (c *Client) UpdateTunnelResources(ctx context.Context, tunnelID string, res
 	}
 
 	deployClient := c.clientset.AppsV1().Deployments(c.namespace)
-	existing, err := deployClient.Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("remote deployment %s is missing", name)
-	}
-	if err != nil {
-		return fmt.Errorf("get deployment %s: %w", name, err)
-	}
-	if err := rejectUnmanagedExisting("deployment", name, name, existing.Labels); err != nil {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := deployClient.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := rejectUnmanagedExisting("deployment", name, name, current.Labels); err != nil {
+			return err
+		}
+		if len(current.Spec.Template.Spec.Containers) == 0 {
+			return fmt.Errorf("deployment %s has no containers", name)
+		}
+		next := current.DeepCopy()
+		next.Spec.Template.Spec.Containers[0].Resources = requirements
+		_, err = deployClient.Update(ctx, next, metav1.UpdateOptions{})
 		return err
-	}
-	if len(existing.Spec.Template.Spec.Containers) == 0 {
-		return fmt.Errorf("deployment %s has no containers", name)
-	}
-
-	next := existing.DeepCopy()
-	next.Spec.Template.Spec.Containers[0].Resources = requirements
-	if _, err := deployClient.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+	}); err != nil {
 		return fmt.Errorf("update deployment %s resources: %w", name, err)
 	}
 	return nil
@@ -1841,7 +1876,19 @@ func (c *Client) ScaleTunnel(ctx context.Context, tunnelID string, replicas int3
 
 	next := existing.DeepCopy()
 	next.Spec.Replicas = &replicas
-	if _, err := deployClient.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := deployClient.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := rejectUnmanagedExisting("deployment", name, name, current.Labels); err != nil {
+			return err
+		}
+		next := current.DeepCopy()
+		next.Spec.Replicas = &replicas
+		_, err = deployClient.Update(ctx, next, metav1.UpdateOptions{})
+		return err
+	}); err != nil {
 		return fmt.Errorf("scale deployment %s to %d: %w", name, replicas, err)
 	}
 	return nil
@@ -1953,6 +2000,160 @@ func (c *Client) CleanupManaged(ctx context.Context, tunnelIDs []string) (*Clean
 
 func (c *Client) DiagnoseTunnel(ctx context.Context, tunnelID string) (*TunnelDiagnostics, error) {
 	return c.DiagnoseTunnelWithOptions(ctx, tunnelID, TunnelOptions{})
+}
+
+func (c *Client) TunnelRemoteState(ctx context.Context, tunnelID string) (*TunnelRemoteState, error) {
+	if err := validateTunnelID(tunnelID); err != nil {
+		return nil, err
+	}
+	name := fmt.Sprintf("sealtun-%s", tunnelID)
+	state := &TunnelRemoteState{}
+
+	if port, err := c.tunnelPublicPortFromServices(ctx, name); err != nil {
+		return nil, err
+	} else {
+		state.PublicPort = port
+	}
+
+	ingress, err := c.clientset.NetworkingV1().Ingresses(c.namespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		diag := ingressDiagnostics(ingress)
+		state.SealosHost = inferSealosHost(diag.Hosts)
+		state.CustomDomain = inferCustomDomain(diag.Hosts, state.SealosHost)
+	case !apierrors.IsNotFound(err):
+		return nil, fmt.Errorf("get ingress %s: %w", name, err)
+	}
+
+	if err := c.fillTunnelRemoteStateFromAuthSecret(ctx, name, state); err != nil {
+		return nil, err
+	}
+	if err := c.fillTunnelRemoteStateFromDeployment(ctx, name, state); err != nil {
+		return nil, err
+	}
+
+	if state.SealosHost == "" && tunnelprotocol.IsHTTP(state.Protocol) {
+		state.SealosHost = c.sealosHost(name)
+	}
+	if state.CustomDomain != "" {
+		state.PublicHost = state.CustomDomain
+	} else if state.SealosHost != "" {
+		state.PublicHost = state.SealosHost
+	}
+	return state, nil
+}
+
+func (c *Client) tunnelPublicPortFromServices(ctx context.Context, name string) (int32, error) {
+	serviceNames := []string{name, tcpServiceName(name)}
+	var port int32
+	for _, serviceName := range serviceNames {
+		service, err := c.clientset.CoreV1().Services(c.namespace).Get(ctx, serviceName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("get service %s: %w", serviceName, err)
+		}
+		for _, item := range service.Spec.Ports {
+			if item.NodePort > 0 {
+				port = item.NodePort
+				break
+			}
+		}
+		if port != 0 {
+			return port, nil
+		}
+	}
+	return 0, nil
+}
+
+func (c *Client) fillTunnelRemoteStateFromAuthSecret(ctx context.Context, name string, state *TunnelRemoteState) error {
+	secret, err := c.clientset.CoreV1().Secrets(c.namespace).Get(ctx, authSecretName(name), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get auth secret %s: %w", authSecretName(name), err)
+	}
+	state.AuthSecretOK = true
+	state.Secret = strings.TrimSpace(string(secret.Data[tunnelAuthSecretKey]))
+	username := strings.TrimSpace(string(secret.Data[basicAuthUserKey]))
+	passwordHash := strings.TrimSpace(string(secret.Data[basicAuthPasswordKey]))
+	if username != "" || passwordHash != "" {
+		state.BasicAuth = &BasicAuthOptions{
+			Username:     username,
+			PasswordHash: passwordHash,
+		}
+	}
+	if raw := secret.Data[accessPolicyKey]; len(raw) > 0 {
+		var policy accesspolicy.Policy
+		if err := json.Unmarshal(raw, &policy); err != nil {
+			return fmt.Errorf("parse auth secret access policy for tunnel %s: %w", name, err)
+		}
+		state.AccessPolicy = &policy
+	}
+	return nil
+}
+
+func (c *Client) fillTunnelRemoteStateFromDeployment(ctx context.Context, name string, state *TunnelRemoteState) error {
+	deployment, err := c.clientset.AppsV1().Deployments(c.namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get deployment %s: %w", name, err)
+	}
+	state.DeploymentOK = true
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return nil
+	}
+	container := deployment.Spec.Template.Spec.Containers[0]
+	state.Protocol = deploymentArgValue(container.Args, "--protocol")
+	state.LocalPort = deploymentArgValue(container.Args, "--local-port")
+	state.TargetURL = deploymentArgValue(container.Args, "--target-url")
+	state.Resources = resourceConfigFromRequirements(container.Resources)
+	return nil
+}
+
+func deploymentArgValue(args []string, flag string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] != flag {
+			continue
+		}
+		if i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+		return ""
+	}
+	return ""
+}
+
+func resourceConfigFromRequirements(requirements corev1.ResourceRequirements) *ResourceConfig {
+	config := &ResourceConfig{
+		Requests: ResourceValues{
+			CPU:    quantityString(requirements.Requests, corev1.ResourceCPU),
+			Memory: quantityString(requirements.Requests, corev1.ResourceMemory),
+		},
+		Limits: ResourceValues{
+			CPU:    quantityString(requirements.Limits, corev1.ResourceCPU),
+			Memory: quantityString(requirements.Limits, corev1.ResourceMemory),
+		},
+	}
+	if config.Requests.CPU == "" && config.Requests.Memory == "" && config.Limits.CPU == "" && config.Limits.Memory == "" {
+		return nil
+	}
+	return config
+}
+
+func quantityString(list corev1.ResourceList, name corev1.ResourceName) string {
+	if list == nil {
+		return ""
+	}
+	quantity, ok := list[name]
+	if !ok {
+		return ""
+	}
+	return quantity.String()
 }
 
 func (c *Client) TunnelResources(ctx context.Context, tunnelID string) (*TunnelResourceList, error) {
@@ -2465,6 +2666,27 @@ func ingressDiagnostics(ingress *netv1.Ingress) IngressDiagnostics {
 		diag.TLSHosts = append(diag.TLSHosts, tls.Hosts...)
 	}
 	return diag
+}
+
+func inferSealosHost(hosts []string) string {
+	for _, host := range hosts {
+		if managedDomainSuffix(host) != "" {
+			return normalizeHostname(host)
+		}
+	}
+	return ""
+}
+
+func inferCustomDomain(hosts []string, sealosHost string) string {
+	sealosHost = normalizeHostname(sealosHost)
+	for _, host := range hosts {
+		normalized := normalizeHostname(host)
+		if normalized == "" || normalized == sealosHost {
+			continue
+		}
+		return normalized
+	}
+	return ""
 }
 
 func (c *Client) certificateDiagnostics(ctx context.Context, name string) (*CertificateDiagnostics, error) {

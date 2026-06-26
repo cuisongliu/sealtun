@@ -556,7 +556,7 @@ func dashboardTunnelAudit(ctx context.Context, tunnelID string, r *http.Request)
 }
 
 func dashboardScopedSession(tunnelID string) (*session.TunnelSession, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(context.Background(), tunnelID)
 	if err != nil {
 		return nil, err
 	}

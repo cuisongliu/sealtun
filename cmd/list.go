@@ -74,6 +74,7 @@ func collectListItemsWithLocalCheck(checkLocalPort bool) ([]listItem, error) {
 		return nil, fmt.Errorf("load tunnel sessions: %w", err)
 	}
 	for i := range sessions {
+		refreshSessionFromRemote(context.Background(), &sessions[i])
 		ensureSessionPublicPort(context.Background(), &sessions[i])
 	}
 	return listItemsFromSessions(sessions, checkLocalPort), nil

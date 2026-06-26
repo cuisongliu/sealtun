@@ -389,7 +389,54 @@ sudo sealtun disconnect
 
 Limitations: transparent data-plane support is Linux + TCP only and requires root plus `iptables`; ICMP/ping and UDP are not supported. macOS/Windows fail clearly as unsupported for now.
 
-### 7. Observe tunnels and run the local dashboard
+### 7. Pricing
+Sealtun itself does not charge a separate software fee. The actual cost comes from the Sealos Cloud resources allocated to the remote tunnel Pod and the public entrypoint. The CLI can show resource occupancy hints in `resources` and `dashboard`, but that is not billing estimation; the authoritative source is still the Sealos Cloud pricing page and your actual bill.
+
+Based on the current Sealos Cloud pricing page, Sealtun tunnel cost is easiest to understand through these dimensions:
+
+- `CPU`: billed per core / hour
+- `Memory`: billed per GB / hour
+- `Port`: billed per public port / hour
+- `Network`: billed by traffic usage
+
+Common Sealtun cost sources are:
+
+- one remote tunnel Pod: `CPU + Memory`
+- HTTP/HTTPS tunnels and TCP/SSH NodePort exposure: `Port`
+- public traffic served through the tunnel: `Network`
+
+Unit prices differ by region. Based on the current Sealos Cloud console screenshots, `Hangzhou H`, `Singapore B`, `Beijing A`, `Guangzhou G`, and `US West` all have different CPU, memory, and port prices, so the same tunnel can have different hourly cost across regions.
+
+You can currently use this hourly price table as a direct reference:
+
+| Region | CPU (core/hour) | Memory (GB/hour) | Port (port/hour) | Network |
+| --- | ---: | ---: | ---: | ---: |
+| `Hangzhou H` | `0.027671` | `0.013956` | `0.013900` | `0.000781 /M` |
+| `Singapore B` | `0.067000` | `0.033792` | `0.013900` | `0.000781 /M` |
+| `Beijing A` | `0.017125` | `0.008637` | `0.007000` | `0.000781 /M` |
+| `Guangzhou G` | `0.017420` | `0.008786` | `0.007000` | `0.000781 /M` |
+| `US West` | `0.020833` | `0.012500` | `0.006944` | `0.000107 /M` |
+
+For a minimal HTTPS tunnel, you should usually expect at least:
+
+- one remote Pod worth of `CPU + Memory`
+- one public entry port
+- the actual public traffic consumed
+
+Use this rough formula when estimating:
+
+```text
+total cost ~= Pod(CPU + Memory) + public port + network traffic
+```
+
+To keep cost lower, prioritize:
+
+- stopping unused tunnels, or using `sealtun stop` to scale replicas to 0
+- lowering Pod requests / limits with `sealtun resources set` or `unset`
+- avoiding oversized resources for short-lived debugging tunnels
+- opening low-traffic tunnels on demand instead of keeping them always on
+
+### 8. Observe tunnels and run the local dashboard
 Show remote tunnel pod logs:
 ```bash
 sealtun logs <tunnel-id>
@@ -487,7 +534,7 @@ sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-
 
 Remote mode does not embed the dashboard token in HTML; callers need the URL fragment token or request header. When dashboard Basic Auth is enabled, HTML, static assets, and APIs are all protected before the dashboard token layer. Every mutating action still requires a page confirmation and a backend-validated `confirm` field to avoid accidental clicks or scripted misuse.
 
-### 8. Protocol templates
+### 9. Protocol templates
 When you are unsure which command or declarative config to use, generate a template first:
 
 ```bash
@@ -500,7 +547,7 @@ sealtun template mongodb
 
 Templates print both a one-shot `sealtun expose` command and a `sealtun.yaml` snippet. `mysql`, `postgres`, `redis`, `mongodb`, and `mqtt` templates default to generic TCP L4 entries; only HTTPS templates support custom domains and access controls.
 
-### 9. Declarative config
+### 10. Declarative config
 Create `sealtun.yaml`:
 ```yaml
 version: v1

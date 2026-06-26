@@ -95,6 +95,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(ctx, sess)
 	ensureSessionPublicPort(ctx, sess)
 
 	snapshot := classifySession(*sess, true)

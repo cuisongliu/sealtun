@@ -56,36 +56,45 @@ func init() {
 }
 
 func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServerSecretPayload, error) {
-	sess, err := findSession(tunnelID)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(sess.Secret) == "" {
-		return nil, fmt.Errorf("tunnel %s has no local secret; recreate it before rotating", sess.TunnelID)
-	}
-	if sess.ConnectionState == session.ConnectionStateStopped {
-		return nil, fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before rotating the server secret", sess.TunnelID, sess.TunnelID)
-	}
-	if sessionExpired(*sess, nowUTC()) {
-		return nil, fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
-	}
-	newSecret := uuid.New().String()
-	mutatedAt := nowUTC().Add(-time.Second)
-	if err := updateTunnelServerSecret(ctx, sess, newSecret, mutatedAt); err != nil {
-		if serverSecretCommitted(err) {
-			return &rotateServerSecretPayload{
-				TunnelID:     sess.TunnelID,
-				ServerSecret: newSecret,
-				Message:      "New server secret is shown once and saved locally, but rollout confirmation failed.",
-			}, err
+	var payload *rotateServerSecretPayload
+	err := withTunnelOperationLock(tunnelID, func() error {
+		sess, err := findSessionRefreshed(ctx, tunnelID)
+		if err != nil {
+			return err
 		}
+		if strings.TrimSpace(sess.Secret) == "" {
+			return fmt.Errorf("tunnel %s has no local secret; recreate it before rotating", sess.TunnelID)
+		}
+		if sess.ConnectionState == session.ConnectionStateStopped {
+			return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before rotating the server secret", sess.TunnelID, sess.TunnelID)
+		}
+		if sessionExpired(*sess, nowUTC()) {
+			return fmt.Errorf("tunnel %s has expired; run cleanup and recreate the tunnel", sess.TunnelID)
+		}
+		newSecret := uuid.New().String()
+		mutatedAt := nowUTC().Add(-time.Second)
+		if err := updateTunnelServerSecret(ctx, sess, newSecret, mutatedAt); err != nil {
+			if serverSecretCommitted(err) {
+				payload = &rotateServerSecretPayload{
+					TunnelID:     sess.TunnelID,
+					ServerSecret: newSecret,
+					Message:      "New server secret is shown once and saved locally, but rollout confirmation failed.",
+				}
+				return err
+			}
+			return err
+		}
+		payload = &rotateServerSecretPayload{
+			TunnelID:     sess.TunnelID,
+			ServerSecret: newSecret,
+			Message:      "New server secret is shown once and saved locally.",
+		}
+		return nil
+	})
+	if err != nil && payload == nil {
 		return nil, err
 	}
-	return &rotateServerSecretPayload{
-		TunnelID:     sess.TunnelID,
-		ServerSecret: newSecret,
-		Message:      "New server secret is shown once and saved locally.",
-	}, nil
+	return payload, err
 }
 
 type committedServerSecretError struct {

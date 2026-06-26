@@ -149,7 +149,7 @@ func init() {
 }
 
 func showPolicy(tunnelID string, now time.Time) (*policyShowPayload, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(context.Background(), tunnelID)
 	if err != nil {
 		return nil, err
 	}
@@ -157,21 +157,26 @@ func showPolicy(tunnelID string, now time.Time) (*policyShowPayload, error) {
 }
 
 func setPolicy(ctx context.Context, tunnelID, rateLimit string, clearRateLimit, auditEnabled, auditDisabled bool) (*policyShowPayload, error) {
-	sess, err := findSession(tunnelID)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateHTTPSPolicyTarget(*sess); err != nil {
-		return nil, err
-	}
-	next, err := applyPolicySettings(sess.AccessPolicy, rateLimit, clearRateLimit, auditEnabled, auditDisabled)
-	if err != nil {
-		return nil, err
-	}
-	if err := updateHTTPSAccessPolicy(ctx, sess, emptyAccessPolicyAsNil(next)); err != nil {
-		return nil, err
-	}
-	return policyShowPayloadFromSession(*sess, nowUTC())
+	var payload *policyShowPayload
+	err := withTunnelOperationLock(tunnelID, func() error {
+		sess, err := findSessionRefreshed(ctx, tunnelID)
+		if err != nil {
+			return err
+		}
+		if err := validateHTTPSPolicyTarget(*sess); err != nil {
+			return err
+		}
+		next, err := applyPolicySettings(sess.AccessPolicy, rateLimit, clearRateLimit, auditEnabled, auditDisabled)
+		if err != nil {
+			return err
+		}
+		if err := updateHTTPSAccessPolicy(ctx, sess, emptyAccessPolicyAsNil(next)); err != nil {
+			return err
+		}
+		payload, err = policyShowPayloadFromSession(*sess, nowUTC())
+		return err
+	})
+	return payload, err
 }
 
 func applyPolicySettings(policy *session.AccessPolicy, rateLimit string, clearRateLimit, auditEnabled, auditDisabled bool) (*session.AccessPolicy, error) {
@@ -204,7 +209,7 @@ func collectPolicyAudit(ctx context.Context, tunnelID string, since time.Duratio
 	if limit < 1 || limit > 1000 {
 		return nil, fmt.Errorf("limit must be between 1 and 1000")
 	}
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(ctx, tunnelID)
 	if err != nil {
 		return nil, err
 	}

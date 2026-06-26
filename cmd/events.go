@@ -53,7 +53,7 @@ func init() {
 }
 
 func collectEventsPayloadWithContext(ctx context.Context, tunnelID string, timeout time.Duration) (*eventsPayload, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(ctx, tunnelID)
 	if err != nil {
 		return nil, err
 	}

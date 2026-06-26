@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/labring/sealtun/pkg/accesspolicy"
+	"github.com/labring/sealtun/pkg/k8s"
 	"github.com/labring/sealtun/pkg/session"
 )
 
@@ -88,6 +89,50 @@ func TestListShareLinksRejectsNonHTTPS(t *testing.T) {
 	}
 	if _, err := listShareLinks("ssh", time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "only supported for https") {
 		t.Fatalf("expected non-https rejection, got %v", err)
+	}
+}
+
+func TestListShareLinksRefreshesRemoteState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	hash, err := accesspolicy.HashToken("remote-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalCollector := collectSessionRemoteState
+	collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+		return &k8s.TunnelRemoteState{
+			Protocol: "https",
+			AccessPolicy: &accesspolicy.Policy{
+				TemporaryTokens: []accesspolicy.TemporaryToken{{
+					Name:      "remote",
+					TokenHash: hash,
+					ExpiresAt: "2026-01-01T02:00:00Z",
+				}},
+			},
+			DeploymentOK: true,
+			AuthSecretOK: true,
+		}, nil
+	}
+	t.Cleanup(func() { collectSessionRemoteState = originalCollector })
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:  "web",
+		Protocol:  "https",
+		LocalPort: "3000",
+		Region:    "https://gzg.sealos.run",
+		Namespace: "ns-demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := listShareLinks("web", time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != "remote" || items[0].Expired {
+		t.Fatalf("expected refreshed remote share links, got %#v", items)
 	}
 }
 

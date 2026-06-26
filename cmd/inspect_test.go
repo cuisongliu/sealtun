@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -225,5 +226,46 @@ func TestPrintInspectHidesRemoteCertificateSecretInText(t *testing.T) {
 	text := output.String()
 	if strings.Contains(text, "secret=") || strings.Contains(text, "sealtun-webdev-custom-tls") {
 		t.Fatalf("inspect text output should not expose certificate secret names, got:\n%s", text)
+	}
+}
+
+func TestCollectInspectPayloadRefreshesRemoteHTTPSState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	inspectRemote = false
+
+	originalCollector := collectSessionRemoteState
+	collectSessionRemoteState = func(ctx context.Context, sess session.TunnelSession) (*k8s.TunnelRemoteState, error) {
+		return &k8s.TunnelRemoteState{
+			PublicHost:   "ai-gateway.code05.com",
+			SealosHost:   "sealtun-abc123-ns-demo.bja.sealos.run",
+			CustomDomain: "ai-gateway.code05.com",
+		}, nil
+	}
+	t.Cleanup(func() { collectSessionRemoteState = originalCollector })
+
+	if err := session.Save(session.TunnelSession{
+		TunnelID:   "abc123",
+		Region:     "https://bja.sealos.run",
+		Namespace:  "ns-demo",
+		Protocol:   "https",
+		Host:       "old.example.com",
+		LocalPort:  "3000",
+		PID:        0,
+		CreatedAt:  time.Now().Format(time.RFC3339),
+		Resources:  []string{"sealtun-abc123"},
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	payload, err := collectInspectPayload("abc123")
+	if err != nil {
+		t.Fatalf("collectInspectPayload: %v", err)
+	}
+	if payload.Host != "ai-gateway.code05.com" || payload.CustomDomain != "ai-gateway.code05.com" {
+		t.Fatalf("expected refreshed host/custom domain, got %#v", payload)
+	}
+	if payload.SealosHost != "sealtun-abc123-ns-demo.bja.sealos.run" {
+		t.Fatalf("expected refreshed sealos host, got %#v", payload)
 	}
 }

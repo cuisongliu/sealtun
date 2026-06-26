@@ -297,6 +297,7 @@ func planSessionCustomDomain(tunnelID, customDomain string) (*domainPayload, err
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(context.Background(), sess)
 	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
@@ -325,6 +326,7 @@ func configureSessionCustomDomain(parent context.Context, tunnelID, customDomain
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(parent, sess)
 	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
@@ -364,6 +366,7 @@ func clearSessionCustomDomain(parent context.Context, tunnelID string) (*domainP
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(parent, sess)
 	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
@@ -476,6 +479,9 @@ func collectDomainStatusWithVerifier(parent context.Context, tunnelID string, ti
 		list, err := session.List()
 		if err != nil {
 			return nil, fmt.Errorf("load tunnel sessions: %w", err)
+		}
+		for i := range list {
+			refreshSessionFromRemote(parent, &list[i])
 		}
 		sessions = list
 	}
@@ -679,6 +685,7 @@ func verifySessionDomain(parent context.Context, tunnelID string) (*domainVerify
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(parent, sess)
 	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}
@@ -696,6 +703,7 @@ func waitForSessionDomain(parent context.Context, tunnelID string, timeout time.
 	if err != nil {
 		return nil, err
 	}
+	refreshSessionFromRemote(parent, sess)
 	if !sessionSupportsCustomDomain(*sess) {
 		return nil, fmt.Errorf("custom domains are only supported for https tunnels")
 	}

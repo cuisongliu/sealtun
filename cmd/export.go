@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -74,7 +75,7 @@ func runExport(args []string) (*applyFile, []string, error) {
 	var err error
 	switch {
 	case len(args) == 1:
-		sess, err := findSession(args[0])
+		sess, err := findSessionRefreshed(context.Background(), args[0])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -83,6 +84,9 @@ func runExport(args []string) (*applyFile, []string, error) {
 		sessions, err = session.List()
 		if err != nil {
 			return nil, nil, fmt.Errorf("load tunnel sessions: %w", err)
+		}
+		for i := range sessions {
+			refreshSessionFromRemote(context.Background(), &sessions[i])
 		}
 	default:
 		return nil, nil, fmt.Errorf("provide a tunnel id or use --all")

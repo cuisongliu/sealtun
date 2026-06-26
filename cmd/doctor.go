@@ -146,7 +146,7 @@ func collectDoctorPayload() (*doctorPayload, error) {
 }
 
 func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDoctorPayload, error) {
-	sess, err := findSession(tunnelID)
+	sess, err := findSessionRefreshed(ctx, tunnelID)
 	if err != nil {
 		return nil, err
 	}

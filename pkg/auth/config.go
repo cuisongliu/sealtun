@@ -59,7 +59,7 @@ func GetSealosDir() (string, error) {
 
 // CurrentSealtunDir returns the active Sealtun config directory path without
 // creating it or migrating legacy ~/.sealos data. Use this for scoped readers
-// such as the dashboard, where reading alternate config roots would be surprising.
+// where reading alternate config roots would be surprising.
 func CurrentSealtunDir() (string, error) {
 	home, err := sealtunHomeDir()
 	if err != nil {

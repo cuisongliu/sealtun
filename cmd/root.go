@@ -21,7 +21,7 @@ via Sealos Cloud using Kubernetes native resources (Deployment, Service, Ingress
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, commandErrorWithHint(err))
 		os.Exit(1)
 	}
 }

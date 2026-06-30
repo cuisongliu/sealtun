@@ -21,6 +21,9 @@ NPM_DIST_TAG ?= latest
 NPM_PUBLISH_FLAGS ?= --access public
 NPM_DRY_RUN_VERSION ?= 0.0.0-dry-run.$(shell date +%Y%m%d%H%M%S)
 NPM_DRY_RUN_RELEASE_TAG ?= $(NPM_LATEST_RELEASE_TAG)
+NPM_SKIP_EXISTING ?= 0
+NPM_PUBLISH_RETRIES ?= 3
+NPM_PUBLISH_REPORT ?= $(NPM_PACKAGES_DIR)/publish-report.json
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X github.com/labring/sealtun/pkg/version.Version=$(VERSION)"
@@ -69,15 +72,13 @@ npm-pack: npm-packages
 
 ## npm-publish: publish platform packages first, then the main npm package
 npm-publish: npm-packages
-	@set -eu; \
-	for pkg in $(NPM_PACKAGES_DIR)/*; do \
-		if [ -f "$$pkg/package.json" ]; then \
-			echo "Publishing $$pkg"; \
-			(cd "$$pkg" && $(NPM) publish --tag "$(NPM_DIST_TAG)" $(NPM_PUBLISH_FLAGS)); \
-		fi; \
-	done; \
-	echo "Publishing $(NPM_PACKAGES_DIR)"; \
-	(cd "$(NPM_PACKAGES_DIR)" && $(NPM) publish --tag "$(NPM_DIST_TAG)" $(NPM_PUBLISH_FLAGS))
+	$(NODE) scripts/publish-npm-packages.mjs \
+		--out-dir $(NPM_PACKAGES_DIR) \
+		--dist-tag $(NPM_DIST_TAG) \
+		--skip-existing $(NPM_SKIP_EXISTING) \
+		--retries $(NPM_PUBLISH_RETRIES) \
+		--report $(NPM_PUBLISH_REPORT) \
+		-- $(NPM_PUBLISH_FLAGS)
 
 ## npm-publish-dry-run: verify the npm publish payload without publishing
 npm-publish-dry-run: NPM_VERSION := $(NPM_DRY_RUN_VERSION)

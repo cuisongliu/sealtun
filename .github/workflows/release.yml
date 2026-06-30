@@ -5,14 +5,23 @@ on:
     tags:
       - 'v*.*.*'
 
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      npm_dist_tag: ${{ steps.channel.outputs.npm_dist_tag }}
+      docker_latest_enabled: ${{ steps.channel.outputs.docker_latest_enabled }}
+      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +41,11 @@ jobs:
           go-version: '1.25.10'
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Run tests
         run: go test ./...
 
@@ -41,18 +55,56 @@ jobs:
       - name: Check npm package builder syntax
         run: node --check scripts/build-npm-packages.mjs
 
+      - name: Check npm publish helper syntax
+        run: node --check scripts/publish-npm-packages.mjs
+
+      - name: Resolve release channel
+        id: channel
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "npm_dist_tag=next" >> "$GITHUB_OUTPUT"
+            echo "docker_latest_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_dist_tag=latest" >> "$GITHUB_OUTPUT"
+            echo "docker_latest_enabled=true" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: release --clean --draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Record draft release status
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,url > release-draft-status.json
+
+      - name: Upload draft release status
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-draft-status
+          path: release-draft-status.json
+          if-no-files-found: ignore
+
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: goreleaser
+    permissions:
+      contents: read
+      packages: write
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
@@ -77,7 +129,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.goreleaser.outputs.docker_latest_enabled }}
 
       - name: Resolve build version
         id: vars
@@ -97,6 +149,7 @@ jobs:
 
   npm-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - goreleaser
       - docker
@@ -120,11 +173,109 @@ jobs:
           node --version
           npm --version
           node --check scripts/build-npm-packages.mjs
+          node --check scripts/publish-npm-packages.mjs
 
       - name: Publish npm packages
         env:
           NPM_VERSION: ${{ github.ref_name }}
           NPM_RELEASE_TAG: ${{ github.ref_name }}
+          NPM_DIST_TAG: ${{ needs.goreleaser.outputs.npm_dist_tag }}
+          NPM_SKIP_EXISTING: "1"
+          NPM_PUBLISH_RETRIES: "3"
+          NPM_PUBLISH_REPORT: packages/publish-report.json
+          NPM_DOWNLOAD_RETRIES: "3"
         run: |
           export NPM_VERSION="${NPM_VERSION#v}"
           make npm-publish
+
+      - name: Upload npm publish report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-publish-report
+          path: packages/publish-report.json
+          if-no-files-found: ignore
+
+  publish-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - goreleaser
+      - docker
+      - npm-publish
+    outputs:
+      release_published: ${{ steps.publish.outputs.release_published }}
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ needs.goreleaser.outputs.is_prerelease }}" = "true" ]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          fi
+          echo "release_published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write release summary
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --json url,isDraft,isPrerelease > release-final-status.json
+          {
+            echo "## release summary"
+            echo ""
+            echo "- tag: \`$GITHUB_REF_NAME\`"
+            echo "- release url: $(gh release view "$GITHUB_REF_NAME" --json url --jq '.url')"
+            echo "- draft: $(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')"
+            echo "- prerelease: $(gh release view "$GITHUB_REF_NAME" --json isPrerelease --jq '.isPrerelease')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release summary artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-final-status
+          path: release-final-status.json
+          if-no-files-found: ignore
+
+  mark-release-failed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ always() && (needs.goreleaser.result != 'success' || needs.docker.result != 'success' || needs.npm-publish.result != 'success' || (needs.publish-release.result == 'failure' && needs.publish-release.outputs.release_published != 'true')) }}
+    needs:
+      - goreleaser
+      - docker
+      - npm-publish
+      - publish-release
+    permissions:
+      contents: write
+    steps:
+      - name: Mark draft release as failed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --draft
+            action="draft release kept for inspection"
+          else
+            action="no draft release existed to mark"
+          fi
+          {
+            echo "## release failure summary"
+            echo ""
+            echo "- tag: \`$GITHUB_REF_NAME\`"
+            echo "- goreleaser: ${{ needs.goreleaser.result }}"
+            echo "- docker: ${{ needs.docker.result }}"
+            echo "- npm-publish: ${{ needs.npm-publish.result }}"
+            echo "- publish-release: ${{ needs.publish-release.result }}"
+            echo "- action: $action"
+          } >> "$GITHUB_STEP_SUMMARY"

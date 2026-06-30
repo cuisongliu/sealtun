@@ -71,6 +71,10 @@ func init() {
 }
 
 func runExport(args []string) (*applyFile, []string, error) {
+	return runExportWithOptions(args, exportAll, exportIncludeSecrets)
+}
+
+func runExportWithOptions(args []string, exportAllEnabled bool, includeSecretPlaceholders bool) (*applyFile, []string, error) {
 	var sessions []session.TunnelSession
 	var err error
 	switch {
@@ -80,7 +84,7 @@ func runExport(args []string) (*applyFile, []string, error) {
 			return nil, nil, err
 		}
 		sessions = []session.TunnelSession{*sess}
-	case exportAll:
+	case exportAllEnabled:
 		sessions, err = session.List()
 		if err != nil {
 			return nil, nil, fmt.Errorf("load tunnel sessions: %w", err)
@@ -94,7 +98,7 @@ func runExport(args []string) (*applyFile, []string, error) {
 	config := &applyFile{Version: "v1", Tunnels: make([]applyTunnel, 0, len(sessions))}
 	warnings := []string{}
 	for _, sess := range sessions {
-		item, itemWarnings := exportSession(sess, exportIncludeSecrets)
+		item, itemWarnings := exportSession(sess, includeSecretPlaceholders)
 		warnings = append(warnings, itemWarnings...)
 		config.Tunnels = append(config.Tunnels, item)
 	}

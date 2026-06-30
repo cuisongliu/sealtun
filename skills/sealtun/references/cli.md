@@ -16,7 +16,6 @@ Use these paths before listing every available flag:
 | "Expose Postgres/MySQL/Redis/MongoDB/MQTT" | `sealtun template postgres`; `sealtun expose 5432 --protocol tcp` | Common protocol templates map to generic TCP. Return `<host>:<node-port>`. |
 | "Access a cluster Service from my laptop" / "本机访问集群内服务" | `sealtun connect --check`; Linux `sudo sealtun connect` | Direct TCP access to Service FQDN, Service ClusterIP, and Pod IP. No SOCKS/proxy setup. |
 | "Secure this public URL" | HTTPS `expose`, `policy set`, or `share` with Basic Auth, Bearer token, IP rules, rate limit, audit, or temporary links | Prefer env-backed secrets. HTTP access controls do not protect SSH/TCP NodePort. |
-| "Show or operate everything in a UI" | `sealtun dashboard --open` | Remote dashboard needs `--allow-remote` and should use dashboard Basic Auth. |
 
 After any live operation, verify using the matching command: `list --check`, `inspect <id>`, `domain status/verify`, `share list`, or `doctor <id>`.
 
@@ -306,35 +305,27 @@ sealtun events <tunnel-id>
 sealtun events <tunnel-id> --json
 sealtun events <tunnel-id> --timeout 8s
 
-sealtun dashboard
-sealtun dashboard --addr 127.0.0.1 --port 19777
-sealtun dashboard --open
-sealtun dashboard --addr 0.0.0.0 --allow-remote
-sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-auth-password-env SEALTUN_DASHBOARD_PASSWORD
-
 sealtun doctor
 sealtun doctor <tunnel-id>
 sealtun doctor --json
 sealtun doctor <tunnel-id> --json
+sealtun doctor <tunnel-id> --report
+sealtun doctor <tunnel-id> --report --report-file ./doctor.md
 sealtun doctor --fix --dry-run
 sealtun doctor --fix
+sealtun repair <tunnel-id> --dry-run
+sealtun repair <tunnel-id>
 ```
 
-Dashboard is a local workbench by default. It can create HTTPS/SSH/TCP tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events/resources, and run domain plan/add/verify/clear. It uses only the current active profile/region/namespace and does not switch login scope.
-
-`sealtun discover` and the dashboard `Discover local ports` action scan only local TCP listening ports. They do not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port` or the dashboard HTTPS `Target URL` field. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `27017 -> mongodb/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
+`sealtun discover` scans only local TCP listening ports. It does not probe external networks or create tunnels. For a remote HTTP upstream, use `sealtun expose --target http://host:port`. Standard local hints are `22 -> ssh`, `3306 -> mysql/tcp`, `5432 -> postgres/tcp`, `6379 -> redis/tcp`, `27017 -> mongodb/tcp`, `1883 -> mqtt/tcp`, and other listening ports default to HTTPS/web.
 
 `sealtun resources` uses the current active profile/region/namespace and shows Kubernetes resource occupancy for one tunnel: Deployment replicas, Pod count, Service type, NodePort, Ingress host count, Certificate presence, Issuer, Secret metadata, and Pod CPU/memory requests/limits. It is not a cloud billing estimate, and Secret data is not displayed. `resources set` updates the remote Deployment template and stores the config in the local session; stopped tunnels stay scaled to 0 and use the new resources on the next `start`. `resources unset` resets to Sealtun defaults: request CPU `10m`, request memory `32Mi`, limit CPU `200m`, limit memory `128Mi`.
 
 `sealtun watch` refreshes tunnel or global status until interrupted. Use `--json` for newline-delimited events when another tool needs to consume state changes.
 
-`doctor --fix --dry-run` prints conservative automatic fixes without executing them. `doctor --fix` may start stopped tunnels, clean expired/stale sessions, or start the local daemon. It must not run `cleanup --all`, logout, DNS provider changes, or cleanup active tunnels.
+`doctor --fix --dry-run` prints conservative automatic fixes without executing them. `doctor --fix` may start stopped tunnels, clean expired/stale sessions, or start the local daemon. It must not run `cleanup --all`, logout, DNS provider changes, or cleanup active tunnels. `repair <tunnel-id>` is the single-tunnel wrapper around this safe repair flow; prefer `repair <id> --dry-run` before execution.
 
-Dashboard live status uses a token-protected stream and automatically falls back to polling if the stream disconnects. The Resources tab shows the same Kubernetes resource occupancy hints. The Audit tab shows HTTPS access audit, policy settings, share rotation, and server-secret rotation. Write actions preview the equivalent CLI command before confirmation.
-
-Every dashboard API request requires the dashboard token. Mutating actions require a confirmation in the page and a backend `confirm` value such as `stop:<tunnel-id>` or `apply:dashboard-yaml`. `--allow-remote` allows a non-loopback dashboard address and should be treated as a security-sensitive choice; remote mode does not embed the token in HTML. For remote dashboards, recommend adding dashboard Basic Auth with `--basic-auth-user` and `--basic-auth-password-env`. `--open` opens the dashboard URL for local workflows.
-
-Use `doctor <tunnel-id>` for "why can't I connect" issues. It checks the local session, owner process or daemon, local target port, remote resources where credentials are available, and prints next-step suggestions. Use `doctor --fix --dry-run` before any automatic fix.
+Use `doctor <tunnel-id>` for "why can't I connect" issues. It checks the local session, owner process or daemon, local target port, remote resources where credentials are available, and prints next-step suggestions. Use `doctor --fix --dry-run` before any automatic fix. Use `doctor <id> --report` to create a redacted Markdown report for support or issue triage; it should not include tokens, secrets, Authorization headers, Basic Auth passwords, or kubeconfig data.
 
 ## Share Links
 

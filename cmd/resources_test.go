@@ -80,7 +80,7 @@ func TestMergeResourceSetInputKeepsExistingValues(t *testing.T) {
 func TestActiveScopedSessionRejectsOutsideScope(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := auth.SaveAuthData(auth.AuthData{Region: "https://gzg.sealos.run"}, dashboardTestKubeconfig(t, "ns-a")); err != nil {
+	if err := auth.SaveAuthData(auth.AuthData{Region: "https://gzg.sealos.run"}, testKubeconfig(t, "ns-a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Save(session.TunnelSession{

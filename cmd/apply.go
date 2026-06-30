@@ -203,7 +203,7 @@ func runApply(ctx context.Context, path string, dryRun bool) ([]applyResult, err
 }
 
 func runApplyContent(ctx context.Context, data []byte, dryRun bool) ([]applyResult, error) {
-	config, err := loadApplyData("dashboard yaml", data)
+	config, err := loadApplyData("inline yaml", data)
 	if err != nil {
 		return nil, err
 	}
@@ -995,7 +995,7 @@ func runDiff(path string) ([]diffResult, error) {
 }
 
 func runDiffContent(data []byte) ([]diffResult, error) {
-	config, err := loadApplyData("dashboard yaml", data)
+	config, err := loadApplyData("inline yaml", data)
 	if err != nil {
 		return nil, err
 	}

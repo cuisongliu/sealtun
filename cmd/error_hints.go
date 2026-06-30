@@ -1,0 +1,66 @@
+package cmd
+
+import (
+	"fmt"
+	"strings"
+)
+
+func commandErrorWithHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if hint := actionableErrorHintText(msg); hint != "" {
+		return fmt.Sprintf("%s\nHint: %s", msg, hint)
+	}
+	return msg
+}
+
+func actionableErrorHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	return actionableErrorHintText(err.Error())
+}
+
+func actionableErrorHintText(msg string) string {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if lower == "" {
+		return ""
+	}
+	if strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "insufficient") ||
+		strings.Contains(lower, "balance") ||
+		strings.Contains(lower, "billing") ||
+		strings.Contains(lower, "exceeded") ||
+		strings.Contains(lower, "out of cpu") ||
+		strings.Contains(lower, "out of memory") {
+		return "Sealos/Kubernetes rejected the resource request. Check account balance/quota in Sealos Cloud, lower tunnel resources with `sealtun resources set`, or clean up unused tunnels."
+	}
+	if strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "permission denied") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "rbac") {
+		return "The active login may not have permission in this region/namespace. Run `sealtun status`, confirm the active profile/region, then re-login if needed."
+	}
+	if strings.Contains(lower, "cname") ||
+		strings.Contains(lower, "dns") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "server misbehaving") ||
+		strings.Contains(lower, "lookup ") {
+		return "DNS may not have propagated or the resolver may be stale. Run `sealtun domain plan` to confirm the CNAME target, then `sealtun domain verify --wait` after updating DNS."
+	}
+	if strings.Contains(lower, "x509:") ||
+		strings.Contains(lower, "certificate signed by unknown authority") ||
+		strings.Contains(lower, "tls: failed to verify certificate") ||
+		strings.Contains(lower, "tls: handshake failure") {
+		return "If this is a private HTTPS upstream with a self-signed or name-mismatched certificate, recreate the target tunnel with `--target-insecure-skip-verify`; do not use it for public untrusted upstreams."
+	}
+	if strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "no route to host") {
+		return "The target or Kubernetes API was not reachable from this machine. Check the local/target service, network path, active region, and rerun `sealtun doctor <tunnel-id>`."
+	}
+	return ""
+}

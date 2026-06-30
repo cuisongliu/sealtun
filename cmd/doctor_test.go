@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -542,6 +543,86 @@ func TestDoctorFixExecutionErrorReportsFailedActions(t *testing.T) {
 	payload.DryRun = true
 	if err := doctorFixExecutionError(payload); err != nil {
 		t.Fatalf("dry-run should not return execution error, got %v", err)
+	}
+}
+
+func TestTunnelDoctorReportRedactsSecrets(t *testing.T) {
+	payload := &tunnelDoctorPayload{
+		TunnelID:           "report123",
+		Status:             "error",
+		Protocol:           "https",
+		Endpoint:           "https://report.example.com",
+		LocalTarget:        "http://localhost:3000",
+		Mode:               "daemon",
+		Region:             "https://gzg.sealos.run",
+		Namespace:          "ns-demo",
+		ProcessAlive:       false,
+		LocalPortReachable: false,
+		LastError:          "Authorization: Bearer abcdefgh secret=server-secret token=temporary-token password=hunter2",
+		Checks: []doctorCheck{{
+			Name:   "remote",
+			Status: "warn",
+			Detail: "token=check-token",
+		}},
+		Suggestions: []string{"retry without Authorization: Basic dXNlcjpwYXNz"},
+		Warnings:    []string{"_sealtun_token=share-token should not leak"},
+	}
+	report := renderTunnelDoctorReport(payload)
+	for _, leaked := range []string{"abcdefgh", "server-secret", "temporary-token", "hunter2", "check-token", "dXNlcjpwYXNz", "share-token"} {
+		if strings.Contains(report, leaked) {
+			t.Fatalf("report leaked %q:\n%s", leaked, report)
+		}
+	}
+	for _, want := range []string{"<redacted>", "Sealtun Doctor Report", "report123"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestWriteTunnelDoctorReportUsesRequestedPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "doctor.md")
+	got, err := writeTunnelDoctorReport(path, &tunnelDoctorPayload{TunnelID: "reportfile", Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != path {
+		t.Fatalf("expected report path %q, got %q", path, got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "reportfile") {
+		t.Fatalf("report missing tunnel id:\n%s", data)
+	}
+}
+
+func TestActionableErrorHint(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{name: "quota", msg: "pods is forbidden: exceeded quota cpu", want: "balance/quota"},
+		{name: "dns", msg: "custom domain DNS is not verified: lookup app.example.com", want: "DNS may not have propagated"},
+		{name: "tls", msg: "x509: certificate signed by unknown authority", want: "--target-insecure-skip-verify"},
+		{name: "network", msg: "dial tcp 10.0.0.1:443: i/o timeout", want: "not reachable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := actionableErrorHintText(tt.msg)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("expected hint containing %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestCommandErrorWithHint(t *testing.T) {
+	got := commandErrorWithHint(fmt.Errorf("x509: certificate signed by unknown authority"))
+	if !strings.Contains(got, "Hint:") || !strings.Contains(got, "--target-insecure-skip-verify") {
+		t.Fatalf("expected hint in command error, got %q", got)
 	}
 }
 

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -41,9 +44,11 @@ type tunnelDoctorPayload struct {
 	Endpoint           string                 `json:"endpoint,omitempty"`
 	LocalTarget        string                 `json:"localTarget,omitempty"`
 	Mode               string                 `json:"mode,omitempty"`
+	Region             string                 `json:"region,omitempty"`
 	Namespace          string                 `json:"namespace,omitempty"`
 	ProcessAlive       bool                   `json:"processAlive"`
 	LocalPortReachable bool                   `json:"localPortReachable"`
+	LastError          string                 `json:"lastError,omitempty"`
 	Remote             *k8s.TunnelDiagnostics `json:"remote,omitempty"`
 	Checks             []doctorCheck          `json:"checks"`
 	Suggestions        []string               `json:"suggestions,omitempty"`
@@ -59,6 +64,8 @@ type doctorCheck struct {
 var doctorJSON bool
 var doctorFix bool
 var doctorFixDryRun bool
+var doctorReport bool
+var doctorReportFile string
 
 type doctorFixPayload struct {
 	DryRun  bool              `json:"dryRun"`
@@ -85,6 +92,15 @@ var doctorCmd = &cobra.Command{
 	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if doctorReport && doctorFix {
+			return fmt.Errorf("--report cannot be used with --fix")
+		}
+		if doctorReport && doctorJSON {
+			return fmt.Errorf("--report cannot be used with --json")
+		}
+		if doctorReport && len(args) == 0 {
+			return fmt.Errorf("--report requires a tunnel id")
+		}
 		if doctorFixDryRun && !doctorFix {
 			return fmt.Errorf("--dry-run requires --fix")
 		}
@@ -108,6 +124,14 @@ var doctorCmd = &cobra.Command{
 			payload, err := collectTunnelDoctorPayload(cmd.Context(), args[0])
 			if err != nil {
 				return err
+			}
+			if doctorReport {
+				path, err := writeTunnelDoctorReport(doctorReportFile, payload)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Doctor report written to %s\n", path)
+				return nil
 			}
 			if doctorJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
@@ -139,6 +163,8 @@ func init() {
 	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "Output diagnostics as JSON")
 	doctorCmd.Flags().BoolVar(&doctorFix, "fix", false, "Execute conservative automatic fixes")
 	doctorCmd.Flags().BoolVar(&doctorFixDryRun, "dry-run", false, "Show conservative automatic fixes without executing them")
+	doctorCmd.Flags().BoolVar(&doctorReport, "report", false, "Write a redacted Markdown report for a tunnel")
+	doctorCmd.Flags().StringVar(&doctorReportFile, "report-file", "", "Path for --report output")
 }
 
 func collectDoctorPayload() (*doctorPayload, error) {
@@ -161,9 +187,11 @@ func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDo
 		Endpoint:           endpoint,
 		LocalTarget:        sessionTargetLabel(*sess),
 		Mode:               valueOr(sess.Mode, "foreground"),
+		Region:             sess.Region,
 		Namespace:          sess.Namespace,
 		ProcessAlive:       snapshot.ProcessAlive,
 		LocalPortReachable: snapshot.LocalPortReachable,
+		LastError:          sess.LastError,
 	}
 
 	payload.Checks = append(payload.Checks,
@@ -178,13 +206,16 @@ func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDo
 	if err != nil {
 		payload.Checks = append(payload.Checks, doctorCheck{Name: "remote", Status: "warn", Detail: err.Error()})
 		payload.Warnings = append(payload.Warnings, fmt.Sprintf("remote diagnostics unavailable: %v", err))
+		if hint := actionableErrorHint(err); hint != "" {
+			payload.Suggestions = append(payload.Suggestions, hint)
+		}
 	} else {
 		payload.Remote = remote
 		payload.Checks = append(payload.Checks, remoteDoctorChecks(remote)...)
 		payload.Warnings = append(payload.Warnings, remote.Warnings...)
 	}
 
-	payload.Suggestions = tunnelDoctorSuggestions(*sess, payload)
+	payload.Suggestions = append(payload.Suggestions, tunnelDoctorSuggestions(*sess, payload)...)
 	return payload, nil
 }
 
@@ -600,7 +631,11 @@ func printTunnelDoctor(cmd *cobra.Command, payload *tunnelDoctorPayload) {
 	fmt.Fprintf(out, "  Endpoint: %s\n", valueOr(payload.Endpoint, "-"))
 	fmt.Fprintf(out, "  Local target: %s\n", payload.LocalTarget)
 	fmt.Fprintf(out, "  Mode: %s\n", valueOr(payload.Mode, "unknown"))
+	fmt.Fprintf(out, "  Region: %s\n", valueOr(payload.Region, "unknown"))
 	fmt.Fprintf(out, "  Namespace: %s\n", valueOr(payload.Namespace, "unknown"))
+	if payload.LastError != "" {
+		fmt.Fprintf(out, "  Last error: %s\n", payload.LastError)
+	}
 
 	if len(payload.Checks) > 0 {
 		fmt.Fprintln(out, "")
@@ -732,8 +767,137 @@ func tunnelDoctorSuggestions(sess session.TunnelSession, payload *tunnelDoctorPa
 	if sess.CustomDomain != "" {
 		suggestions = append(suggestions, fmt.Sprintf("run `sealtun domain doctor %s` to verify DNS, Ingress, and certificate status", sess.TunnelID))
 	}
+	if hint := actionableErrorHintText(sess.LastError); hint != "" {
+		suggestions = append(suggestions, hint)
+	}
 	if len(suggestions) == 0 {
 		suggestions = append(suggestions, "no immediate action suggested")
 	}
 	return suggestions
+}
+
+func writeTunnelDoctorReport(path string, payload *tunnelDoctorPayload) (string, error) {
+	if payload == nil {
+		return "", fmt.Errorf("doctor report payload is nil")
+	}
+	if strings.TrimSpace(path) == "" {
+		path = defaultDoctorReportPath(payload.TunnelID)
+	}
+	if err := os.WriteFile(path, []byte(renderTunnelDoctorReport(payload)), 0o600); err != nil {
+		return "", fmt.Errorf("write doctor report: %w", err)
+	}
+	return path, nil
+}
+
+func defaultDoctorReportPath(tunnelID string) string {
+	safe := regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(tunnelID, "-")
+	safe = strings.Trim(safe, "-")
+	if safe == "" {
+		safe = "tunnel"
+	}
+	return filepath.Join(".", fmt.Sprintf("sealtun-doctor-%s-%s.md", safe, time.Now().Format("20060102-150405")))
+}
+
+func renderTunnelDoctorReport(payload *tunnelDoctorPayload) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "# Sealtun Doctor Report")
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "- Generated at: %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Tunnel ID: %s\n", redactSensitiveText(payload.TunnelID))
+	fmt.Fprintf(&b, "- Status: %s\n", redactSensitiveText(payload.Status))
+	fmt.Fprintf(&b, "- Protocol: %s\n", redactSensitiveText(payload.Protocol))
+	fmt.Fprintf(&b, "- Endpoint: %s\n", redactSensitiveText(payload.Endpoint))
+	fmt.Fprintf(&b, "- Target: %s\n", redactSensitiveText(payload.LocalTarget))
+	fmt.Fprintf(&b, "- Mode: %s\n", redactSensitiveText(payload.Mode))
+	fmt.Fprintf(&b, "- Region: %s\n", redactSensitiveText(payload.Region))
+	fmt.Fprintf(&b, "- Namespace: %s\n", redactSensitiveText(payload.Namespace))
+	fmt.Fprintf(&b, "- Process alive: %s\n", yesNo(payload.ProcessAlive))
+	fmt.Fprintf(&b, "- Target reachable: %s\n", yesNo(payload.LocalPortReachable))
+	if payload.LastError != "" {
+		fmt.Fprintf(&b, "- Last error: %s\n", redactSensitiveText(payload.LastError))
+	}
+	fmt.Fprintln(&b)
+
+	fmt.Fprintln(&b, "## Checks")
+	if len(payload.Checks) == 0 {
+		fmt.Fprintln(&b, "- No checks reported.")
+	} else {
+		fmt.Fprintln(&b, "| Check | Status | Detail |")
+		fmt.Fprintln(&b, "| --- | --- | --- |")
+		for _, check := range payload.Checks {
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", markdownCell(check.Name), markdownCell(check.Status), markdownCell(check.Detail))
+		}
+	}
+	fmt.Fprintln(&b)
+
+	if payload.Remote != nil {
+		fmt.Fprintln(&b, "## Remote")
+		fmt.Fprintf(&b, "- Deployment: %s (%d/%d ready)\n", yesNo(payload.Remote.Deployment.Exists), payload.Remote.Deployment.ReadyReplicas, payload.Remote.Deployment.DesiredReplicas)
+		fmt.Fprintf(&b, "- Service: %s\n", yesNo(payload.Remote.Service.Exists))
+		fmt.Fprintf(&b, "- Ingress: %s\n", yesNo(payload.Remote.Ingress.Exists))
+		if payload.Remote.Certificate != nil {
+			fmt.Fprintf(&b, "- Certificate: %s (ready=%s)\n", yesNo(payload.Remote.Certificate.Exists), yesNo(payload.Remote.Certificate.Ready))
+		}
+		if len(payload.Remote.Pods) > 0 {
+			fmt.Fprintln(&b, "- Pods:")
+			for _, pod := range payload.Remote.Pods {
+				fmt.Fprintf(&b, "  - %s phase=%s ready=%s restarts=%d\n", redactSensitiveText(pod.Name), redactSensitiveText(pod.Phase), yesNo(pod.Ready), pod.RestartCount)
+			}
+		}
+		if len(payload.Remote.Events) > 0 {
+			fmt.Fprintln(&b, "- Recent events:")
+			for _, event := range payload.Remote.Events {
+				fmt.Fprintf(&b, "  - %s %s %s: %s\n", redactSensitiveText(valueOr(event.LastTimestamp, event.FirstTimestamp)), redactSensitiveText(event.Type), redactSensitiveText(event.Reason), redactSensitiveText(event.Message))
+			}
+		}
+		fmt.Fprintln(&b)
+	}
+
+	fmt.Fprintln(&b, "## Suggestions")
+	if len(payload.Suggestions) == 0 {
+		fmt.Fprintln(&b, "- No immediate action suggested.")
+	} else {
+		for _, suggestion := range payload.Suggestions {
+			fmt.Fprintf(&b, "- %s\n", redactSensitiveText(suggestion))
+		}
+	}
+	fmt.Fprintln(&b)
+
+	fmt.Fprintln(&b, "## Warnings")
+	if len(payload.Warnings) == 0 {
+		fmt.Fprintln(&b, "- No warnings.")
+	} else {
+		for _, warning := range payload.Warnings {
+			fmt.Fprintf(&b, "- %s\n", redactSensitiveText(warning))
+		}
+	}
+	return b.String()
+}
+
+func markdownCell(value string) string {
+	value = redactSensitiveText(value)
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+func redactSensitiveText(value string) string {
+	if value == "" {
+		return ""
+	}
+	replacements := []struct {
+		pattern string
+		repl    string
+	}{
+		{`(?i)(authorization\s*[:=]\s*)[^\s]+(?:\s+[^\s]+)?`, `${1}<redacted>`},
+		{`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`, `${1}<redacted>`},
+		{`(?i)((?:token|secret|password|passwd|pwd)\s*[:=]\s*)[^\s&]+`, `${1}<redacted>`},
+		{`(?i)(_sealtun_token=)[^&\s]+`, `${1}<redacted>`},
+		{`(?i)(basic\s+)[A-Za-z0-9+/=-]+`, `${1}<redacted>`},
+	}
+	out := value
+	for _, item := range replacements {
+		out = regexp.MustCompile(item.pattern).ReplaceAllString(out, item.repl)
+	}
+	return out
 }

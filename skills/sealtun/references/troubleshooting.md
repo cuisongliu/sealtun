@@ -12,7 +12,6 @@ Start with the symptom, then confirm the layer before changing anything:
 | `ssh` connects then closes after auth starts | Local sshd/user auth | `ssh -vvv`, `logs <id>`, local sshd logs | Fix user/key/password/PAM on the machine running Sealtun |
 | TCP connection opens then closes | Local target protocol/auth | `inspect <id> --remote`, protocol client logs | Fix database/service bind/auth/TLS expectations |
 | Custom domain not ready | DNS/CNAME or certificate | `domain plan`, `domain verify`, `domain doctor` | Correct CNAME, then wait/verify certificate |
-| Dashboard live status disconnects | Dashboard stream/network | page live badge, manual Refresh, dashboard logs | It should fall back to polling; debug only if polling also fails |
 | Resources tab shows missing or warning resources | Remote Kubernetes | `doctor <id>`, `events <id>`, `inspect <id> --remote` | Fix image/pod/service/ingress/cert issue named by diagnostics |
 | Basic Auth/Bearer/link/rate limit fails | HTTPS access policy | `inspect <id>`, `policy show <id>`, `policy audit <id>`, token length/expiry/IP/rate | Fix credential source, token, temporary link expiry, IP rules, or rate limit |
 
@@ -70,13 +69,15 @@ sealtun list
 sealtun inspect <tunnel-id>
 sealtun doctor
 sealtun doctor <tunnel-id>
+sealtun doctor <tunnel-id> --report
 sealtun doctor --fix --dry-run
+sealtun repair <tunnel-id> --dry-run
 sealtun stop <tunnel-id>
 sealtun cleanup
 ```
 
 `expose` normally starts daemon mode unless `--foreground` is used. `apply` also ensures the local daemon is running after successful cloud changes. `stop` intentionally preserves remote entry resources and scales the pod to zero; `start` or `resume` reopens it. `cleanup` deletes stopped, expired, stale, or error tunnels; `cleanup --all` force deletes all locally tracked tunnels.
-Use `doctor --fix --dry-run` before `doctor --fix`. Automatic fixes are conservative: start stopped tunnels, clean expired/stale sessions, or start the local daemon. They must not clean active tunnels, run `cleanup --all`, logout, or modify DNS provider settings.
+Use `doctor --fix --dry-run` before `doctor --fix`, or `repair <tunnel-id> --dry-run` before repairing one tunnel. Automatic fixes are conservative: start stopped tunnels, clean expired/stale sessions, or start the local daemon. They must not clean active tunnels, run `cleanup --all`, logout, or modify DNS provider settings. Use `doctor <id> --report` when a user needs a redacted Markdown artifact for support; it must not leak tokens, secrets, Authorization headers, Basic Auth passwords, or kubeconfig data.
 
 ## SSH Direct TCP Problems
 
@@ -140,6 +141,7 @@ Actions:
 
 ```bash
 sealtun doctor <tunnel-id>
+sealtun doctor <tunnel-id> --report
 sealtun inspect <tunnel-id> --remote
 sealtun resources <tunnel-id>
 sealtun logs <tunnel-id> --tail 200
@@ -151,7 +153,7 @@ sealtun doctor --json
 Remote diagnostics inspect the Sealtun-managed Deployment, Service, Ingress, Pod, Events, and readiness where available. If code changes are needed, inspect `pkg/k8s`, `cmd/inspect.go`, `cmd/doctor.go`, and related tests.
 Prefer `sealtun doctor <tunnel-id>` before asking the user to manually inspect Kubernetes. It summarizes local owner state, local port reachability, remote resource readiness, and next-step suggestions.
 
-Use `sealtun resources <tunnel-id>` or the dashboard Resources tab for a read-only resource list and resource occupancy hints. It shows Deployment, Pod, HTTP Service, TCP NodePort Service, Ingress, Certificate, Issuer, and Secret metadata, but it does not estimate cloud billing and never displays Secret data.
+Use `sealtun resources <tunnel-id>` for a read-only resource list and resource occupancy hints. It shows Deployment, Pod, HTTP Service, TCP NodePort Service, Ingress, Certificate, Issuer, and Secret metadata, but it does not estimate cloud billing and never displays Secret data.
 
 ## Custom Domain, DNS, Certificate
 
@@ -205,17 +207,10 @@ Check the session access policy. Tokens must be at least 8 characters. Temporary
 
 Access audit must not show plaintext tokens, Authorization headers, Basic Auth passwords, or temporary-link tokens. If a user needs to replace a leaked or stale temporary link, use `share rotate <tunnel-id> <name> --ttl 1h`; for the internal tunnel server secret, use `rotate <tunnel-id> --server-secret`.
 
-## Metrics And Dashboard
+## Metrics
 
 `metrics` combines local session data, remote Kubernetes readiness, and server counters where the remote image supports them. Missing server counters usually mean the remote pod is older or unreachable, not necessarily that the tunnel is down.
 
-Dashboard is a local workbench by default:
-
-```bash
-sealtun dashboard --addr 127.0.0.1 --port 19777
-```
-
-It can create tunnels, run YAML dry-run/diff/apply, stop/start/cleanup tunnels, show logs/metrics/events/resources/audit, manage custom domains, set HTTPS policy, rotate share links, and rotate the tunnel server secret for the current active profile/region/namespace. Mutating actions require both the dashboard token and a confirmation value. Treat `dashboard --allow-remote` as exposing local operational control, not just read-only data; remote mode does not embed the token in HTML.
 
 ## Troubleshooting Response Shape
 

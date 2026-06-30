@@ -330,7 +330,7 @@ func activeScopedSession(tunnelID string) (*session.TunnelSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	scope, err := dashboardActiveScope()
+	scope, err := currentActiveScope()
 	if err != nil {
 		return nil, err
 	}

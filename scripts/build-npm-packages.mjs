@@ -199,12 +199,28 @@ async function download(url, destination) {
     headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   }
 
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
+  const attempts = Number(process.env.NPM_DOWNLOAD_RETRIES || 3) + 1;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      writeFileSync(destination, bytes);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) {
+        break;
+      }
+      const waitMs = attempt * 2000;
+      console.warn(`Download attempt ${attempt}/${attempts} failed for ${url}: ${error.message}. Retrying in ${waitMs}ms`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
   }
-  const bytes = Buffer.from(await response.arrayBuffer());
-  writeFileSync(destination, bytes);
+  throw lastError;
 }
 
 function parseChecksums(data) {

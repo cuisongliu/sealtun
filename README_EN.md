@@ -17,7 +17,7 @@ Sealtun is a local tunnel CLI for **Sealos Cloud** and **Kubernetes** users. It 
 - 🌐 **Custom Domain Automation**: Use `domain plan/add/verify/status/doctor` to generate CNAME guidance, wait for DNS, attach domains, and inspect certificate readiness.
 - 🔗 **Temporary Share Links and Rotation**: Use `share create/list/revoke/rotate` to generate, revoke, or rotate expiring links for HTTPS tunnels.
 - 🛡️ **Security Operations**: HTTPS tunnels support Basic Auth, Bearer tokens, temporary links, IP rules, rate limits, access audit, and server secret rotation.
-- 📊 **Status, Diagnostics, and Workbench**: Use `doctor <tunnel-id>`, `inspect --remote`, `logs`, `events`, `metrics`, and `dashboard` to diagnose local ports, daemon state, remote Pods, Services, Ingresses, and certificates, or manage tunnels from the local workbench.
+- 📊 **Status and Diagnostics**: Use `doctor <tunnel-id>`, `inspect --remote`, `logs`, `events`, `metrics`, `resources`, and `watch` to diagnose local ports, daemon state, remote Pods, Services, Ingresses, and certificates.
 - 🧭 **Guided UX and Safe Fixes**: Use `init` for first-run command/YAML recommendations, and `resources`, `watch`, or `doctor --fix --dry-run` to understand and conservatively repair tunnel state.
 - 🔌 **Cluster Service Access**: On Linux, `sudo sealtun connect` lets TCP clients directly reach Service FQDNs, Service ClusterIPs, and Pod IPs without SOCKS or client-side proxy config.
 - 🧩 **Protocol Templates**: Use `template https|ssh|tcp|mysql|postgres|redis|mongodb|mqtt` to generate commands and `sealtun.yaml` examples.
@@ -390,7 +390,7 @@ sudo sealtun disconnect
 Limitations: transparent data-plane support is Linux + TCP only and requires root plus `iptables`; ICMP/ping and UDP are not supported. macOS/Windows fail clearly as unsupported for now.
 
 ### 7. Pricing
-Sealtun itself does not charge a separate software fee. The actual cost comes from the Sealos Cloud resources allocated to the remote tunnel Pod and the public entrypoint. The CLI can show resource occupancy hints in `resources` and `dashboard`, but that is not billing estimation; the authoritative source is still the Sealos Cloud pricing page and your actual bill.
+Sealtun itself does not charge a separate software fee. The actual cost comes from the Sealos Cloud resources allocated to the remote tunnel Pod and the public entrypoint. The CLI can show resource occupancy hints in `resources`, but that is not billing estimation; the authoritative source is still the Sealos Cloud pricing page and your actual bill.
 
 Based on the current Sealos Cloud pricing page, Sealtun tunnel cost is easiest to understand through these dimensions:
 
@@ -436,7 +436,7 @@ To keep cost lower, prioritize:
 - avoiding oversized resources for short-lived debugging tunnels
 - opening low-traffic tunnels on demand instead of keeping them always on
 
-### 8. Observe tunnels and run the local dashboard
+### 8. Observe tunnels and operate them
 Show remote tunnel pod logs:
 ```bash
 sealtun logs <tunnel-id>
@@ -480,13 +480,19 @@ sealtun doctor
 # Single-tunnel diagnosis with local port, daemon, remote resource, and next-step suggestions
 sealtun doctor <tunnel-id>
 sealtun doctor <tunnel-id> --json
+sealtun doctor <tunnel-id> --report
+sealtun doctor <tunnel-id> --report --report-file ./doctor.md
 
 # Show conservative automatic fixes without executing them
 sealtun doctor --fix --dry-run
+sealtun repair <tunnel-id> --dry-run
 
 # Execute low-risk fixes: resume stopped tunnels, clean expired/stale tunnels, start the local daemon
 sealtun doctor --fix
+sealtun repair <tunnel-id>
 ```
+
+`repair` is the safer single-tunnel repair entrypoint. It reuses the same conservative actions as `doctor --fix`: resume stopped tunnels, clean expired/stale tunnels, or start the local daemon. It does not run `cleanup --all`, delete active tunnels, or change DNS providers. `doctor <id> --report` writes a redacted Markdown troubleshooting report for collaborators or issues without exposing tokens, secrets, Authorization headers, Basic Auth passwords, or kubeconfig data.
 
 Watch tunnel or global status in real time:
 ```bash
@@ -507,32 +513,6 @@ sealtun cleanup --all
 `stop` preserves the domain, Service, Ingress, NodePort Service, and local session while scaling the remote Pod replicas to 0; `start` reopens the same tunnel. Default `cleanup` removes stopped, expired, stale, or error tunnels, and `cleanup <tunnel-id>` targets one eligible tunnel. `cleanup --all` force-cleans every remote resource tied to local records and should only be used when you intentionally want to delete all tunnels.
 
 `metrics` combines local session state, remote Deployment/Pod/Ingress readiness, and server-side request counters when the remote pod supports the Bearer-secret-protected `/_sealtun/metrics` endpoint. TCP/SSH tunnels also expose TCP connection, active connection, byte, and error counters.
-
-Run the local workbench:
-```bash
-sealtun dashboard
-
-# Custom listen address
-sealtun dashboard --addr 127.0.0.1 --port 19777
-
-# Open the browser after startup
-sealtun dashboard --open
-```
-
-The dashboard listens locally by default and uses only the current active profile/region/namespace. It reads local sessions, login state, remote diagnostics, and custom domain readiness. The page can create HTTPS/SSH/TCP tunnels; the HTTPS form supports either a local port or a `Target URL` upstream. It can also run `sealtun.yaml` dry-run/diff/apply, stop/start/cleanup tunnels, view logs/metrics/events/resources/audit, and run domain plan/add/verify/clear, policy set, share rotate, and server secret rotate. Before write confirmations, it previews the equivalent CLI command so the UI operation is not a black box.
-
-The dashboard prefers live status updates and shows `Live`, `Reconnecting`, `Polling`, or `Disconnected` in the top bar; if the live stream fails it falls back to 15-second polling. The `Resources` tab shows the tunnel's Deployment, Pods, HTTP Service, TCP NodePort Service, Ingress, Certificate, Issuer, and Secret summaries. Resource visibility is not cloud billing estimation; it only highlights current Sealos/Kubernetes occupancy such as replica count, Pod count, Service type, NodePort, Ingress host count, and certificate presence. Secrets expose only name, type, and metadata, never data. The `New Tunnel` panel can also run `Discover local ports` to scan local TCP listening ports and prefill protocol, name, and localPort.
-
-```bash
-# Allow remote access to the workbench; use only on trusted networks
-sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth admin:change-me
-
-# Prefer reading the dashboard Basic Auth password from the environment
-export SEALTUN_DASHBOARD_PASSWORD='change-me'
-sealtun dashboard --addr 0.0.0.0 --allow-remote --basic-auth-user admin --basic-auth-password-env SEALTUN_DASHBOARD_PASSWORD
-```
-
-Remote mode does not embed the dashboard token in HTML; callers need the URL fragment token or request header. When dashboard Basic Auth is enabled, HTML, static assets, and APIs are all protected before the dashboard token layer. Every mutating action still requires a page confirmation and a backend-validated `confirm` field to avoid accidental clicks or scripted misuse.
 
 ### 9. Protocol templates
 When you are unsure which command or declarative config to use, generate a template first:

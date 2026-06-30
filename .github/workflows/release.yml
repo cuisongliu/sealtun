@@ -177,6 +177,7 @@ jobs:
 
       - name: Publish npm packages
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_VERSION: ${{ github.ref_name }}
           NPM_RELEASE_TAG: ${{ github.ref_name }}
           NPM_DIST_TAG: ${{ needs.goreleaser.outputs.npm_dist_tag }}

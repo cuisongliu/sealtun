@@ -191,13 +191,90 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function download(url, destination) {
+function githubHeaders(accept) {
   const headers = {
     'user-agent': 'sealtun-npm-packager'
   };
+  if (accept) {
+    headers.accept = accept;
+  }
   if (process.env.GITHUB_TOKEN) {
     headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   }
+  if (urlUsesGitHubApi(accept)) {
+    headers['x-github-api-version'] = '2022-11-28';
+  }
+  return headers;
+}
+
+function urlUsesGitHubApi(accept) {
+  return accept === 'application/vnd.github+json' || accept === 'application/octet-stream';
+}
+
+async function githubJson(url) {
+  const response = await fetch(url, {
+    headers: githubHeaders('application/vnd.github+json')
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to query ${url}: ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+async function resolveReleaseAssetUrls(args) {
+  if (!process.env.GITHUB_TOKEN) {
+    return new Map();
+  }
+
+  const releaseApiUrl = `https://api.github.com/repos/${args.repo}/releases/tags/${encodeURIComponent(args.tag)}`;
+  try {
+    const release = await githubJson(releaseApiUrl);
+    return assetUrlsFromRelease(release);
+  } catch (error) {
+    console.warn(`${error.message}. Trying draft release lookup.`);
+  }
+
+  const releasesApiUrl = `https://api.github.com/repos/${args.repo}/releases?per_page=100`;
+  try {
+    const releases = await githubJson(releasesApiUrl);
+    const release = releases.find((candidate) => candidate.tag_name === args.tag);
+    if (!release) {
+      throw new Error(`Release ${args.tag} was not found in ${releasesApiUrl}`);
+    }
+    return assetUrlsFromRelease(release);
+  } catch (error) {
+    console.warn(`${error.message}. Falling back to public release asset URLs.`);
+    return new Map();
+  }
+}
+
+function assetUrlsFromRelease(release) {
+  const assets = new Map();
+  for (const asset of release.assets || []) {
+    if (asset.name && asset.url) {
+      assets.set(asset.name, asset.url);
+    }
+  }
+  return assets;
+}
+
+function releaseAssetSource(args, releaseAssetUrls, assetName) {
+  const apiUrl = releaseAssetUrls.get(assetName);
+  if (apiUrl) {
+    return {
+      url: apiUrl,
+      accept: 'application/octet-stream'
+    };
+  }
+
+  return {
+    url: `https://github.com/${args.repo}/releases/download/${args.tag}/${assetName}`,
+    accept: ''
+  };
+}
+
+async function download(url, destination, options = {}) {
+  const headers = githubHeaders(options.accept);
 
   const attempts = Number(process.env.NPM_DOWNLOAD_RETRIES || 3) + 1;
   let lastError = null;
@@ -417,10 +494,11 @@ This package installs the Sealtun CLI by selecting one of the optional platform-
 
   const downloadDir = mkdtempSync(path.join(tmpdir(), 'sealtun-npm-assets-'));
   try {
+    const releaseAssetUrls = await resolveReleaseAssetUrls(args);
     const checksumsPath = path.join(downloadDir, 'checksums.txt');
-    const checksumsUrl = `https://github.com/${args.repo}/releases/download/${args.tag}/checksums.txt`;
+    const checksumsSource = releaseAssetSource(args, releaseAssetUrls, 'checksums.txt');
     console.log('Downloading checksums.txt');
-    await download(checksumsUrl, checksumsPath);
+    await download(checksumsSource.url, checksumsPath, { accept: checksumsSource.accept });
     const checksums = parseChecksums(readFileSync(checksumsPath, 'utf8'));
     if (checksums.size === 0) {
       throw new Error('checksums.txt did not contain any SHA-256 entries');
@@ -431,11 +509,11 @@ This package installs the Sealtun CLI by selecting one of the optional platform-
       const packageDir = path.join(args.outDir, target.id);
       const packageBinDir = path.join(packageDir, 'bin');
       const assetName = assetNameFor(target);
-      const assetUrl = `https://github.com/${args.repo}/releases/download/${args.tag}/${assetName}`;
+      const assetSource = releaseAssetSource(args, releaseAssetUrls, assetName);
       const archivePath = path.join(downloadDir, assetName);
 
       console.log(`Downloading ${assetName}`);
-      await download(assetUrl, archivePath);
+      await download(assetSource.url, archivePath, { accept: assetSource.accept });
       verifyChecksum(archivePath, assetName, checksums);
 
       mkdirSync(packageBinDir, { recursive: true });

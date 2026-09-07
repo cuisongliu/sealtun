@@ -116,6 +116,8 @@ sealtun inspect <id> --watch                     # continuous inspection
 sealtun logs <id> --tail 200 --follow            # remote pod logs
 sealtun doctor [--fix --dry-run] [--fix]          # diagnostics and conservative fixes
 sealtun stop / start / cleanup <id>               # pause (resumable) / resume / delete
+sealtun requests <id> [--follow]                  # live public request log (webhook debugging)
+sealtun requests replay <id> <seq>                # replay a captured request against the local service
 ```
 
 ## Declarative Configuration

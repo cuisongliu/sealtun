@@ -248,6 +248,9 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 		if temporaryURL != "" {
 			qrTarget = temporaryURL
 		}
+		if warning := qrNarrowTerminalWarning(out); warning != "" {
+			fmt.Fprintf(out, "[!] %s\n", warning)
+		}
 		fmt.Fprintf(out, "[+] Scan this code to open the tunnel on another device:\n")
 		printTerminalQR(out, qrTarget)
 	}

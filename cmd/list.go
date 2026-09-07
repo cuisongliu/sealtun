@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	daemonstate "github.com/labring/sealtun/pkg/daemon"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/spf13/cobra"
 )
@@ -198,7 +199,7 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 			CustomDomain:                sess.CustomDomain,
 			PublicPort:                  sess.PublicPort,
 			LocalPort:                   valueOr(sess.LocalPort, "-"),
-			TargetURL:                   sessionTargetLabel(sess),
+			TargetURL:                   listTargetLabel(sess),
 			TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS),
 			PID:                         sess.PID,
 			Mode:                        valueOr(sess.Mode, "foreground"),
@@ -214,6 +215,23 @@ func listItemsFromSessions(sessions []session.TunnelSession, checkLocalPort bool
 	}
 
 	return items
+}
+
+// listTargetLabel keeps the table compact while making multi-service
+// tunnels discoverable: the primary target plus a short route count marker.
+func listTargetLabel(sess session.TunnelSession) string {
+	label := sessionTargetLabel(sess)
+	if len(sess.Routes) > 0 {
+		label += fmt.Sprintf(" (+%d route%s)", len(sess.Routes), pluralS(len(sess.Routes)))
+	}
+	return label
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func printListTable(cmd *cobra.Command, items []listItem) {
@@ -246,4 +264,19 @@ func printListTable(cmd *cobra.Command, items []listItem) {
 		)
 	}
 	_ = w.Flush()
+
+	// A stale daemon-mode tunnel is recoverable (the next daemon re-adopts
+	// it); without this hint users reasonably read "stale" as broken and may
+	// cleanup a tunnel that would have healed itself.
+	hasStaleDaemonTunnel := false
+	for _, item := range items {
+		if item.Status == "stale" && item.Mode == "daemon" {
+			hasStaleDaemonTunnel = true
+			break
+		}
+	}
+	if hasStaleDaemonTunnel && !daemonstate.Alive() {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "[!] Local daemon is not running; daemon tunnels will reconnect automatically on the next expose/apply. Run `sealtun daemon` to reconnect now.")
+	}
 }

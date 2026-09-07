@@ -27,6 +27,7 @@ type inspectPayload struct {
 	LocalPort                   string                  `json:"localPort,omitempty"`
 	TargetURL                   string                  `json:"targetUrl,omitempty"`
 	Routes                      []routes.Route          `json:"routes,omitempty"`
+	RouteHealth                 []RouteHealth           `json:"routeHealth,omitempty"`
 	TargetTLSInsecureSkipVerify bool                    `json:"targetTlsInsecureSkipVerify,omitempty"`
 	BasicAuth                   *inspectBasicAuth       `json:"basicAuth,omitempty"`
 	AccessPolicy                *inspectAccessPolicy    `json:"accessPolicy,omitempty"`
@@ -173,6 +174,7 @@ func collectInspectPayloadWithContext(ctx context.Context, tunnelID string) (*in
 		PublicPort:                  sess.PublicPort,
 		LocalPort:                   sess.LocalPort,
 		Routes:                      sess.Routes,
+		RouteHealth:                 snapshot.RouteHealth,
 		TargetURL:                   sessionTargetLabel(*sess),
 		TargetTLSInsecureSkipVerify: targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS),
 		BasicAuth:                   inspectBasicAuthFromSession(sess.BasicAuth),
@@ -310,7 +312,7 @@ func printInspect(cmd *cobra.Command, payload *inspectPayload) {
 		fmt.Fprintln(out, "  Target TLS: certificate verification disabled")
 	}
 	for _, route := range payload.Routes {
-		fmt.Fprintf(out, "  Route: %s -> localhost:%d (prefix stripped)\n", routes.NormalizePath(route.Path), route.Port)
+		fmt.Fprintf(out, "  Route: %s -> localhost:%d (prefix stripped%s)\n", routes.NormalizePath(route.Path), route.Port, routeHealthSuffix(payload.RouteHealth, route))
 	}
 	if payload.BasicAuth != nil && payload.BasicAuth.Enabled {
 		fmt.Fprintf(out, "  Basic Auth: enabled")
@@ -458,4 +460,18 @@ func inspectAccessPolicyFromSession(config *session.AccessPolicy) *inspectAccess
 		return nil
 	}
 	return payload
+}
+
+// routeHealthSuffix annotates a route line with its probe result when health
+// data is available; an empty suffix keeps single-service output unchanged.
+func routeHealthSuffix(health []RouteHealth, route routes.Route) string {
+	for _, h := range health {
+		if h.Port == route.Port && h.Path == routes.NormalizePath(route.Path) {
+			if h.Reachable {
+				return ", reachable"
+			}
+			return ", UNREACHABLE"
+		}
+	}
+	return ""
 }

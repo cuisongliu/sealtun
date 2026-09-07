@@ -60,6 +60,10 @@ func handleRoutedForwarding(stream net.Conn, target Target) {
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if prefix, ok := r.Context().Value(routePrefixContextKey{}).(string); ok && prefix != "" {
+				WriteUnavailablePage(w, r.URL.Host, fmt.Sprintf("The local service matched by route %q (the path prefix was stripped before forwarding) is not reachable yet: %v", prefix, err))
+				return
+			}
 			WriteUnavailablePage(w, r.URL.Host, fmt.Sprintf("The local service for this path is not reachable yet: %v", err))
 		},
 	}

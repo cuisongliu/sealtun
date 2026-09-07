@@ -212,6 +212,9 @@ func collectTunnelDoctorPayload(ctx context.Context, tunnelID string) (*tunnelDo
 		ownerDoctorCheck(*sess, snapshot.ProcessAlive),
 		targetDoctorCheck(*sess, snapshot.LocalPortReachable),
 	)
+	if check, ok := routesDoctorCheck(*sess, snapshot.RouteHealth); ok {
+		payload.Checks = append(payload.Checks, check)
+	}
 
 	remoteCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	remote, err := collectRemoteDiagnosticsWithContext(remoteCtx, *sess)
@@ -907,4 +910,29 @@ func redactSensitiveText(value string) string {
 		out = rule.pattern.ReplaceAllString(out, rule.repl)
 	}
 	return out
+}
+
+// routesDoctorCheck reports per-route local service health so a dead routed
+// service is diagnosed instead of hiding behind a healthy primary target.
+func routesDoctorCheck(sess session.TunnelSession, health []RouteHealth) (doctorCheck, bool) {
+	if len(sess.Routes) == 0 {
+		return doctorCheck{}, false
+	}
+	if sess.ConnectionState == session.ConnectionStateStopped {
+		return doctorCheck{Name: "routes", Status: "skip", Detail: "tunnel is stopped"}, true
+	}
+	var dead []string
+	for _, h := range health {
+		if !h.Reachable {
+			dead = append(dead, fmt.Sprintf("%s -> localhost:%d", h.Path, h.Port))
+		}
+	}
+	if len(dead) == 0 {
+		return doctorCheck{Name: "routes", Status: "ok", Detail: fmt.Sprintf("all %d routed service(s) accept TCP connections", len(sess.Routes))}, true
+	}
+	return doctorCheck{
+		Name:   "routes",
+		Status: "fail",
+		Detail: fmt.Sprintf("unreachable routed services: %s; requests to these paths return the unavailable page while the primary target stays healthy", strings.Join(dead, ", ")),
+	}, true
 }

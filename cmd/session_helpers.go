@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	daemonstate "github.com/labring/sealtun/pkg/daemon"
 	"github.com/labring/sealtun/pkg/k8s"
 	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
+	"github.com/labring/sealtun/pkg/routes"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/labring/sealtun/pkg/tunnel"
 )
@@ -27,6 +29,15 @@ type sessionSnapshot struct {
 	Status             string
 	ProcessAlive       bool
 	LocalPortReachable bool
+	RouteHealth        []RouteHealth
+}
+
+// RouteHealth reports whether the local service behind one path-prefix route
+// currently accepts TCP connections.
+type RouteHealth struct {
+	Path      string `json:"path"`
+	Port      int    `json:"port"`
+	Reachable bool   `json:"reachable"`
 }
 
 func findSession(tunnelID string) (*session.TunnelSession, error) {
@@ -279,9 +290,11 @@ func classifySession(sess session.TunnelSession, checkLocalPort bool) sessionSna
 	processAlive := sessionOwnerAlive(sess)
 	status := session.RuntimeStatusWithOwner(sess, processAlive)
 	localReachable := false
+	var routeHealth []RouteHealth
 	if checkLocalPort {
 		localReachable = targetReachable(sessionTargetURL(sess))
-		if status == "active" && processAlive && !localReachable {
+		routeHealth = probeRouteHealth(sess)
+		if status == "active" && processAlive && (!localReachable || anyRouteUnreachable(routeHealth)) {
 			status = "degraded"
 		}
 	} else if status == "active" && processAlive && sess.Mode != "daemon" {
@@ -292,7 +305,40 @@ func classifySession(sess session.TunnelSession, checkLocalPort bool) sessionSna
 		Status:             status,
 		ProcessAlive:       processAlive,
 		LocalPortReachable: localReachable,
+		RouteHealth:        routeHealth,
 	}
+}
+
+// probeRouteHealth dials every route's local port so a dead routed service
+// cannot hide behind a healthy primary target.
+func probeRouteHealth(sess session.TunnelSession) []RouteHealth {
+	if len(sess.Routes) == 0 {
+		return nil
+	}
+	health := make([]RouteHealth, 0, len(sess.Routes))
+	for _, route := range sess.Routes {
+		address := net.JoinHostPort("localhost", strconv.Itoa(route.Port))
+		conn, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
+		reachable := err == nil
+		if conn != nil {
+			_ = conn.Close()
+		}
+		health = append(health, RouteHealth{
+			Path:      routes.NormalizePath(route.Path),
+			Port:      route.Port,
+			Reachable: reachable,
+		})
+	}
+	return health
+}
+
+func anyRouteUnreachable(health []RouteHealth) bool {
+	for _, route := range health {
+		if !route.Reachable {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionIsStale(sess session.TunnelSession, gracePeriod time.Duration) bool {

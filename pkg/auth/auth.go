@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -234,6 +235,53 @@ func pollIntervalFromSeconds(interval int) time.Duration {
 		return 5 * time.Second
 	}
 	return time.Duration(interval) * time.Second
+}
+
+// ErrInvalidGrant marks a permanently rejected refresh token (revoked or
+// expired); the only recovery is an interactive re-login. Transient failures
+// (network, 5xx) use ordinary errors so callers can retry later.
+var ErrInvalidGrant = errors.New("refresh token rejected (invalid_grant)")
+
+// RefreshTokens exchanges a refresh token for a new access token at the
+// region's OAuth token endpoint.
+func RefreshTokens(region, refreshToken string) (*TokenResponse, error) {
+	apiURL := fmt.Sprintf("%s/api/auth/oauth2/token", strings.TrimRight(region, "/"))
+	data := url.Values{}
+	data.Set("client_id", ClientID)
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	client := httpClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := readBoundedResponseBody(resp.Body)
+		var errRes ErrorResponse
+		_ = json.Unmarshal(body, &errRes)
+		if errRes.Error == "invalid_grant" {
+			return nil, ErrInvalidGrant
+		}
+		return nil, fmt.Errorf("token refresh failed (%d): %s", resp.StatusCode, SanitizeServerText(string(body)))
+	}
+
+	var tokenRes TokenResponse
+	if err := decodeLimitedJSON(resp.Body, &tokenRes); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(tokenRes.AccessToken) == "" {
+		return nil, fmt.Errorf("token refresh returned an empty access token")
+	}
+	return &tokenRes, nil
 }
 
 // RegionTokenResponse represents the response containing the region token and kubeconfig

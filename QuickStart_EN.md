@@ -13,7 +13,7 @@ Alternatives: one-off run via npx (`npx sealtun@latest login`), direct binaries 
 ## Three Steps
 
 ```bash
-sealtun login      # 1. authorize in the browser
+sealtun login      # 1. authorize in the browser (expired credentials and cluster CA rotation are then renewed automatically)
 sealtun up         # 2. create a tunnel interactively (auto-discovers local ports)
 sealtun list       # 3. view tunnels
 ```

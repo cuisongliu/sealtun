@@ -13,7 +13,7 @@ npm install -g sealtun
 ## 三步上手
 
 ```bash
-sealtun login      # 1. 浏览器授权登录
+sealtun login      # 1. 浏览器授权登录（此后凭证过期或集群 CA 轮换会自动用 refresh token 续期）
 sealtun up         # 2. 交互式创建隧道（自动发现本地端口）
 sealtun list       # 3. 查看隧道
 ```

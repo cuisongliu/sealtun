@@ -20,9 +20,13 @@ type Workspace struct {
 }
 
 type AuthData struct {
-	Region           string     `json:"region"`
-	SealosDomain     string     `json:"sealos_domain,omitempty"`
-	AccessToken      string     `json:"access_token"`
+	Region       string `json:"region"`
+	SealosDomain string `json:"sealos_domain,omitempty"`
+	AccessToken  string `json:"access_token"`
+	// RefreshToken enables non-interactive credential renewal. It is only
+	// present for logins created after this field existed; older sessions
+	// simply fall back to manual re-login when credentials expire.
+	RefreshToken     string     `json:"refresh_token,omitempty"`
 	RegionalToken    string     `json:"regional_token"`
 	AuthenticatedAt  string     `json:"authenticated_at"`
 	AuthMethod       string     `json:"auth_method"`

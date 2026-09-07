@@ -321,6 +321,7 @@ func runLoginFlowWithProfile(regionInput string, insecure bool, profileName stri
 		Region:           region,
 		SealosDomain:     sealosDomain,
 		AccessToken:      tokenRes.AccessToken,
+		RefreshToken:     tokenRes.RefreshToken,
 		RegionalToken:    regionData.Data.Token,
 		AuthenticatedAt:  time.Now().Format(time.RFC3339),
 		AuthMethod:       "oauth2_device_grant",

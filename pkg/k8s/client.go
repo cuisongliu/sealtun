@@ -161,6 +161,14 @@ func knownSealosDomainForRegion(regionURL string) string {
 }
 
 // EnsureTunnel deploys the server module in kubernetes
+// ProbeAPIServer performs a cheap authenticated round trip so callers can
+// verify the kubeconfig's credentials and CA are still accepted before
+// running mutating operations.
+func (c *Client) ProbeAPIServer(ctx context.Context) error {
+	_, err := c.clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
+	return err
+}
+
 func (c *Client) EnsureTunnel(ctx context.Context, tunnelID string, secret string, protocol string, localPort string) (string, error) {
 	hosts, err := c.EnsureTunnelWithOptions(ctx, tunnelID, secret, protocol, localPort, TunnelOptions{})
 	if err != nil {

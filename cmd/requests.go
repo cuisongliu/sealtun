@@ -14,6 +14,7 @@ import (
 
 	"crypto/tls"
 
+	tunnelprotocol "github.com/labring/sealtun/pkg/protocol"
 	"github.com/labring/sealtun/pkg/routes"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/labring/sealtun/pkg/tunnel"
@@ -362,6 +363,9 @@ func replayTLSConfig() *tls.Config {
 // state checks: the request log lives in the relay pod, so a stopped tunnel
 // or a session without a secret can never serve it.
 func requestsSessionUsable(sess *session.TunnelSession) error {
+	if sess.Protocol != "" && !tunnelprotocol.IsHTTP(sess.Protocol) {
+		return fmt.Errorf("the request log captures HTTPS traffic only; %s tunnels use raw TCP, which has no per-request log", tunnelprotocol.Normalize(sess.Protocol))
+	}
 	if sess.ConnectionState == session.ConnectionStateStopped {
 		return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before reading the request log", sess.TunnelID, sess.TunnelID)
 	}

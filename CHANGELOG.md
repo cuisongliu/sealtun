@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.0.41] - 2026-09-07
+
+### Added
+- **`sealtun requests`**: live public request log from the relay pod's in-memory ring buffer (200 entries). Captures method, redacted path, status, duration, client IP, redacted headers, and a bounded body preview; WebSocket upgrades and binary bodies are excluded. Served only over the tunnel-secret-protected `/_sealtun/requests` endpoint, so request data never leaves your namespace. Supports `--follow`, `--json`, and `--limit`.
+- **`sealtun requests replay <id> <seq>`**: re-sends a captured request against the local service, following the tunnel's route table with prefix stripping. Redacted headers (Authorization, Cookie) are not sent, webhook signature headers pass through, and an `X-Sealtun-Replayed-At` marker is added. Full textual bodies up to 32KiB are stored for replay.
+- **Multi-service routes**: `expose 3000 --route /api=8080` or YAML `routes: [{path, port}]` multiplexes several local services into one HTTPS tunnel by path prefix (longest match, segment-aware). Matched prefixes are stripped before forwarding; everything else falls back to the primary target. Absolute-path `Location` redirects from routed apps are re-prefixed automatically.
+- **`expose --qr`**: prints a terminal QR code for the public URL (or the temporary access URL when token auth is set) for instant mobile debugging; warns when the terminal is too narrow to scan.
+- **`expose --ttl` and guided TTL**: tunnels can auto-delete after a duration; guided `up` suggests a 2h TTL by default so forgotten tunnels stop billing.
+- **Automatic credential renewal**: expired credentials and cluster CA rotation now self-heal via the stored OAuth refresh token (cross-process locked, fail-safe to re-login guidance). Logins created before this version gain it on their next login.
+- **Daemon self-healing**: the daemon restarts automatically when its binary fingerprint no longer matches the CLI (upgrades cannot silently drop new session fields), and daemon-mode tunnels now survive daemon crashes instead of being deleted as stale.
+- **Routed-service health**: `inspect`, `list --check`, and `doctor` probe every route's local port; a dead routed service degrades the tunnel and is named by doctor. `list` shows a `(+N routes)` marker.
+
+### Changed
+- WebSocket upgrades are now audited with status 101 instead of a misleading 200.
+- `apply` plan output shows the routes being created; `apply` diff reports route changes.
+- Daemon-mode sessions are no longer auto-deleted when the daemon's PID dies; the restarted daemon re-adopts them.
+
+### Fixed
+- **Security: replay cannot be steered off-box**: replay URIs are rebuilt from path+query (origin form) so proxy-style absolute-form request lines cannot redirect a replay.
+- **Security: routed reverse proxy timeouts**: the routed forwarding HTTP server now sets read-header and idle timeouts (gosec G114); hijacked WebSocket connections are unaffected.
+- Body capture now runs before the proxy drains the request, and replay route resolution precedes the session's default localhost target — two bugs only visible with real traffic.
+- `requests`/`replay` on stopped tunnels now fail upfront with start guidance instead of a misleading old-image message; SSH/TCP tunnels get a clear HTTPS-only explanation.
+- Route prefixes containing `%` escapes or dot segments are rejected as dead configuration; a root (`/`) route that shadows the primary target now prints a warning in both `expose` and `apply`.
+- Error hints are locked to stay silent for route validation messages, and YAML route ports hit the same octal/leading-zero rejection as `localPort`.
+
+### Docs
+- QuickStart and skill references now document the verified routing boundary: keep the SPA/frontend as the primary target (works end to end, including Vite HMR) and put APIs behind route prefixes; an SPA mounted under a prefix breaks its absolute asset URLs.
+
 ## [v0.0.40] - 2026-09-03
 
 ### Removed

@@ -244,3 +244,14 @@ func TestRequestsSessionUsable(t *testing.T) {
 		t.Fatalf("usable session rejected: %v", err)
 	}
 }
+
+func TestRequestsSessionUsableRejectsRawTCP(t *testing.T) {
+	sshSess := &session.TunnelSession{TunnelID: "t1", Secret: "x", Protocol: "ssh"}
+	if err := requestsSessionUsable(sshSess); err == nil || !strings.Contains(err.Error(), "HTTPS traffic only") {
+		t.Fatalf("ssh tunnel must be rejected with protocol guidance, got %v", err)
+	}
+	tcpSess := &session.TunnelSession{TunnelID: "t1", Secret: "x", Protocol: "tcp"}
+	if err := requestsSessionUsable(tcpSess); err == nil {
+		t.Fatal("tcp tunnel must be rejected")
+	}
+}

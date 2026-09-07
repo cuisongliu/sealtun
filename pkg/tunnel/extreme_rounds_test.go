@@ -366,3 +366,39 @@ func TestR3HostHeaderDoesNotAffectRouting(t *testing.T) {
 		}
 	}
 }
+
+// TestUpgradeToNonUpgradingRoutedApp reproduces a cloud-observed failure:
+// a WebSocket handshake aimed at a routed path whose app does NOT upgrade
+// must return the app's ordinary response (status and body), not an empty
+// or errored one.
+func TestUpgradeToNonUpgradingRoutedApp(t *testing.T) {
+	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("api:" + r.URL.Path))
+	})
+	apiListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startFixedApp(t, apiListener, apiHandler)
+
+	rig := newExtremeRig(t, apiHandler, mustAtoiExtreme(t, apiListener))
+	defer rig.cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, rig.base+"/api/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("upgrade request errored: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "api:/ws" {
+		t.Fatalf("non-upgrading upgrade response mangled: %d %q", resp.StatusCode, body)
+	}
+}

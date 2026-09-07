@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
+	"crypto/tls"
+
+	"github.com/labring/sealtun/pkg/routes"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/labring/sealtun/pkg/tunnel"
 	"github.com/spf13/cobra"
@@ -210,4 +214,146 @@ func formatRequestDuration(ms int64) string {
 		return fmt.Sprintf("%.1fs", float64(ms)/1000)
 	}
 	return fmt.Sprintf("%dms", ms)
+}
+
+var requestsReplayCmd = &cobra.Command{
+	Use:   "replay <tunnel-id> <seq>",
+	Short: "Replay a captured request against the local service",
+	Long: `Re-sends one captured request to the local service the tunnel forwards to,
+following the tunnel's route table for path-prefix dispatch. Redacted headers
+(Authorization, Cookie) are not sent; webhook signature headers pass through.
+The response status and body are printed for inspection.`,
+	Args:         cobra.ExactArgs(2),
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRequestsReplay(cmd, args[0], args[1])
+	},
+}
+
+func init() {
+	requestsCmd.AddCommand(requestsReplayCmd)
+}
+
+func runRequestsReplay(cmd *cobra.Command, tunnelID, seqText string) error {
+	seq, err := strconv.ParseInt(seqText, 10, 64)
+	if err != nil || seq < 1 {
+		return fmt.Errorf("seq must be a positive integer from `sealtun requests %s`", tunnelID)
+	}
+	sess, err := findSession(tunnelID)
+	if err != nil {
+		return err
+	}
+	if sess.Secret == "" {
+		return fmt.Errorf("session secret for %s is unavailable", tunnelID)
+	}
+	payload, err := fetchTunnelRequests(cmd.Context(), *sess, 200)
+	if err != nil {
+		return err
+	}
+	var entry *tunnel.RequestLogEntry
+	for i := range payload.Requests {
+		if payload.Requests[i].Seq == seq {
+			entry = &payload.Requests[i]
+			break
+		}
+	}
+	if entry == nil {
+		return fmt.Errorf("request #%d is no longer in the log; the ring buffer keeps the latest %d entries", seq, 200)
+	}
+
+	target, err := replayTargetURL(*sess, entry)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	if entry.BodyOmitted {
+		fmt.Fprintf(out, "[!] Request #%d body was not stored (binary or over 32KiB); replaying without it.\n", seq)
+	}
+	fmt.Fprintf(out, "[+] Replaying %s %s -> %s\n", entry.Method, entry.Path, target)
+
+	req, err := http.NewRequestWithContext(cmd.Context(), entry.Method, target, strings.NewReader(entry.Body))
+	if err != nil {
+		return err
+	}
+	for name, value := range entry.Headers {
+		if value == "(redacted)" || replaySkippedHeader(name) {
+			continue
+		}
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("X-Sealtun-Replayed-At", entry.Time)
+
+	resp, err := replayHTTPClient(*sess).Do(req)
+	if err != nil {
+		return fmt.Errorf("replay request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	fmt.Fprintf(out, "[+] Response: %s\n", resp.Status)
+	if len(body) > 0 {
+		fmt.Fprintf(out, "%s\n", body)
+	}
+	return nil
+}
+
+// replayTargetURL resolves where a captured request should be re-sent,
+// mirroring the tunnel's live dispatch: route match (with prefix stripping)
+// or the primary target.
+func replayTargetURL(sess session.TunnelSession, entry *tunnel.RequestLogEntry) (string, error) {
+	uri := entry.URI
+	if uri == "" {
+		uri = entry.Path
+	}
+	// Routes win over TargetURL because local-port sessions always carry a
+	// default localhost TargetURL; checking it first would bypass the route
+	// table entirely. Route and explicit --target upstreams are mutually
+	// exclusive by validation, so a matched route is always authoritative.
+	if route, ok := routes.MatchRoute(sess.Routes, requestURIPath(uri)); ok {
+		return "http://localhost:" + strconv.Itoa(route.Port) + routes.StripPrefix(route.Path, requestURIPath(uri)) + requestURIQuery(uri), nil
+	}
+	if strings.TrimSpace(sess.TargetURL) != "" {
+		return strings.TrimRight(sess.TargetURL, "/") + uri, nil
+	}
+	if sess.LocalPort == "" {
+		return "", fmt.Errorf("session %s has no local port to replay against", sess.TunnelID)
+	}
+	return "http://localhost:" + sess.LocalPort + uri, nil
+}
+
+func requestURIPath(uri string) string {
+	if i := strings.Index(uri, "?"); i >= 0 {
+		return uri[:i]
+	}
+	return uri
+}
+
+func requestURIQuery(uri string) string {
+	if i := strings.Index(uri, "?"); i >= 0 {
+		return uri[i:]
+	}
+	return ""
+}
+
+// replaySkippedHeader lists hop-by-hop and transport-managed headers that the
+// replay client must set itself.
+func replaySkippedHeader(name string) bool {
+	switch http.CanonicalHeaderKey(name) {
+	case "Host", "Content-Length", "Connection", "Upgrade", "X-Sealtun-Replayed-At":
+		return true
+	}
+	return false
+}
+
+// replayHTTPClient mirrors the session's target TLS behavior when replaying
+// against an https upstream target.
+func replayHTTPClient(sess session.TunnelSession) *http.Client {
+	client := &http.Client{Timeout: 15 * time.Second}
+	if targetTLSInsecureSkipVerifyEnabled(sess.TargetTLS) {
+		client.Transport = &http.Transport{TLSClientConfig: replayTLSConfig()}
+	}
+	return client
+}
+
+func replayTLSConfig() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- mirrors the session's explicit per-target TLS setting for private upstreams.
 }

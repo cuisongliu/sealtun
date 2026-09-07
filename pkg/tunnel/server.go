@@ -375,9 +375,11 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 	s.activeRequests.Add(1)
 	defer s.activeRequests.Add(-1)
 
-	bodyPreview, bodyTruncated := "", false
+	bodyPreview, replayBody, bodyOmitted, bodyTruncated := "", "", false, false
 	if !isUpgradeRequest(r) {
-		bodyPreview, bodyTruncated = captureRequestBodyPreview(r)
+		// Must happen before ServeHTTP drains the body; captureRequestBody
+		// restores r.Body so the proxy forwards it byte-identically.
+		bodyPreview, replayBody, bodyOmitted, bodyTruncated = captureRequestBody(r)
 	}
 
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -389,7 +391,7 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 	s.totalResponseBytes.Add(int64(recorder.bytes))
 	s.totalDurationMs.Add(time.Since(start).Milliseconds())
 	if !isUpgradeRequest(r) {
-		s.requestLog.add(captureRequestLogEntry(r, status, int64(recorder.bytes), time.Since(start), clientIP.String(), bodyPreview, bodyTruncated))
+		s.requestLog.add(captureRequestLogEntry(r, status, int64(recorder.bytes), time.Since(start), clientIP.String(), bodyPreview, replayBody, bodyOmitted, bodyTruncated))
 	}
 	if status >= 500 {
 		s.total5xx.Add(1)

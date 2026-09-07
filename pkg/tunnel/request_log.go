@@ -11,7 +11,8 @@ import (
 
 const (
 	requestLogCapacity    = 200
-	requestBodyPreviewMax = 4 << 10 // 4 KiB stored preview per request
+	requestBodyPreviewMax = 4 << 10  // 4 KiB display preview per request
+	requestBodyReplayMax  = 32 << 10 // 32 KiB full body kept for replay
 	requestHeaderValueMax = 512
 )
 
@@ -31,6 +32,13 @@ type RequestLogEntry struct {
 	Headers       map[string]string `json:"headers,omitempty"`
 	BodyPreview   string            `json:"bodyPreview,omitempty"`
 	BodyTruncated bool              `json:"bodyTruncated,omitempty"`
+	// URI is the raw request URI (path + query) for replay; it is only served
+	// over the secret-protected endpoint, never printed in the table view.
+	URI string `json:"uri,omitempty"`
+	// Body holds the full request body for replay when it is textual and at
+	// most requestBodyReplayMax bytes; BodyOmitted reports a skipped body.
+	Body        string `json:"body,omitempty"`
+	BodyOmitted bool   `json:"bodyOmitted,omitempty"`
 }
 
 type requestLog struct {
@@ -99,31 +107,33 @@ func captureRequestHeaders(header http.Header) map[string]string {
 	return captured
 }
 
-// captureRequestBodyPreview reads up to requestBodyPreviewMax bytes of a
-// text-ish request body and restores r.Body so the proxy forwards it
-// untouched. Binary, streaming, and oversized content types are skipped
+// captureRequestBody reads a text-ish request body for display preview (4
+// KiB) and replay (32 KiB), then restores r.Body so the proxy forwards it
+// untouched. Binary, streaming, and oversized bodies are marked omitted
 // rather than buffered, keeping memory bounded by the ring capacity.
-func captureRequestBodyPreview(r *http.Request) (preview string, truncated bool) {
+func captureRequestBody(r *http.Request) (preview, replayBody string, omitted, truncated bool) {
 	if r.Body == nil || r.Body == http.NoBody {
-		return "", false
+		return "", "", false, false
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || !isTextualMediaType(mediaType) {
-		return "", false
+		return "", "", true, false
 	}
-	limited := io.LimitReader(r.Body, requestBodyPreviewMax+1)
-	buf := make([]byte, requestBodyPreviewMax+1)
-	n, _ := io.ReadFull(limited, buf)
-	truncated = n > requestBodyPreviewMax
-	consumed := string(buf[:n])
-	preview = consumed
+	limited := io.LimitReader(r.Body, requestBodyReplayMax+1)
+	buf, _ := io.ReadAll(limited)
+	truncated = len(buf) > requestBodyReplayMax
+	// text holds every consumed byte (cap plus the one-byte probe), so the
+	// restore below is byte-identical by construction.
+	text := string(buf)
+	preview = text
+	if len(preview) > requestBodyPreviewMax {
+		preview = preview[:requestBodyPreviewMax]
+	}
+	r.Body = io.NopCloser(io.MultiReader(strings.NewReader(text), r.Body))
 	if truncated {
-		preview = consumed[:requestBodyPreviewMax]
+		return preview, "", true, true
 	}
-	// Restore every byte that was consumed (the preview cap plus the one-byte
-	// truncation probe), followed by the untouched remainder.
-	r.Body = io.NopCloser(io.MultiReader(strings.NewReader(consumed), r.Body))
-	return preview, truncated
+	return preview, text, false, false
 }
 
 func isTextualMediaType(mediaType string) bool {
@@ -143,7 +153,11 @@ func isUpgradeRequest(r *http.Request) bool {
 	return r.Header.Get("Upgrade") != ""
 }
 
-func captureRequestLogEntry(r *http.Request, status int, bytesOut int64, duration time.Duration, clientIP string, bodyPreview string, bodyTruncated bool) RequestLogEntry {
+func captureRequestLogEntry(r *http.Request, status int, bytesOut int64, duration time.Duration, clientIP string, preview, replayBody string, omitted, truncated bool) RequestLogEntry {
+	uri := r.URL.RequestURI()
+	if len(uri) > 2048 {
+		uri = uri[:2048]
+	}
 	return RequestLogEntry{
 		Time:          time.Now().UTC().Format(time.RFC3339),
 		Method:        r.Method,
@@ -153,7 +167,10 @@ func captureRequestLogEntry(r *http.Request, status int, bytesOut int64, duratio
 		ClientIP:      clientIP,
 		BytesOut:      bytesOut,
 		Headers:       captureRequestHeaders(r.Header),
-		BodyPreview:   bodyPreview,
-		BodyTruncated: bodyTruncated,
+		BodyPreview:   preview,
+		BodyTruncated: truncated,
+		URI:           uri,
+		Body:          replayBody,
+		BodyOmitted:   omitted,
 	}
 }

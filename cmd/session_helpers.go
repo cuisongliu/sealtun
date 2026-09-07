@@ -40,7 +40,8 @@ type RouteHealth struct {
 	Reachable bool   `json:"reachable"`
 }
 
-func findSession(tunnelID string) (*session.TunnelSession, error) {
+// findSession is a var so tests can stub session lookups.
+var findSession = func(tunnelID string) (*session.TunnelSession, error) {
 	sess, err := session.Get(tunnelID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

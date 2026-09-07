@@ -46,14 +46,19 @@ func TestCaptureRequestHeadersRedaction(t *testing.T) {
 }
 
 func TestCaptureRequestBodyPreviewRestoresBody(t *testing.T) {
-	body := strings.Repeat(`{"a":1}`, 1000) // ~7KB, over the 4KB preview cap
+	// 7KB: over the 4KB preview cap but under the 32KB replay cap — preview is
+	// capped, the full body is kept, and the proxy gets it byte-identical.
+	body := strings.Repeat(`{"a":1}`, 1000)
 	req := httptest.NewRequest(http.MethodPost, "https://example.test/submit", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.ContentLength = int64(len(body))
 
-	preview, truncated := captureRequestBodyPreview(req)
-	if !truncated {
-		t.Fatal("oversized body must be marked truncated")
+	preview, replayBody, omitted, truncated := captureRequestBody(req)
+	if truncated || omitted {
+		t.Fatal("7KB body is under the replay cap and must be fully kept")
+	}
+	if replayBody != body {
+		t.Fatal("replay body must be complete")
 	}
 	if len(preview) != requestBodyPreviewMax {
 		t.Fatalf("preview should be exactly %d bytes, got %d", requestBodyPreviewMax, len(preview))
@@ -67,12 +72,36 @@ func TestCaptureRequestBodyPreviewRestoresBody(t *testing.T) {
 	}
 }
 
+func TestCaptureRequestBodyOverReplayCap(t *testing.T) {
+	body := strings.Repeat("x", requestBodyReplayMax+100)
+	req := httptest.NewRequest(http.MethodPost, "https://example.test/big", strings.NewReader(body))
+	req.Header.Set("Content-Type", "text/plain")
+
+	preview, replayBody, omitted, truncated := captureRequestBody(req)
+	if !truncated || !omitted {
+		t.Fatal("body over the replay cap must be marked truncated and omitted")
+	}
+	if replayBody != "" {
+		t.Fatal("oversized body must not be kept for replay")
+	}
+	if len(preview) != requestBodyPreviewMax {
+		t.Fatalf("preview should stay capped, got %d", len(preview))
+	}
+	restored, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != body {
+		t.Fatalf("proxy body must be byte-identical even when omitted, got %d want %d", len(restored), len(body))
+	}
+}
+
 func TestCaptureRequestBodyPreviewSkipsBinary(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://example.test/upload", strings.NewReader("\x00\x01\x02"))
 	req.Header.Set("Content-Type", "application/octet-stream")
-	preview, truncated := captureRequestBodyPreview(req)
-	if preview != "" || truncated {
-		t.Fatalf("binary bodies must be skipped, got %q %v", preview, truncated)
+	preview, replayBody, omitted, _ := captureRequestBody(req)
+	if preview != "" || replayBody != "" || !omitted {
+		t.Fatalf("binary bodies must be skipped, got %q %q %v", preview, replayBody, omitted)
 	}
 }
 
@@ -82,6 +111,11 @@ func TestRequestsEndpointRequiresSecretAndSkipsUpgrades(t *testing.T) {
 	// public traffic without a connected client still flows through the log
 	req := httptest.NewRequest(http.MethodGet, "https://example.test/page?q=1", nil)
 	server.ServeHTTP(httptest.NewRecorder(), req)
+
+	// a POST with a textual body must be captured with preview and replay body
+	post := httptest.NewRequest(http.MethodPost, "https://example.test/submit", strings.NewReader(`{"k":"v"}`))
+	post.Header.Set("Content-Type", "application/json")
+	server.ServeHTTP(httptest.NewRecorder(), post)
 
 	// upgrade requests must not be logged (they are long-lived streams, not exchanges)
 	upgradeReq := httptest.NewRequest(http.MethodGet, "https://example.test/ws", nil)
@@ -111,7 +145,36 @@ func TestRequestsEndpointRequiresSecretAndSkipsUpgrades(t *testing.T) {
 	if strings.Contains(body, "/ws") {
 		t.Fatalf("upgrade request must not be logged: %s", body)
 	}
-	if strings.Contains(body, "q=1") {
-		t.Fatalf("query values must stay redacted: %s", body)
+	if !strings.Contains(body, `"path":"/page?\u003credacted\u003e"`) {
+		t.Fatalf("display path must stay redacted: %s", body)
+	}
+	// The raw URI (query included) is intentionally available on this
+	// secret-protected owner endpoint for replay; only the display path is redacted.
+	if !strings.Contains(body, `"uri":"/page?q=1"`) {
+		t.Fatalf("replay URI must carry the raw query: %s", body)
+	}
+	if !strings.Contains(body, `"bodyPreview":"{\"k\":\"v\"}"`) || !strings.Contains(body, `"body":"{\"k\":\"v\"}"`) {
+		t.Fatalf("POST body must be captured for preview and replay: %s", body)
+	}
+}
+
+func TestCaptureRequestBodyKeepsReplayBody(t *testing.T) {
+	body := `{"event":"push","data":"` + strings.Repeat("x", 5000) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "https://example.test/hook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	preview, replayBody, omitted, truncated := captureRequestBody(req)
+	if truncated || omitted {
+		t.Fatalf("32KB-under body must be fully kept, got truncated=%v omitted=%v", truncated, omitted)
+	}
+	if replayBody != body {
+		t.Fatalf("replay body mismatch: got %d bytes want %d", len(replayBody), len(body))
+	}
+	if len(preview) != requestBodyPreviewMax {
+		t.Fatalf("preview should be capped at 4KB, got %d", len(preview))
+	}
+	restored, _ := io.ReadAll(req.Body)
+	if string(restored) != body {
+		t.Fatal("restored body must be byte-identical")
 	}
 }

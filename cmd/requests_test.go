@@ -2,16 +2,29 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/labring/sealtun/pkg/routes"
 	"github.com/labring/sealtun/pkg/session"
 	"github.com/labring/sealtun/pkg/tunnel"
 	"github.com/spf13/cobra"
 )
+
+func mustAtoiStr(t *testing.T, value string) int {
+	t.Helper()
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
 
 func TestFormatCompactBytes(t *testing.T) {
 	cases := map[int64]string{0: "0B", 512: "512B", 2048: "2.0KB", 5 << 20: "5.0MB"}
@@ -112,5 +125,107 @@ func TestRunRequestsValidatesFlags(t *testing.T) {
 	requestsInterval = 0
 	if err := runRequests(blank, "x"); err == nil || !strings.Contains(err.Error(), "--interval") {
 		t.Fatalf("expected interval validation, got %v", err)
+	}
+}
+
+func TestReplayTargetURLRouting(t *testing.T) {
+	sess := session.TunnelSession{
+		TunnelID:  "t1",
+		LocalPort: "3000",
+		// local-port sessions always carry the default localhost TargetURL;
+		// the route table must still win.
+		TargetURL: "http://localhost:3000",
+		Routes:    []routes.Route{{Path: "/api", Port: 8080}},
+	}
+	entry := &tunnel.RequestLogEntry{URI: "/api/users?x=1"}
+	target, err := replayTargetURL(sess, entry)
+	if err != nil || target != "http://localhost:8080/users?x=1" {
+		t.Fatalf("routed replay target = %q, %v", target, err)
+	}
+	entry = &tunnel.RequestLogEntry{URI: "/other?y=2"}
+	target, err = replayTargetURL(sess, entry)
+	if err != nil || target != "http://localhost:3000/other?y=2" {
+		t.Fatalf("fallback replay target = %q, %v", target, err)
+	}
+
+	upstream := session.TunnelSession{TunnelID: "t2", TargetURL: "https://10.0.0.12:8443"}
+	target, err = replayTargetURL(upstream, entry)
+	if err != nil || target != "https://10.0.0.12:8443/other?y=2" {
+		t.Fatalf("upstream replay target = %q, %v", target, err)
+	}
+}
+
+func TestReplaySkippedHeader(t *testing.T) {
+	for _, h := range []string{"Host", "Content-Length", "Connection", "Upgrade"} {
+		if !replaySkippedHeader(h) {
+			t.Fatalf("%s must be skipped", h)
+		}
+	}
+	if replaySkippedHeader("X-Hub-Signature-256") {
+		t.Fatal("webhook signature headers must pass through")
+	}
+}
+
+func TestRequestsReplayEndToEnd(t *testing.T) {
+	var gotMethod, gotPath, gotAuth, gotSig, gotBody string
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.RequestURI()
+		gotAuth = r.Header.Get("Authorization")
+		gotSig = r.Header.Get("X-Hub-Signature-256")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("replayed-ok"))
+	}))
+	defer app.Close()
+	appPort := strings.TrimPrefix(app.URL, "http://127.0.0.1:")
+
+	stub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"requests": []map[string]any{{
+			"seq": 9, "time": "2026-09-07T00:00:00Z", "method": "POST", "path": "/api/hook?<redacted>",
+			"status": 200, "uri": "/api/hook?source=test",
+			"headers": map[string]string{"Authorization": "(redacted)", "X-Hub-Signature-256": "sha256=abc", "Content-Type": "application/json"},
+			"body":    `{"event":"ping"}`,
+		}}})
+	}))
+	defer stub.Close()
+	stubRequestsFetch(t, stub)
+
+	sess := session.TunnelSession{
+		TunnelID: "t1",
+		Secret:   "x",
+		Routes:   []routes.Route{{Path: "/api", Port: mustAtoiStr(t, appPort)}},
+	}
+	originalFind := findSession
+	findSession = func(string) (*session.TunnelSession, error) { return &sess, nil }
+	t.Cleanup(func() { findSession = originalFind })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := runRequestsReplay(cmd, "t1", "9"); err != nil {
+		t.Fatalf("replay failed: %v", err)
+	}
+	if gotMethod != "POST" || gotPath != "/hook?source=test" {
+		t.Fatalf("replay dispatch wrong: %s %s", gotMethod, gotPath)
+	}
+	if gotAuth != "" {
+		t.Fatalf("redacted Authorization must not be replayed, got %q", gotAuth)
+	}
+	if gotSig != "sha256=abc" {
+		t.Fatalf("signature header lost: %q", gotSig)
+	}
+	if gotBody != `{"event":"ping"}` {
+		t.Fatalf("body mismatch: %q", gotBody)
+	}
+	if !strings.Contains(out.String(), "201") || !strings.Contains(out.String(), "replayed-ok") {
+		t.Fatalf("response not surfaced: %q", out.String())
 	}
 }

@@ -116,6 +116,8 @@ sealtun inspect <id> --watch                     # 持续巡检
 sealtun logs <id> --tail 200 --follow            # 远端 Pod 日志
 sealtun doctor [--fix --dry-run] [--fix]          # 诊断与保守修复
 sealtun stop / start / cleanup <id>               # 停止（可恢复）/ 恢复 / 删除
+sealtun requests <id> [--follow]                  # 查看公网请求日志（webhook 调试）
+sealtun requests replay <id> <seq>                # 把捕获的请求重放到本地服务
 ```
 
 ## 声明式配置

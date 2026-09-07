@@ -4,6 +4,12 @@
 # pushing so CI never gets to deliver bad news first. Raw exit codes only.
 set -uo pipefail
 
+# Sanitize toolchain env: a user-level GOROOT pinned to a different Go version
+# than the go binary on PATH silently breaks cross-compilation (compile:
+# version X does not match go tool version Y). The go binary always knows its
+# own bundled GOROOT; a stale manual override is never the right answer.
+unset GOROOT GOTOOLDIR GOFLAGS
+
 fail=0
 step() { echo ""; echo "== $1 =="; }
 

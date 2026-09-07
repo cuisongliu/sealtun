@@ -201,7 +201,7 @@ func WriteUnavailablePage(w http.ResponseWriter, target string, detail string) {
 	body := unavailableHTML(target, "Your public tunnel is online, but the local client is not connected yet.", detail)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
-	_, _ = io.WriteString(w, body)
+	_, _ = io.WriteString(w, body) // #nosec G705 -- every interpolated value in body is escaped with html.EscapeString inside unavailableHTML; the rule cannot see through the helper.
 }
 
 func unavailableHTML(target string, heading string, detail string) string {

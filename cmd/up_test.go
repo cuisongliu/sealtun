@@ -234,7 +234,7 @@ func TestRunUpGuidedBypassesExistingProjectState(t *testing.T) {
 	upCommandInteractive = func(*cobra.Command) bool { return true }
 
 	cmd := *upCmd
-	cmd.SetIn(strings.NewReader("\n\n\nn\nn\nn\nn\ny\n"))
+	cmd.SetIn(strings.NewReader("\n\n\nn\nn\nn\n\nn\ny\n"))
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	if err := runUp(&cmd, nil, upOptions{Guided: true, JSON: true}); err != nil {
@@ -318,6 +318,7 @@ func TestBuildGuidedUpPlanFullHTTPSOptionsAndConfig(t *testing.T) {
 		"y\n\n\n" +
 		"y\n\n\n" +
 		"y\napp.example.com\n\n" +
+		"\n" +
 		"y\n" +
 		"y\n"))
 	var out bytes.Buffer
@@ -444,7 +445,7 @@ func TestBuildGuidedUpPlanCanSkipOptionalHTTPSOptions(t *testing.T) {
 	upCommandInteractive = func(*cobra.Command) bool { return true }
 
 	cmd := *upCmd
-	cmd.SetIn(strings.NewReader("\n\n\nn\nn\nn\nn\ny\n"))
+	cmd.SetIn(strings.NewReader("\n\n\nn\nn\nn\n\nn\ny\n"))
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 
@@ -486,7 +487,7 @@ func TestBuildGuidedUpPlanTargetForcesHTTPSProtocol(t *testing.T) {
 	upCommandInteractive = func(*cobra.Command) bool { return true }
 
 	cmd := *upCmd
-	cmd.SetIn(strings.NewReader("\nn\nn\nn\nn\ny\n"))
+	cmd.SetIn(strings.NewReader("\nn\nn\nn\n\nn\ny\n"))
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 

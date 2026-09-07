@@ -154,7 +154,16 @@ func isUpgradeRequest(r *http.Request) bool {
 }
 
 func captureRequestLogEntry(r *http.Request, status int, bytesOut int64, duration time.Duration, clientIP string, preview, replayBody string, omitted, truncated bool) RequestLogEntry {
-	uri := r.URL.RequestURI()
+	// Build the URI from path+query rather than URL.RequestURI(): for
+	// proxy-style absolute-form request lines RequestURI returns the full
+	// absolute URI, which would let a captured entry steer a replay off-box.
+	uri := r.URL.EscapedPath()
+	if uri == "" {
+		uri = "/"
+	}
+	if r.URL.RawQuery != "" {
+		uri += "?" + r.URL.RawQuery
+	}
 	if len(uri) > 2048 {
 		uri = uri[:2048]
 	}

@@ -229,3 +229,18 @@ func TestRequestsReplayEndToEnd(t *testing.T) {
 		t.Fatalf("response not surfaced: %q", out.String())
 	}
 }
+
+func TestRequestsSessionUsable(t *testing.T) {
+	stopped := &session.TunnelSession{TunnelID: "t1", Secret: "x", ConnectionState: session.ConnectionStateStopped}
+	if err := requestsSessionUsable(stopped); err == nil || !strings.Contains(err.Error(), "is stopped") {
+		t.Fatalf("stopped session must be rejected with guidance, got %v", err)
+	}
+	noSecret := &session.TunnelSession{TunnelID: "t1"}
+	if err := requestsSessionUsable(noSecret); err == nil || !strings.Contains(err.Error(), "secret") {
+		t.Fatalf("missing secret must be rejected, got %v", err)
+	}
+	ok := &session.TunnelSession{TunnelID: "t1", Secret: "x"}
+	if err := requestsSessionUsable(ok); err != nil {
+		t.Fatalf("usable session rejected: %v", err)
+	}
+}

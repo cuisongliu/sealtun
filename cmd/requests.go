@@ -61,8 +61,8 @@ func runRequests(cmd *cobra.Command, tunnelID string) error {
 	if err != nil {
 		return err
 	}
-	if sess.Secret == "" {
-		return fmt.Errorf("session secret for %s is unavailable; the request log requires a tunnel created with this Sealtun version", tunnelID)
+	if err := requestsSessionUsable(sess); err != nil {
+		return err
 	}
 
 	out := cmd.OutOrStdout()
@@ -139,11 +139,11 @@ func fetchTunnelRequests(ctx context.Context, sess session.TunnelSession, limit 
 	}
 	probeResp, err := client.Do(probeReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("request log is unreachable (the tunnel pod may still be starting or the tunnel is stopped): %w", err)
 	}
 	_ = probeResp.Body.Close()
 	if probeResp.StatusCode != http.StatusUnauthorized {
-		return nil, fmt.Errorf("remote tunnel image does not serve the request log yet; recreate the tunnel with this Sealtun version")
+		return nil, fmt.Errorf("remote tunnel image does not serve the request log yet; recreate the tunnel with this Sealtun version (if the tunnel is stopped, run `sealtun start` first)")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil) // #nosec G107 -- host is validated as a DNS hostname before constructing the URL.
@@ -243,8 +243,8 @@ func runRequestsReplay(cmd *cobra.Command, tunnelID, seqText string) error {
 	if err != nil {
 		return err
 	}
-	if sess.Secret == "" {
-		return fmt.Errorf("session secret for %s is unavailable", tunnelID)
+	if err := requestsSessionUsable(sess); err != nil {
+		return err
 	}
 	payload, err := fetchTunnelRequests(cmd.Context(), *sess, 200)
 	if err != nil {
@@ -356,4 +356,17 @@ func replayHTTPClient(sess session.TunnelSession) *http.Client {
 
 func replayTLSConfig() *tls.Config {
 	return &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- mirrors the session's explicit per-target TLS setting for private upstreams.
+}
+
+// requestsSessionUsable blocks misleading remote errors with upfront local
+// state checks: the request log lives in the relay pod, so a stopped tunnel
+// or a session without a secret can never serve it.
+func requestsSessionUsable(sess *session.TunnelSession) error {
+	if sess.ConnectionState == session.ConnectionStateStopped {
+		return fmt.Errorf("tunnel %s is stopped; run `sealtun start %s` before reading the request log", sess.TunnelID, sess.TunnelID)
+	}
+	if sess.Secret == "" {
+		return fmt.Errorf("session secret for %s is unavailable; the request log requires a tunnel created with this Sealtun version", sess.TunnelID)
+	}
+	return nil
 }

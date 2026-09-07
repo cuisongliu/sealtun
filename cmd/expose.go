@@ -71,6 +71,9 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if exposeTTL < 0 {
+		return fmt.Errorf("--ttl must be greater than 0 when set")
+	}
 	if strings.TrimSpace(exposeTarget) != "" && !tunnelprotocol.IsHTTP(protocol) {
 		return fmt.Errorf("--target is only supported for https tunnels")
 	}
@@ -181,6 +184,8 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 		TargetURL:       targetURL,
 		TargetTLS:       sessionTargetTLSConfig(targetTLSInsecureSkipVerify),
 		Routes:          parsedRoutes,
+		TTL:             exposeTTLLabel(exposeTTL),
+		ExpiresAt:       exposeExpiresAt(exposeTTL, nowUTC()),
 		Secret:          secret,
 		BasicAuth:       basicAuthConfig,
 		AccessPolicy:    accessPolicyConfig,
@@ -217,6 +222,9 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 	}
 	for _, route := range parsedRoutes {
 		fmt.Fprintf(out, "[+] Route: %s -> localhost:%d (prefix stripped)\n", routes.NormalizePath(route.Path), route.Port)
+	}
+	if exposeTTL > 0 {
+		fmt.Fprintf(out, "[+] Tunnel auto-expires at %s; run `sealtun cleanup` anytime to delete it sooner.\n", exposeExpiresAt(exposeTTL, nowUTC()))
 	}
 	if routes.HasRootRoute(parsedRoutes) {
 		fmt.Fprintf(out, "[!] Route / matches every path; the primary target %s will not receive traffic.\n", targetURL)
@@ -357,6 +365,7 @@ var exposeTarget string
 var targetTLSInsecureSkipVerify bool
 var exposeQR bool
 var exposeRoutes []string
+var exposeTTL time.Duration
 
 const daemonConnectTimeout = 60 * time.Second
 const daemonConnectionStability = 2 * time.Second
@@ -398,6 +407,7 @@ func registerExposeFlags(cmd *cobra.Command, includeInsecureAlias bool) {
 	cmd.Flags().BoolVar(&accessAuditEnabled, "audit", false, "Enable HTTPS access audit for allow/deny decisions")
 	cmd.Flags().BoolVar(&exposeQR, "qr", false, "Print a terminal QR code for the public URL; only for https tunnels")
 	cmd.Flags().StringArrayVar(&exposeRoutes, "route", nil, "Forward a path prefix to a local port, e.g. --route /api=8080; repeatable, https tunnels only; the prefix is stripped before forwarding")
+	cmd.Flags().DurationVar(&exposeTTL, "ttl", 0, "Auto-delete the tunnel after this duration (e.g. 2h, 30m) to avoid forgotten billing; 0 means no expiry")
 }
 
 func resolveExposeTarget(args []string, explicitTarget string) (string, string, error) {
@@ -510,6 +520,20 @@ func validateExposeQRFlag(protocol string) error {
 		return fmt.Errorf("--qr is only supported for https tunnels")
 	}
 	return nil
+}
+
+func exposeTTLLabel(ttl time.Duration) string {
+	if ttl <= 0 {
+		return ""
+	}
+	return ttl.String()
+}
+
+func exposeExpiresAt(ttl time.Duration, now time.Time) string {
+	if ttl <= 0 {
+		return ""
+	}
+	return now.Add(ttl).UTC().Format(time.RFC3339)
 }
 
 // validateExposeRoutesFlag parses --route values and confines them to HTTPS

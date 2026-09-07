@@ -58,6 +58,7 @@ type upPlan struct {
 	Template    string       `json:"template,omitempty"`
 	CommandArgs []string     `json:"commandArgs,omitempty"`
 	SaveConfig  bool         `json:"saveConfig,omitempty"`
+	TTL         string       `json:"ttl,omitempty"`
 	ConfigPath  string       `json:"configPath,omitempty"`
 	Existing    bool         `json:"existing"`
 	Discovered  discoverItem `json:"discovered,omitempty"`
@@ -301,6 +302,19 @@ func buildGuidedUpPlan(cmd *cobra.Command, args []string, opts upOptions) (*upPl
 		fmt.Fprintln(out, "HTTPS access controls and custom domains are skipped for SSH/TCP tunnels.")
 	}
 
+	// Billing protection is the default in guided mode: forgotten tunnels are
+	// the most expensive novice mistake, so the prompt suggests a TTL and the
+	// user has to actively decline it.
+	ttlText, err := promptString(in, out, "Auto-delete the tunnel after (e.g. 30m, 2h, 24h; 'no' to keep it running)", "2h")
+	if err != nil {
+		return nil, err
+	}
+	guidedTTL, err := parseGuidedTTL(ttlText)
+	if err != nil {
+		return nil, err
+	}
+	exposeTTL = guidedTTL
+
 	saveConfig, err := promptYesNo(in, out, "Save this tunnel to sealtun.yaml?", false)
 	if err != nil {
 		return nil, err
@@ -318,6 +332,7 @@ func buildGuidedUpPlan(cmd *cobra.Command, args []string, opts upOptions) (*upPl
 		SaveConfig:  saveConfig,
 		ConfigPath:  upConfigFileName,
 		Discovered:  discovered,
+		TTL:         exposeTTLLabel(guidedTTL),
 	}
 	if strings.TrimSpace(exposeTarget) != "" {
 		plan.CommandArgs = args
@@ -748,6 +763,21 @@ func promptYesNo(in *bufio.Reader, out io.Writer, label string, fallback bool) (
 	}
 }
 
+// parseGuidedTTL accepts a duration or an explicit opt-out. Empty input never
+// reaches here (promptString substitutes the fallback), so "no"/"never"/"0"
+// are the documented ways to keep the tunnel running indefinitely.
+func parseGuidedTTL(value string) (time.Duration, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "no", "never", "0":
+		return 0, nil
+	}
+	ttl, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || ttl <= 0 {
+		return 0, fmt.Errorf("invalid auto-delete duration %q; use e.g. 30m, 2h, 24h, or 'no' to keep the tunnel running", value)
+	}
+	return ttl, nil
+}
+
 func promptInt(in *bufio.Reader, out io.Writer, label string, fallback, min, max int) (int, error) {
 	fmt.Fprintf(out, "%s [%d]: ", label, fallback)
 	line, err := in.ReadString('\n')
@@ -827,6 +857,7 @@ func upPlanApplyFile(plan *upPlan) *applyFile {
 		Protocol:   plan.Protocol,
 		Domain:     customDomain,
 		WaitDomain: waitDomain,
+		TTL:        plan.TTL,
 	}
 	if item.Target == "" && strings.TrimSpace(plan.TargetURL) != defaultLocalTargetURL(plan.LocalPort) {
 		item.Target = strings.TrimSpace(plan.TargetURL)

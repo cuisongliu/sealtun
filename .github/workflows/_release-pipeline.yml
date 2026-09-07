@@ -91,6 +91,10 @@ jobs:
           args: release --clean --draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pin the release tag explicitly: when an alpha tag and a stable tag
+          # point at the same commit, goreleaser's git-describe tag inference
+          # can pick the wrong one and upload assets into the other release.
+          GORELEASER_CURRENT_TAG: ${{ inputs.tag }}
 
       - name: Record draft release status
         if: always()

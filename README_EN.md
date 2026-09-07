@@ -20,7 +20,7 @@ sealtun expose 3000
 - **SSH/TCP tunnels**: `expose 22 --protocol ssh`, `expose 5432 --protocol tcp` via direct NodePort
 - **Smart entry**: `up` discovers local ports, guides configuration, and reuses project tunnels
 - **Declarative management**: `apply -f sealtun.yaml` creates/updates tunnels idempotently, with dry-run and diff previews
-- **Diagnostics**: `inspect --remote/--metrics/--resources`, `list --check/--watch`, `doctor --fix`, `logs`
+- **Diagnostics**: `requests` live public request log (redacted headers/body preview), `inspect --remote/--metrics/--resources`, `list --check/--watch`, `doctor --fix`, `logs`
 - **Accounts**: OAuth device-flow login, multiple regions, named profiles
 
 ## Quick Start

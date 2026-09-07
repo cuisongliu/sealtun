@@ -20,7 +20,7 @@ sealtun expose 3000
 - **SSH/TCP 隧道**：`expose 22 --protocol ssh`、`expose 5432 --protocol tcp`，NodePort 直连
 - **智能入口**：`up` 自动发现本地端口、引导配置、复用项目隧道
 - **声明式管理**：`apply -f sealtun.yaml` 幂等创建/更新多隧道，支持 dry-run 和 diff 预览
-- **诊断运维**：`inspect --remote/--metrics/--resources`、`list --check/--watch`、`doctor --fix`、`logs`
+- **诊断运维**：`requests` 实时查看公网请求（含脱敏 headers/body 预览）、`inspect --remote/--metrics/--resources`、`list --check/--watch`、`doctor --fix`、`logs`
 - **账号体系**：OAuth 设备流登录、多 region、命名 profile
 
 ## 快速开始

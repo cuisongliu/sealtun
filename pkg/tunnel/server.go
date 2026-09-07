@@ -49,6 +49,7 @@ type Server struct {
 	auditStart                 int
 	streamOpenSlots            chan struct{}
 	rawTCPSlots                chan struct{}
+	requestLog                 *requestLog
 
 	mu            sync.RWMutex
 	activeSession *yamux.Session
@@ -104,6 +105,7 @@ func NewServerWithOptions(secret string, port int, protocol string, localPort st
 		rateLimiter:     rateLimiter,
 		streamOpenSlots: make(chan struct{}, maxConcurrentStreamOpens),
 		rawTCPSlots:     make(chan struct{}, maxConcurrentRawTCPConns),
+		requestLog:      newRequestLog(),
 		upgrader: websocket.Upgrader{
 			// The tunnel control/TCP WebSocket endpoints are only ever dialed by
 			// the non-browser Sealtun CLI client, which never sets an Origin
@@ -206,6 +208,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/_sealtun/audit" {
 		s.handleAudit(w, r)
+		return
+	}
+	if r.URL.Path == "/_sealtun/requests" {
+		s.handleRequests(w, r)
 		return
 	}
 
@@ -369,6 +375,11 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 	s.activeRequests.Add(1)
 	defer s.activeRequests.Add(-1)
 
+	bodyPreview, bodyTruncated := "", false
+	if !isUpgradeRequest(r) {
+		bodyPreview, bodyTruncated = captureRequestBodyPreview(r)
+	}
+
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	s.reverseProxy.ServeHTTP(recorder, r)
 
@@ -377,6 +388,9 @@ func (s *Server) handlePublicTraffic(w http.ResponseWriter, r *http.Request) {
 	s.lastRequestAt.Store(time.Now().Unix())
 	s.totalResponseBytes.Add(int64(recorder.bytes))
 	s.totalDurationMs.Add(time.Since(start).Milliseconds())
+	if !isUpgradeRequest(r) {
+		s.requestLog.add(captureRequestLogEntry(r, status, int64(recorder.bytes), time.Since(start), clientIP.String(), bodyPreview, bodyTruncated))
+	}
 	if status >= 500 {
 		s.total5xx.Add(1)
 	}
@@ -1003,4 +1017,28 @@ func expectedRelayClose(err error) bool {
 	}
 	return strings.Contains(err.Error(), "use of closed network connection") ||
 		strings.Contains(err.Error(), "websocket: close")
+}
+
+// handleRequests serves the recent public request log to the tunnel owner.
+// Like metrics and audit it requires the tunnel secret, because entries may
+// contain request headers and body previews from public traffic.
+func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
+	if !requireReadOnlyMethod(w, r) {
+		return
+	}
+	if !s.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	limit, err := parseAuditLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload := struct {
+		Requests []RequestLogEntry `json:"requests"`
+	}{Requests: s.requestLog.list(limit)}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }

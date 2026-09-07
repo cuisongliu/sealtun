@@ -253,3 +253,116 @@ func mustAtoiExtreme(t *testing.T, listener net.Listener) int {
 	}
 	return port
 }
+
+// TestR4AdversarialEncodedPaths verifies that encoded traversal attempts can
+// never escape the matched route into the primary app (or another route):
+// Go decodes %2e/%2f before our matcher sees the path, stripping stays
+// prefix-relative, and the local app applies its own canonicalization.
+func TestR4AdversarialEncodedPaths(t *testing.T) {
+	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("api:" + r.URL.Path))
+	})
+	apiListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startFixedApp(t, apiListener, apiHandler)
+
+	rig := newExtremeRig(t, apiHandler, mustAtoiExtreme(t, apiListener))
+	defer rig.cleanup()
+
+	transport := &http.Transport{
+		// send paths literally (no client-side canonicalization)
+		DisableCompression: true,
+	}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	get := func(rawPath string) (int, string, string) {
+		req, err := http.NewRequest(http.MethodGet, rig.base+rawPath, nil)
+		if err != nil {
+			t.Fatalf("build request %q: %v", rawPath, err)
+		}
+		req.URL.Opaque = rawPath // bypass client path cleaning
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, "", err.Error()
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Location"), string(body)
+	}
+
+	// Encoded slash decodes to /api/users and routes normally.
+	if status, _, body := get("/api%2Fusers"); status != http.StatusOK || body != "api:/users" {
+		t.Fatalf("encoded slash should route as /api/users, got %d %.80q", status, body)
+	}
+
+	// Encoded dot segments stay inside the matched route: the api app
+	// canonicalizes /../health to a redirect, never touching the primary app.
+	status, location, body := get("/api/%2e%2e/health")
+	if strings.HasPrefix(body, "primary:") {
+		t.Fatalf("traversal escaped into the primary app: %d %.80q", status, body)
+	}
+	if status != http.StatusMovedPermanently && status != http.StatusOK {
+		t.Fatalf("unexpected traversal outcome: %d %.80q", status, body)
+	}
+	if status == http.StatusMovedPermanently && location != "/api/health" {
+		t.Fatalf("canonical redirect should be re-prefixed to /api/health, got %q", location)
+	}
+
+	// Traversal placed BEFORE the prefix never matches the route at all.
+	if _, _, body = get("/..%2fapi%2fusers"); !strings.HasPrefix(body, "primary:") {
+		t.Fatalf("path outside the prefix must fall back to primary, got %.80q", body)
+	}
+
+	// Encoded NUL is percent-decoded like any other byte and stays inside
+	// the matched route. The tunnel guarantees isolation, not sanitization:
+	// the same request sent directly to the local app behaves identically.
+	status, _, body = get("/api/%00x")
+	if strings.HasPrefix(body, "primary:") {
+		t.Fatalf("NUL path escaped into the primary app: %d %.80q", status, body)
+	}
+	if status != http.StatusOK || body != "api:/"+string(byte(0))+"x" {
+		t.Fatalf("NUL path should be treated as an ordinary routed path, got %d %.80q", status, body)
+	}
+}
+
+// TestR3HostHeaderDoesNotAffectRouting proves custom-domain compatibility in
+// the only way that matters: dispatch keys on the request path alone, so the
+// public Host (Sealos host or any attached custom domain) never changes which
+// local service receives the request.
+func TestR3HostHeaderDoesNotAffectRouting(t *testing.T) {
+	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("api:" + r.URL.Path))
+	})
+	apiListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startFixedApp(t, apiListener, apiHandler)
+
+	rig := newExtremeRig(t, apiHandler, mustAtoiExtreme(t, apiListener))
+	defer rig.cleanup()
+
+	for _, host := range []string{"app.example.com", "another.test:8443"} {
+		req, err := http.NewRequest(http.MethodGet, rig.base+"/api/x", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatalf("host %s: %v", host, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if string(body) != "api:/x" {
+			t.Fatalf("host %s changed dispatch: %.80q", host, body)
+		}
+	}
+}

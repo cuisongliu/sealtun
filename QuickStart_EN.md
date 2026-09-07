@@ -41,6 +41,11 @@ sealtun expose 3000                              # local port
 sealtun expose --target http://10.0.0.12:8080    # remote HTTP upstream
 sealtun expose 3000 --qr                         # terminal QR of the public URL; scan with a phone to open
 sealtun expose 3000 --route /api=8080           # multi-service routing: /api prefix goes to 8080, the rest to 3000
+```
+
+Routing boundary (verified against real frameworks): **keep the frontend/SPA as the primary target (tunnel root) and put API services behind `routes` prefixes** — this shape works end to end, including Vite HMR. **Do not mount an SPA under a sub-path prefix**: frontend bundles reference absolute root assets (e.g. `/src/main.js`) which escape the prefix onto the primary service, and the framework's base-path option conflicts with prefix stripping. Absolute paths inside response bodies (HTML/JSON) are never rewritten; `Location` redirect headers are re-prefixed automatically.
+
+```bash
 sealtun up                                        # interactive guide (recommended for daily use)
 ```
 

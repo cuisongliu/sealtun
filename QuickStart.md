@@ -41,6 +41,11 @@ sealtun expose 3000                              # 本地端口
 sealtun expose --target http://10.0.0.12:8080    # 远端 HTTP upstream
 sealtun expose 3000 --qr                         # 终端打印公网 URL 二维码，手机扫码即开
 sealtun expose 3000 --route /api=8080           # 多服务路由：/api 前缀转发到 8080，其余走 3000
+```
+
+路由适用边界（真机验证结论）：**推荐「前端/SPA 放主目标（隧道根路径），API 服务挂 `routes` 前缀」**——此形态包括 Vite HMR 在内完整可用。**不要反过来把 SPA 自己挂到子路径前缀**：前端产物引用的是根绝对路径资源（如 `/src/main.js`），请求会跳出前缀落到主服务，框架的 base 配置与前缀剥离语义互相冲突。响应体（HTML/JSON）内的绝对路径内容不会被改写；`Location` 重定向头会自动补回前缀。
+
+```bash
 sealtun up                                        # 交互引导（推荐日常使用）
 ```
 

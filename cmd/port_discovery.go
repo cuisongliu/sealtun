@@ -116,7 +116,8 @@ func applyPortHints(item discoverItem) discoverItem {
 		item.ProtocolHint, item.TemplateHint, item.Confidence = tunnelprotocol.HTTPS, "https", 0.65
 	}
 	if item.Command == "" {
-		item.Command = fmt.Sprintf("sealtun expose %d --protocol %s", item.Port, item.ProtocolHint)
+		protocol, _ := tunnelprotocol.ResolveAlias(item.ProtocolHint)
+		item.Command = fmt.Sprintf("sealtun expose %d --protocol %s", item.Port, protocol)
 	}
 	return item
 }

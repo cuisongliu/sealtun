@@ -39,7 +39,7 @@ func TestValidateProtocol(t *testing.T) {
 		}
 	}
 
-	invalidProtocols := []string{"http", "grpc", "grpcs", "udp", "ws", "wss", ""}
+	invalidProtocols := []string{"grpc", "grpcs", "udp", "ws", "wss", ""}
 	for _, protocol := range invalidProtocols {
 		if err := validateProtocol(protocol); err == nil {
 			t.Fatalf("expected %s to be rejected", protocol)

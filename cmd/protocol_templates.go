@@ -29,9 +29,9 @@ func protocolTemplateSpec(kind string) (templateSpec, bool) {
 		return templateSpec{
 			name:        "ssh",
 			port:        22,
-			protocol:    tunnelprotocol.SSH,
+			protocol:    tunnelprotocol.TCP,
 			description: "Expose local SSH through a public TCP NodePort endpoint.",
-			notes:       []string{"SSH uses raw TCP only; Basic Auth, Bearer tokens, and custom domains do not apply."},
+			notes:       []string{"SSH tunnels are plain TCP; Basic Auth, Bearer tokens, and custom domains do not apply.", "Port 22 prints an ssh connection hint automatically."},
 		}, true
 	case "tcp":
 		return templateSpec{

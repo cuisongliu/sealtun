@@ -83,6 +83,19 @@ func init() {
 	applyCmd.Flags().StringVar(&applyDryRunFormat, "format", "", "Dry-run output format: plan (default) or diff")
 }
 
+// applyProtocolAliasWarnings notes deprecated protocol aliases normalized
+// during apply (ssh -> tcp, http -> https).
+func applyProtocolAliasWarnings(item applyTunnel) []string {
+	_, alias := tunnelprotocol.ResolveAlias(item.Protocol)
+	switch alias {
+	case tunnelprotocol.SSH:
+		return []string{"protocol ssh is deprecated and was normalized to tcp; SSH tunnels are plain TCP"}
+	case "http":
+		return []string{"protocol http was normalized to https; the public endpoint is always TLS"}
+	}
+	return nil
+}
+
 // inlineSecretWarnings warns when a YAML tunnel carries plaintext secrets
 // inline instead of *Env references, matching the CLI's plaintext-password
 // warning for novices who copy examples into shared config files.
@@ -162,7 +175,7 @@ func runApplyConfig(ctx context.Context, config *applyFile, dryRun bool) ([]appl
 				AccessPolicy:                normalized.AccessPolicy != nil,
 				ExpiresAt:                   normalized.ExpiresAt,
 				Status:                      "planned",
-				Warnings:                    inlineSecretWarnings(item),
+				Warnings:                    append(inlineSecretWarnings(item), applyProtocolAliasWarnings(item)...),
 			})
 		}
 		return results, nil
@@ -348,7 +361,7 @@ func applyOneTunnel(ctx context.Context, item applyTunnel, authData *auth.AuthDa
 		Resources:                   normalized.Resources,
 		ExpiresAt:                   normalized.ExpiresAt,
 		Status:                      "planned",
-		Warnings:                    inlineSecretWarnings(item),
+		Warnings:                    append(inlineSecretWarnings(item), applyProtocolAliasWarnings(item)...),
 	}
 	secret := uuid.New().String()
 	createdAt := ""
@@ -675,7 +688,7 @@ func normalizeApplyTunnel(item applyTunnel) (normalizedApplyTunnel, error) {
 	if err := validateProtocol(protocol); err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)
 	}
-	protocol = tunnelprotocol.Normalize(protocol)
+	protocol, _ = tunnelprotocol.ResolveAlias(protocol)
 	customDomain, err := validateCustomDomain(item.Domain)
 	if err != nil {
 		return normalizedApplyTunnel{}, fmt.Errorf("tunnel %s: %w", tunnelID, err)

@@ -17,7 +17,7 @@ func TestServerProtocolValidation(t *testing.T) {
 		}
 	}
 
-	invalid := []string{"http", "grpc", "grpcs", "udp", "wss"}
+	invalid := []string{"grpc", "grpcs", "udp", "wss"}
 	for _, protocol := range invalid {
 		if err := validateProtocol(protocol); err == nil {
 			t.Fatalf("expected expose protocol %s to be rejected", protocol)

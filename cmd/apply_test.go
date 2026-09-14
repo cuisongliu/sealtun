@@ -64,8 +64,11 @@ tunnels:
 	if len(results) != 1 {
 		t.Fatalf("expected one result, got %d", len(results))
 	}
-	if results[0].Protocol != "ssh" {
-		t.Fatalf("expected ssh protocol to be reported, got %+v", results[0])
+	if results[0].Protocol != "tcp" {
+		t.Fatalf("expected ssh protocol to normalize to tcp, got %+v", results[0])
+	}
+	if len(results[0].Warnings) == 0 || !strings.Contains(results[0].Warnings[0], "normalized to tcp") {
+		t.Fatalf("expected an ssh->tcp deprecation warning, got %+v", results[0].Warnings)
 	}
 }
 

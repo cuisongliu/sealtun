@@ -692,7 +692,7 @@ func upProtocolForDiscoveredPort(item discoverItem) string {
 	item = applyPortHints(item)
 	switch item.TemplateHint {
 	case "ssh":
-		return tunnelprotocol.SSH
+		return tunnelprotocol.TCP
 	case "mysql", "postgres", "redis", "mongodb", "mqtt":
 		return tunnelprotocol.TCP
 	default:

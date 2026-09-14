@@ -63,7 +63,14 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 	if err := validateProtocol(protocol); err != nil {
 		return err
 	}
-	protocol = tunnelprotocol.Normalize(protocol)
+	canonicalProtocol, protocolAlias := tunnelprotocol.ResolveAlias(protocol)
+	switch protocolAlias {
+	case tunnelprotocol.SSH:
+		fmt.Fprintf(cmd.ErrOrStderr(), "[!] --protocol ssh is deprecated: SSH tunnels are plain TCP, use --protocol tcp (the printed connection command is unchanged).\n")
+	case "http":
+		fmt.Fprintf(cmd.ErrOrStderr(), "[!] --protocol http is an alias for https; the public endpoint is always TLS.\n")
+	}
+	protocol = canonicalProtocol
 	if err := validateExposeQRFlag(protocol); err != nil {
 		return err
 	}
@@ -213,6 +220,9 @@ func runExposeCommand(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "[+] Public TCP port: %d\n", endpoint.Port)
 		fmt.Fprintf(out, "[+] Public TCP endpoint: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
 		fmt.Fprintf(out, "[+] Local target: localhost:%s\n", localPort)
+		if localPort == "22" {
+			fmt.Fprintf(out, "[+] Looks like SSH; connect with: ssh <user>@%s -p %d\n", endpoint.Host, endpoint.Port)
+		}
 	} else {
 		fmt.Fprintf(out, "[+] Public URL: %s\n", endpointLabel(protocol, hosts.PublicHost, hosts.SealosHost, hosts.PublicPort))
 		fmt.Fprintf(out, "[+] Target: %s\n", targetURL)

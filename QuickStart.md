@@ -50,7 +50,7 @@ sealtun up                                        # 交互引导（推荐日常�
 sealtun expose 3000 --ttl 2h                      # 脚本化创建也可以显式加自动过期
 ```
 
-**SSH**：`expose 22 --protocol ssh`，输出 `ssh <user>@<public-host> -p <node-port>`。
+**SSH**：`expose 22 --protocol tcp`（SSH 就是纯 TCP；端口 22 会自动输出 `ssh <user>@<public-host> -p <node-port>` 提示。`--protocol ssh` 仍兼容但已弃用）。
 
 **通用 TCP**：`expose 5432 --protocol tcp`（数据库、队列、MQTT 等），输出 `<public-host>:<node-port>`。
 

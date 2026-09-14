@@ -50,7 +50,7 @@ sealtun up                                        # interactive guide (recommend
 sealtun expose 3000 --ttl 2h                      # scripted creation can set an explicit TTL too
 ```
 
-**SSH**: `expose 22 --protocol ssh`, prints `ssh <user>@<public-host> -p <node-port>`.
+**SSH**: `expose 22 --protocol tcp` (SSH is plain TCP; port 22 automatically prints the `ssh <user>@<public-host> -p <node-port>` hint. `--protocol ssh` still works but is deprecated).
 
 **Generic TCP**: `expose 5432 --protocol tcp` (databases, queues, MQTT, etc.), prints `<public-host>:<node-port>`.
 

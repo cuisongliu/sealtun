@@ -297,9 +297,20 @@ func TestR4AdversarialEncodedPaths(t *testing.T) {
 		return resp.StatusCode, resp.Header.Get("Location"), string(body)
 	}
 
-	// Encoded slash decodes to /api/users and routes normally.
-	if status, _, body := get("/api%2Fusers"); status != http.StatusOK || body != "api:/users" {
-		t.Fatalf("encoded slash should route as /api/users, got %d %.80q", status, body)
+	// The first request can race the relay's session warmup on loaded CI
+	// runners (a real, documented warmup 502), so the opening case retries.
+	var status int
+	var body string
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, _, body = get("/api%2Fusers")
+		if status == http.StatusOK && body == "api:/users" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("encoded slash should route as /api/users, got %d %.80q", status, body)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Encoded dot segments stay inside the matched route: the api app

@@ -23,6 +23,8 @@ sealtun expose 3000
 - **Diagnostics**: `requests` live public request log (redacted headers/body preview), `inspect --remote/--metrics/--resources`, `list --check/--watch`, `doctor --fix`, `logs`
 - **Accounts**: OAuth device-flow login, multiple regions, named profiles
 
+You can also run `sealtun ui` to open the local web console (Sealos light theme): create/stop/delete tunnels, request log and replay, access policies, share links, domains, diagnostics, and workspace/profile management — all from the browser.
+
 ## Quick Start
 
 ```bash

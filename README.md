@@ -23,6 +23,8 @@ sealtun expose 3000
 - **诊断运维**：`requests` 实时查看公网请求（含脱敏 headers/body 预览）、`inspect --remote/--metrics/--resources`、`list --check/--watch`、`doctor --fix`、`logs`
 - **账号体系**：OAuth 设备流登录、多 region、命名 profile
 
+还可以 `sealtun ui` 打开本地 Web 控制台（浅色 Sealos 风格）：隧道创建/停止/删除、请求日志与重放、访问策略、分享链接、域名、诊断、workspace/profile 管理，全部可视化操作。
+
 ## 快速开始
 
 ```bash

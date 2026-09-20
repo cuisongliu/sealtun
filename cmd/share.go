@@ -112,8 +112,8 @@ var shareRotateCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(shareCmd)
-	shareCmd.AddCommand(shareCreateCmd, shareRevokeCmd, shareRotateCmd)
+	tunnelShareCmd.AddCommand(shareCreateCmd, shareRevokeCmd, shareRotateCmd)
+	rootCmd.AddCommand(aliasGroup("share", aliasCommand(shareCreateCmd), aliasCommand(shareRevokeCmd), aliasCommand(shareRotateCmd)))
 
 	shareCreateCmd.Flags().StringVar(&shareName, "name", "share", "Temporary link name")
 	shareCreateCmd.Flags().DurationVar(&shareTTL, "ttl", time.Hour, "Temporary link lifetime")

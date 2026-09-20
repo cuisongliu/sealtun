@@ -63,7 +63,8 @@ var logsCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(logsCmd)
+	tunnelCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(aliasCommand(logsCmd))
 	logsCmd.Flags().Int64Var(&logsTail, "tail", 100, "Number of recent log lines to show")
 	logsCmd.Flags().DurationVar(&logsSince, "since", 0, "Only return logs newer than this duration, e.g. 10m")
 	logsCmd.Flags().BoolVar(&logsFollow, "follow", false, "Follow log output")

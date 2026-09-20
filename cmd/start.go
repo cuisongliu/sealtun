@@ -23,7 +23,8 @@ var startCmd = &cobra.Command{
 var startSessionUpdate = session.Update
 
 func init() {
-	rootCmd.AddCommand(startCmd)
+	tunnelCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(aliasCommand(startCmd))
 }
 
 func runStartTunnel(cmd *cobra.Command, tunnelID string) error {

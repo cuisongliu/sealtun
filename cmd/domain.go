@@ -240,12 +240,12 @@ var domainStatusCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(domainCmd)
-	domainCmd.AddCommand(domainPlanCmd)
-	domainCmd.AddCommand(domainAddCmd)
-	domainCmd.AddCommand(domainClearCmd)
-	domainCmd.AddCommand(domainVerifyCmd)
-	domainCmd.AddCommand(domainStatusCmd)
+	tunnelDomainCmd.AddCommand(domainPlanCmd)
+	tunnelDomainCmd.AddCommand(domainAddCmd)
+	tunnelDomainCmd.AddCommand(domainClearCmd)
+	tunnelDomainCmd.AddCommand(domainVerifyCmd)
+	tunnelDomainCmd.AddCommand(domainStatusCmd)
+	rootCmd.AddCommand(aliasGroup("domain", aliasCommand(domainPlanCmd), aliasCommand(domainAddCmd), aliasCommand(domainClearCmd), aliasCommand(domainVerifyCmd), aliasCommand(domainStatusCmd)))
 	domainCmd.PersistentFlags().BoolVar(&domainJSON, "json", false, "Output domain details as JSON")
 	domainVerifyCmd.Flags().BoolVar(&domainVerifyWait, "wait", false, "Wait until DNS, Ingress, and certificate are ready")
 	domainVerifyCmd.Flags().DurationVar(&domainVerifyTimeout, "timeout", 5*time.Minute, "Maximum time to wait for domain readiness")

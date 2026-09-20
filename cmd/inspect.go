@@ -100,7 +100,8 @@ var inspectCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(inspectCmd)
+	tunnelCmd.AddCommand(inspectCmd)
+	rootCmd.AddCommand(aliasCommand(inspectCmd))
 	inspectCmd.Flags().BoolVar(&inspectJSON, "json", false, "Output tunnel session details as JSON")
 	inspectCmd.Flags().BoolVar(&inspectRemote, "remote", false, "Include best-effort remote Kubernetes diagnostics and recent events")
 	inspectCmd.Flags().BoolVar(&inspectMetrics, "metrics", false, "Include local, Kubernetes, and server metrics")

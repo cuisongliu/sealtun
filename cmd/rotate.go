@@ -24,7 +24,7 @@ var rotateServerSecret bool
 var rotateJSON bool
 
 var rotateCmd = &cobra.Command{
-	Use:          "rotate [tunnel-id]",
+	Use:          "rotate-secret [tunnel-id]",
 	Short:        "Rotate tunnel secrets",
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
@@ -50,7 +50,10 @@ var rotateCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(rotateCmd)
+	tunnelCmd.AddCommand(rotateCmd)
+	rotateAlias := aliasCommand(rotateCmd)
+	rotateAlias.Use = "rotate [tunnel-id]"
+	rootCmd.AddCommand(rotateAlias)
 	rotateCmd.Flags().BoolVar(&rotateServerSecret, "server-secret", false, "Rotate the tunnel server secret")
 	rotateCmd.Flags().BoolVar(&rotateJSON, "json", false, "Output rotation result as JSON")
 }

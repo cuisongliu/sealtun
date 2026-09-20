@@ -40,7 +40,8 @@ lives only inside your own namespace and is served over the tunnel secret.`,
 }
 
 func init() {
-	rootCmd.AddCommand(requestsCmd)
+	tunnelCmd.AddCommand(requestsCmd)
+	rootCmd.AddCommand(aliasCommand(requestsCmd))
 	requestsCmd.Flags().BoolVarP(&requestsFollow, "follow", "f", false, "Keep polling and print new requests as they arrive")
 	requestsCmd.Flags().BoolVar(&requestsJSON, "json", false, "Print the raw request log payload as JSON")
 	requestsCmd.Flags().IntVar(&requestsLimit, "limit", 50, "Maximum number of recent requests to show (1-200)")

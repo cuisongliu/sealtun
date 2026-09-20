@@ -21,7 +21,8 @@ var stopCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(stopCmd)
+	tunnelCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(aliasCommand(stopCmd))
 }
 
 func runStopTunnel(cmd *cobra.Command, tunnelID string) error {

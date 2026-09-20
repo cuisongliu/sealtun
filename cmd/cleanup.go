@@ -116,7 +116,8 @@ var cleanupCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(cleanupCmd)
+	tunnelCmd.AddCommand(cleanupCmd)
+	rootCmd.AddCommand(aliasCommand(cleanupCmd))
 	cleanupCmd.Flags().BoolVar(&cleanupAll, "all", false, "Force delete all locally tracked Sealtun tunnel resources and remove matching local session records")
 	cleanupCmd.Flags().BoolVar(&cleanupYes, "yes", false, "Confirm the destructive cleanup --all operation without prompting")
 }

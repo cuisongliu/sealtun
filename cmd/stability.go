@@ -4,7 +4,6 @@ import "github.com/spf13/cobra"
 
 const (
 	commandGroupCore       = "core"
-	commandGroupSecurity   = "security"
 	commandGroupAccount    = "account"
 	commandGroupOperations = "operations"
 	commandGroupOther      = "other"
@@ -13,18 +12,13 @@ const (
 func configureRootCommandGroups() {
 	rootCmd.AddGroup(
 		&cobra.Group{ID: commandGroupCore, Title: "Core Workflow:"},
-		&cobra.Group{ID: commandGroupSecurity, Title: "Security and Access:"},
 		&cobra.Group{ID: commandGroupAccount, Title: "Account and Scope:"},
 		&cobra.Group{ID: commandGroupOperations, Title: "Operations:"},
 		&cobra.Group{ID: commandGroupOther, Title: "Other Commands:"},
 	)
-	assignCommandGroup(commandGroupCore,
-		upCmd, exposeCmd, applyCmd,
-		listCmd, inspectCmd, startCmd, stopCmd, cleanupCmd,
-	)
-	assignCommandGroup(commandGroupSecurity, domainCmd, policyCmd, shareCmd, rotateCmd)
+	assignCommandGroup(commandGroupCore, tunnelCmd, upCmd, exposeCmd, applyCmd)
 	assignCommandGroup(commandGroupAccount, loginCmd, logoutCmd, statusCmd, profileCmd, regionCmd, workspaceCmd)
-	assignCommandGroup(commandGroupOperations, doctorCmd, logsCmd, requestsCmd)
+	assignCommandGroup(commandGroupOperations, doctorCmd)
 	rootCmd.SetHelpCommandGroupID(commandGroupOther)
 	rootCmd.SetCompletionCommandGroupID(commandGroupOther)
 }

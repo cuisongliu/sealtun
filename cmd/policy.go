@@ -136,8 +136,8 @@ var policyAuditCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(policyCmd)
-	policyCmd.AddCommand(policyShowCmd, policySetCmd, policyAuditCmd)
+	tunnelAccessCmd.AddCommand(policyShowCmd, policySetCmd, policyAuditCmd)
+	rootCmd.AddCommand(aliasGroup("policy", aliasCommand(policyShowCmd), aliasCommand(policySetCmd), aliasCommand(policyAuditCmd)))
 	policyShowCmd.Flags().BoolVar(&policyShowJSON, "json", false, "Output access policy as JSON")
 	policySetCmd.Flags().StringVar(&policySetRateLimit, "rate-limit", "", "Set HTTPS public traffic rate limit, e.g. 60/m or 1000/h")
 	policySetCmd.Flags().BoolVar(&policySetClearRateLimit, "clear-rate-limit", false, "Clear the HTTPS public traffic rate limit")

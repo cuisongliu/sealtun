@@ -80,7 +80,8 @@ local target ports and mark unreachable running tunnels as degraded.`,
 }
 
 func init() {
-	rootCmd.AddCommand(listCmd)
+	tunnelCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(aliasCommand(listCmd))
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output tunnel sessions as JSON")
 	listCmd.Flags().BoolVar(&listCheck, "check", false, "Probe local target ports and report degraded sessions")
 	listCmd.Flags().BoolVar(&listWatch, "watch", false, "Refresh the tunnel list until interrupted or --count is reached")

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,25 @@ type uiBackend interface {
 	WorkspaceUse(ctx context.Context, target string) (*uiWorkspaceUseResponse, error)
 	DeviceStart(ctx context.Context, region string) (*uiDeviceStartResponse, error)
 	DevicePoll(ctx context.Context, sessionID string) (*uiDeviceStatusResponse, error)
+
+	ListTunnels(ctx context.Context) ([]uiTunnelItem, error)
+	InspectTunnel(ctx context.Context, tunnelID string) (*inspectPayload, error)
+	CreateTunnel(ctx context.Context, req uiCreateTunnelRequest) (*uiCreateTunnelResponse, error)
+	TunnelAction(ctx context.Context, tunnelID, action string) (string, error)
+	TunnelRequests(ctx context.Context, tunnelID string, limit int) (*requestsPayload, error)
+	TunnelRequestReplay(ctx context.Context, tunnelID string, seq int64) (string, error)
+	TunnelLogs(ctx context.Context, tunnelID string, tail int64) (string, error)
+	PolicyShow(ctx context.Context, tunnelID string) (*policyShowPayload, error)
+	PolicySet(ctx context.Context, tunnelID string, rateLimit string, clearRateLimit bool, auditEnabled, auditDisabled bool) (*policyShowPayload, error)
+	ShareCreate(ctx context.Context, tunnelID string, req uiShareCreateRequest) (*shareCreatePayload, error)
+	ShareRevoke(ctx context.Context, tunnelID, name string) error
+	DomainSet(ctx context.Context, tunnelID, domain string) (string, error)
+	DomainClear(ctx context.Context, tunnelID string) (string, error)
+	ListProfiles(ctx context.Context) ([]uiProfileItem, error)
+	ProfileUse(ctx context.Context, name string) error
+	ListRegions(ctx context.Context) ([]uiRegionItem, error)
+	Doctor(ctx context.Context) (*doctorPayload, error)
+	Logout(ctx context.Context) (string, error)
 }
 
 type uiStatusResponse struct {
@@ -78,7 +98,12 @@ func newUIMux(backend uiBackend, token string) *http.ServeMux {
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
+	serveUIStatic(mux)
 	mux.Handle("/api/v1/", uiTokenGate(token, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/qr" {
+			handleQR(w, r)
+			return
+		}
 		routeUI(w, r, backend)
 	})))
 	return mux
@@ -137,6 +162,142 @@ func routeUI(w http.ResponseWriter, r *http.Request, backend uiBackend) {
 	case path == "auth/device/status" && r.Method == http.MethodGet:
 		payload, err := backend.DevicePoll(r.Context(), r.URL.Query().Get("session"))
 		respond(w, payload, err)
+	case path == "tunnels" && r.Method == http.MethodGet:
+		payload, err := backend.ListTunnels(r.Context())
+		respond(w, payload, err)
+	case path == "tunnels" && r.Method == http.MethodPost:
+		var req uiCreateTunnelRequest
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		payload, err := backend.CreateTunnel(r.Context(), req)
+		respond(w, payload, err)
+	case path == "profiles" && r.Method == http.MethodGet:
+		payload, err := backend.ListProfiles(r.Context())
+		respond(w, payload, err)
+	case strings.HasPrefix(path, "profiles/") && r.Method == http.MethodPost:
+		name := strings.TrimSuffix(strings.TrimPrefix(path, "profiles/"), "/use")
+		if !strings.HasSuffix(path, "/use") || name == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown endpoint"})
+			return
+		}
+		respond(w, map[string]bool{"ok": true}, backend.ProfileUse(r.Context(), name))
+	case path == "regions" && r.Method == http.MethodGet:
+		payload, err := backend.ListRegions(r.Context())
+		respond(w, payload, err)
+	case path == "discover" && r.Method == http.MethodGet:
+		items, err := discoverLocalPorts(r.Context(), discoverOptions{Limit: 30, Protocol: "auto"}, systemPortDiscoverer{})
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, items, nil)
+	case path == "doctor" && r.Method == http.MethodGet:
+		payload, err := backend.Doctor(r.Context())
+		respond(w, payload, err)
+	case path == "auth/logout" && r.Method == http.MethodPost:
+		payload, err := backend.Logout(r.Context())
+		respond(w, map[string]string{"output": payload}, err)
+	case strings.HasPrefix(path, "tunnels/"):
+		routeTunnel(w, r, backend, strings.TrimPrefix(path, "tunnels/"))
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown endpoint"})
+	}
+}
+
+// routeTunnel dispatches /api/v1/tunnels/:id[/action] paths.
+func routeTunnel(w http.ResponseWriter, r *http.Request, backend uiBackend, rest string) {
+	parts := strings.SplitN(rest, "/", 2)
+	tunnelID := parts[0]
+	sub := ""
+	if len(parts) == 2 {
+		sub = parts[1]
+	}
+	if tunnelID == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown endpoint"})
+		return
+	}
+	switch {
+	case sub == "" && r.Method == http.MethodGet:
+		payload, err := backend.InspectTunnel(r.Context(), tunnelID)
+		respond(w, payload, err)
+	case sub == "requests" && r.Method == http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		payload, err := backend.TunnelRequests(r.Context(), tunnelID, limit)
+		respond(w, payload, err)
+	case strings.HasPrefix(sub, "requests/") && strings.HasSuffix(sub, "/replay") && r.Method == http.MethodPost:
+		seqText := strings.TrimSuffix(strings.TrimPrefix(sub, "requests/"), "/replay")
+		seq, err := strconv.ParseInt(seqText, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid seq"})
+			return
+		}
+		payload, err := backend.TunnelRequestReplay(r.Context(), tunnelID, seq)
+		respond(w, map[string]string{"output": payload}, err)
+	case sub == "logs" && r.Method == http.MethodGet:
+		tail, _ := strconv.ParseInt(r.URL.Query().Get("tail"), 10, 64)
+		payload, err := backend.TunnelLogs(r.Context(), tunnelID, tail)
+		respond(w, map[string]string{"output": payload}, err)
+	case sub == "access" && r.Method == http.MethodGet:
+		payload, err := backend.PolicyShow(r.Context(), tunnelID)
+		respond(w, payload, err)
+	case sub == "access" && r.Method == http.MethodPut:
+		var req struct {
+			RateLimit      string `json:"rateLimit,omitempty"`
+			ClearRateLimit bool   `json:"clearRateLimit,omitempty"`
+			Audit          *bool  `json:"audit,omitempty"`
+		}
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		auditEnabled, auditDisabled := false, false
+		if req.Audit != nil {
+			auditEnabled = *req.Audit
+			auditDisabled = !*req.Audit
+		}
+		payload, err := backend.PolicySet(r.Context(), tunnelID, req.RateLimit, req.ClearRateLimit, auditEnabled, auditDisabled)
+		respond(w, payload, err)
+	case sub == "access/audit" && r.Method == http.MethodGet:
+		since := 10 * time.Minute
+		if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+			parsed, err := time.ParseDuration(raw)
+			if err != nil || parsed <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid since; use e.g. 10m, 1h"})
+				return
+			}
+			since = parsed
+		}
+		payload, err := collectPolicyAudit(r.Context(), tunnelID, since, 200)
+		respond(w, payload, err)
+	case sub == "shares" && r.Method == http.MethodPost:
+		var req uiShareCreateRequest
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		payload, err := backend.ShareCreate(r.Context(), tunnelID, req)
+		respond(w, payload, err)
+	case strings.HasPrefix(sub, "shares/") && r.Method == http.MethodDelete:
+		name := strings.TrimPrefix(sub, "shares/")
+		respond(w, map[string]bool{"ok": true}, backend.ShareRevoke(r.Context(), tunnelID, name))
+	case sub == "domain" && r.Method == http.MethodPut:
+		var req struct {
+			Domain string `json:"domain"`
+		}
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		payload, err := backend.DomainSet(r.Context(), tunnelID, req.Domain)
+		respond(w, map[string]string{"output": payload}, err)
+	case sub == "domain" && r.Method == http.MethodDelete:
+		payload, err := backend.DomainClear(r.Context(), tunnelID)
+		respond(w, map[string]string{"output": payload}, err)
+	case (sub == "stop" || sub == "start" || sub == "delete") && r.Method == http.MethodPost:
+		payload, err := backend.TunnelAction(r.Context(), tunnelID, sub)
+		respond(w, map[string]string{"output": payload}, err)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown endpoint"})
 	}

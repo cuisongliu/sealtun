@@ -36,7 +36,7 @@ func withTunnelOperationLockContext(ctx context.Context, tunnelID string, fn fun
 	if err := validateTunnelOperationLockPath(lockPath); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- tunnelID is validated before joining a private Sealtun lock path.
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 G703 -- tunnelID is validated before joining a private Sealtun lock path.
 	if err != nil {
 		return err
 	}
@@ -107,6 +107,7 @@ func compactSortedStrings(values []string) []string {
 }
 
 func validateTunnelOperationLockPath(path string) error {
+	// #nosec G703 -- path is built from a validated tunnel ID inside the user-owned Sealtun directory.
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil

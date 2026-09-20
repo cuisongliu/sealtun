@@ -168,3 +168,186 @@ func TestPollDeviceTokenOnceStates(t *testing.T) {
 		t.Fatalf("wrong grant_type: %q", grant)
 	}
 }
+
+// ── full-interface stub additions ───────────────────────────────────────
+
+func (s *stubUIBackend) ListTunnels(ctx context.Context) ([]uiTunnelItem, error) {
+	return []uiTunnelItem{{TunnelID: "t1", Status: "active", Protocol: "https", Endpoint: "https://x.example", Target: "http://localhost:3000"}}, nil
+}
+func (s *stubUIBackend) InspectTunnel(ctx context.Context, tunnelID string) (*inspectPayload, error) {
+	if tunnelID == "missing" {
+		return nil, errors.New("tunnel session \"missing\" not found")
+	}
+	return &inspectPayload{TunnelID: tunnelID, Status: "active"}, nil
+}
+func (s *stubUIBackend) CreateTunnel(ctx context.Context, req uiCreateTunnelRequest) (*uiCreateTunnelResponse, error) {
+	if req.Port == "" && req.Target == "" {
+		return nil, errors.New("port or target is required")
+	}
+	return &uiCreateTunnelResponse{TunnelID: "newt", PublicURL: "https://sealtun-newt.example"}, nil
+}
+func (s *stubUIBackend) TunnelAction(ctx context.Context, tunnelID, action string) (string, error) {
+	if action == "explode" {
+		return "", errors.New("unknown action \"explode\"")
+	}
+	return action + " ok", nil
+}
+func (s *stubUIBackend) TunnelRequests(ctx context.Context, tunnelID string, limit int) (*requestsPayload, error) {
+	return &requestsPayload{Requests: nil}, nil
+}
+func (s *stubUIBackend) TunnelRequestReplay(ctx context.Context, tunnelID string, seq int64) (string, error) {
+	return "replayed", nil
+}
+func (s *stubUIBackend) TunnelLogs(ctx context.Context, tunnelID string, tail int64) (string, error) {
+	return "line1\nline2", nil
+}
+func (s *stubUIBackend) PolicyShow(ctx context.Context, tunnelID string) (*policyShowPayload, error) {
+	return &policyShowPayload{}, nil
+}
+func (s *stubUIBackend) PolicySet(ctx context.Context, tunnelID string, rateLimit string, clearRateLimit bool, auditEnabled, auditDisabled bool) (*policyShowPayload, error) {
+	return &policyShowPayload{}, nil
+}
+func (s *stubUIBackend) ShareCreate(ctx context.Context, tunnelID string, req uiShareCreateRequest) (*shareCreatePayload, error) {
+	return &shareCreatePayload{TunnelID: tunnelID, Name: "default", URL: "https://x?_sealtun_token=t"}, nil
+}
+func (s *stubUIBackend) ShareRevoke(ctx context.Context, tunnelID, name string) error { return nil }
+func (s *stubUIBackend) DomainSet(ctx context.Context, tunnelID, domain string) (string, error) {
+	return "domain set", nil
+}
+func (s *stubUIBackend) DomainClear(ctx context.Context, tunnelID string) (string, error) {
+	return "domain cleared", nil
+}
+func (s *stubUIBackend) ListProfiles(ctx context.Context) ([]uiProfileItem, error) {
+	return []uiProfileItem{{Name: "work", Current: true}}, nil
+}
+func (s *stubUIBackend) ProfileUse(ctx context.Context, name string) error {
+	if name == "missing" {
+		return errors.New("profile not found")
+	}
+	return nil
+}
+func (s *stubUIBackend) ListRegions(ctx context.Context) ([]uiRegionItem, error) {
+	return []uiRegionItem{{Name: "gzg", Current: true}}, nil
+}
+func (s *stubUIBackend) Doctor(ctx context.Context) (*doctorPayload, error) {
+	return &doctorPayload{}, nil
+}
+func (s *stubUIBackend) Logout(ctx context.Context) (string, error) { return "logged out", nil }
+
+func TestUITunnelRoutes(t *testing.T) {
+	server := newTestUIServer(t, &stubUIBackend{}, "tok")
+	defer server.Close()
+	get := func(path string) (int, map[string]interface{}) {
+		req, _ := http.NewRequest(http.MethodGet, server.URL+path, nil)
+		req.Header.Set("X-Sealtun-Token", "tok")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return resp.StatusCode, body
+	}
+	post := func(path, bodyText string) (int, map[string]interface{}) {
+		req, _ := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(bodyText))
+		req.Header.Set("X-Sealtun-Token", "tok")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return resp.StatusCode, body
+	}
+
+	code, _ := get("/api/v1/tunnels")
+	if code != http.StatusOK {
+		t.Fatalf("tunnels list route wrong: %d", code)
+	}
+
+	code, body := get("/api/v1/tunnels/t1")
+	if code != http.StatusOK || body["tunnelId"] != "t1" {
+		t.Fatalf("inspect route wrong: %d %#v", code, body)
+	}
+	code, body = get("/api/v1/tunnels/missing")
+	if code != http.StatusBadRequest || body["error"] == nil {
+		t.Fatalf("missing tunnel must surface error: %d %#v", code, body)
+	}
+
+	code, body = post("/api/v1/tunnels", `{"port":"3000"}`)
+	if code != http.StatusOK || body["tunnelId"] != "newt" {
+		t.Fatalf("create route wrong: %d %#v", code, body)
+	}
+	code, body = post("/api/v1/tunnels", `{}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("empty create must fail: %d", code)
+	}
+	code, body = post("/api/v1/tunnels/t1/stop", "")
+	if code != http.StatusOK || body["output"] != "stop ok" {
+		t.Fatalf("stop route wrong: %d %#v", code, body)
+	}
+	code, _ = post("/api/v1/tunnels/t1/explode", "")
+	if code != http.StatusNotFound {
+		t.Fatalf("bad action must be 404: %d", code)
+	}
+
+	code, _ = get("/api/v1/tunnels/t1/requests?limit=10")
+	if code != http.StatusOK {
+		t.Fatalf("requests route wrong: %d", code)
+	}
+	code, body = post("/api/v1/tunnels/t1/requests/3/replay", "")
+	if code != http.StatusOK || body["output"] != "replayed" {
+		t.Fatalf("replay route wrong: %d %#v", code, body)
+	}
+	code, body = get("/api/v1/tunnels/t1/logs?tail=50")
+	if code != http.StatusOK || !strings.Contains(body["output"].(string), "line1") {
+		t.Fatalf("logs route wrong: %d %#v", code, body)
+	}
+	code, _ = get("/api/v1/tunnels/t1/access")
+	if code != http.StatusOK {
+		t.Fatalf("access show route wrong: %d", code)
+	}
+	code, _ = post("/api/v1/tunnels/t1/shares", `{"ttl":"1h"}`)
+	if code != http.StatusOK {
+		t.Fatalf("share create route wrong: %d", code)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/tunnels/t1/shares/default", nil)
+	req.Header.Set("X-Sealtun-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("share revoke route wrong: %d", resp.StatusCode)
+	}
+
+	code, _ = get("/api/v1/profiles")
+	if code != http.StatusOK {
+		t.Fatalf("profiles route wrong: %d", code)
+	}
+	code, _ = post("/api/v1/profiles/work/use", "")
+	if code != http.StatusOK {
+		t.Fatalf("profile use route wrong: %d", code)
+	}
+	code, body = post("/api/v1/profiles/missing/use", "")
+	if code != http.StatusBadRequest {
+		t.Fatalf("missing profile must fail: %d %#v", code, body)
+	}
+	code, _ = get("/api/v1/regions")
+	if code != http.StatusOK {
+		t.Fatalf("regions route wrong: %d", code)
+	}
+	code, _ = get("/api/v1/doctor")
+	if code != http.StatusOK {
+		t.Fatalf("doctor route wrong: %d", code)
+	}
+	code, body = post("/api/v1/auth/logout", "")
+	if code != http.StatusOK || body["output"] != "logged out" {
+		t.Fatalf("logout route wrong: %d %#v", code, body)
+	}
+}

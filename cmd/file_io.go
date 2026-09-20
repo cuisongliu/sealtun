@@ -7,6 +7,7 @@ import (
 )
 
 func validateRegularOutputPath(path, purpose string) error {
+	// #nosec G703 -- path is validated for write only by this helper before any file operation.
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil
@@ -28,26 +29,26 @@ func writeRegularFileAtomic(path string, data []byte, perm os.FileMode, purpose 
 		return err
 	}
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp") // #nosec G703 -- dir comes from a caller-validated private path, not user input.
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // #nosec G703 -- tmpPath is created by os.CreateTemp inside a caller-validated directory.
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // #nosec G703 -- tmpPath is created by os.CreateTemp inside a caller-validated directory.
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // #nosec G703 -- tmpPath is created by os.CreateTemp inside a caller-validated directory.
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil { // #nosec G703 -- path is validated by validateRegularOutputPath before rename.
 		_ = os.Remove(tmpPath)
 		return err
 	}

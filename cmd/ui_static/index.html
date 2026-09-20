@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sealtun 控制台</title>
+<style>
+:root {
+  --bg: #F7F8FA;
+  --card: #FFFFFF;
+  --border: #E8EBF0;
+  --border-strong: #DFE2EA;
+  --ink: #111824;
+  --text: #485264;
+  --muted: #8A95A7;
+  --faint: #C4CBD7;
+  --accent: #3370FF;
+  --accent-bg: #F0F4FF;
+  --brand: #219BF4;
+  --success: #12B76A;
+  --success-bg: #EDFBF3;
+  --warning: #F79009;
+  --warning-bg: #FFFAEB;
+  --danger: #F04438;
+  --danger-bg: #FEF3F2;
+  --radius: 6px;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "Geist", "Noto Sans SC", -apple-system, "PingFang SC", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--muted); }
+.ink { color: var(--ink); }
+
+/* ── layout ── */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 232px; flex-shrink: 0;
+  background: var(--card); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+.sidebar-logo {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo .mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--ink); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+}
+.sidebar-logo .name { font-weight: 700; font-size: 15px; color: var(--ink); }
+.sidebar-logo .ver { font-size: 11px; color: var(--faint); font-family: var(--mono); margin-left: auto; }
+.nav { padding: 12px 10px; flex: 1; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 2px;
+  border-radius: var(--radius); cursor: pointer;
+  color: var(--text); font-size: 13.5px; font-weight: 500;
+  user-select: none;
+}
+.nav-item:hover { background: var(--bg); }
+.nav-item.active { background: var(--accent-bg); color: var(--accent); }
+.nav-item .ico { width: 16px; height: 16px; flex-shrink: 0; opacity: .8; }
+.sidebar-foot { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.sidebar-foot .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar {
+  height: 56px; flex-shrink: 0;
+  background: var(--card); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 28px;
+}
+.topbar h1 { font-size: 16px; font-weight: 700; color: var(--ink); }
+.topbar .spacer { flex: 1; }
+.content { padding: 24px 28px 40px; max-width: 1160px; width: 100%; }
+
+/* ── components ── */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 16px;
+}
+.card-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.card-head h2 { font-size: 14px; font-weight: 600; color: var(--ink); }
+.card-body { padding: 18px; }
+.card-body.flush { padding: 0; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px;
+  border-radius: var(--radius); border: 1px solid transparent;
+  font-size: 13px; font-weight: 500; font-family: var(--sans);
+  cursor: pointer; user-select: none; white-space: nowrap;
+  transition: border-color .12s, background .12s, opacity .12s;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--ink); color: #fff; }
+.btn-primary:hover:not(:disabled) { opacity: .88; }
+.btn-secondary { background: var(--card); border-color: var(--border); color: var(--ink); }
+.btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-danger { background: var(--card); border-color: var(--border); color: var(--danger); }
+.btn-danger:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-bg); }
+.btn-ghost { background: transparent; color: var(--accent); padding: 0 8px; }
+.btn-ghost:hover:not(:disabled) { background: var(--accent-bg); }
+.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.dot.active { background: var(--success); }
+.dot.degraded { background: var(--warning); }
+.dot.stopped, .dot.stale { background: var(--faint); }
+.dot.error { background: var(--danger); }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 500;
+}
+.badge.active { background: var(--success-bg); color: var(--success); }
+.badge.degraded { background: var(--warning-bg); color: var(--warning); }
+.badge.stopped, .badge.stale { background: var(--bg); color: var(--muted); }
+.badge.error { background: var(--danger-bg); color: var(--danger); }
+.badge.proto { background: var(--accent-bg); color: var(--accent); font-family: var(--mono); font-size: 11px; }
+
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid th {
+  text-align: left; font-size: 12px; font-weight: 500; color: var(--muted);
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.grid td {
+  padding: 11px 14px; border-bottom: 1px solid var(--border);
+  font-size: 13px; vertical-align: middle;
+}
+table.grid tr:last-child td { border-bottom: none; }
+table.grid tr:hover td { background: var(--bg); }
+table.grid tr.clickable { cursor: pointer; }
+
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 13px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+.input, select.input {
+  width: 100%; height: 34px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 13px; font-family: var(--sans); color: var(--ink);
+  background: var(--card); outline: none;
+  transition: border-color .12s;
+}
+.input:focus { border-color: var(--accent); }
+.input.mono { font-family: var(--mono); font-size: 12.5px; }
+textarea.input { height: auto; min-height: 90px; padding: 8px 11px; resize: vertical; }
+.checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+.checkbox input { width: 15px; height: 15px; accent-color: var(--accent); }
+.form-row { display: flex; gap: 12px; }
+.form-row > * { flex: 1; }
+
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 18px; }
+.tab {
+  padding: 10px 14px; font-size: 13.5px; font-weight: 500; color: var(--muted);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  user-select: none;
+}
+.tab:hover { color: var(--ink); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.kv { display: grid; grid-template-columns: 150px 1fr; row-gap: 10px; font-size: 13px; }
+.kv .k { color: var(--muted); }
+.kv .v { color: var(--ink); word-break: break-all; }
+
+.empty { padding: 52px 20px; text-align: center; color: var(--muted); }
+.empty .big { font-size: 15px; color: var(--ink); font-weight: 600; margin-bottom: 6px; }
+.empty .sub { font-size: 13px; margin-bottom: 18px; }
+
+.toast {
+  position: fixed; top: 16px; right: 16px; z-index: 100;
+  max-width: 420px; padding: 11px 16px;
+  border-radius: var(--radius); font-size: 13px;
+  background: var(--ink); color: #fff;
+  box-shadow: 0 8px 24px rgba(17,24,36,.18);
+  animation: slidein .18s ease-out;
+}
+.toast.error { background: var(--danger); }
+@keyframes slidein { from { transform: translateY(-8px); opacity: 0; } }
+
+.modal-mask {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(17, 24, 36, .4);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  width: min(520px, calc(100vw - 40px));
+  background: var(--card); border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(17,24,36,.25);
+}
+.modal-head { padding: 16px 20px 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+.modal-body { padding: 14px 20px 20px; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 0 20px 18px; }
+
+.spinner {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent);
+  animation: spin .7s linear infinite; display: inline-block; vertical-align: -3px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login-card { width: min(460px, 100%); }
+.login-card .card-body { padding: 28px; }
+.login-logo { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 8px; }
+.login-code {
+  font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: 2px;
+  color: var(--ink); text-align: center; padding: 14px;
+  background: var(--bg); border-radius: var(--radius); margin: 14px 0;
+  user-select: all;
+}
+.qr-img { image-rendering: pixelated; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
+
+.pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.route-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.route-row .input { flex: 1; }
+.route-row .input.port { max-width: 110px; }
+.section-title { font-size: 13px; font-weight: 600; color: var(--ink); margin: 22px 0 10px; }
+.section-title:first-child { margin-top: 0; }
+.divider { height: 1px; background: var(--border); margin: 18px -18px; }
+.action-bar { display: flex; gap: 10px; align-items: center; }
+.linklike { color: var(--accent); cursor: pointer; }
+.linklike:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+// ── token & api ──────────────────────────────────────────────────────────
+const TOKEN_KEY = "sealtun-ui-token";
+(function bootstrapToken() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("token")) {
+    localStorage.setItem(TOKEN_KEY, q.get("token"));
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
+})();
+const token = () => localStorage.getItem(TOKEN_KEY) || "";
+
+async function api(path, opts = {}) {
+  const res = await fetch("/api/v1" + path, {
+    method: opts.method || "GET",
+    headers: { "X-Sealtun-Token": token(), "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = null;
+  const text = await res.text();
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+const qrURL = (text) => "/api/v1/qr?token=" + encodeURIComponent(token()) + "&text=" + encodeURIComponent(text);
+
+// ── tiny dom helpers ─────────────────────────────────────────────────────
+const root = document.getElementById("root");
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined) continue;
+    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
+function toast(msg, isError = false) {
+  const t = el("div", { class: "toast" + (isError ? " error" : ""), text: msg });
+  document.body.append(t);
+  setTimeout(() => t.remove(), isError ? 5200 : 3200);
+}
+function spinner() { return el("span", { class: "spinner" }); }
+function dot(status) { return el("span", { class: "dot " + status, title: status }); }
+function badge(status) { return el("span", { class: "badge " + status, text: status }); }
+function copyBtn(text, label = "复制") {
+  return el("button", {
+    class: "btn btn-ghost btn-sm", text: label,
+    onclick: async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(text); toast("已复制"); }
+      catch { toast("复制失败", true); }
+    },
+  });
+}
+function emptyState(big, sub, action) {
+  return el("div", { class: "empty" },
+    el("div", { class: "big", text: big }),
+    el("div", { class: "sub", text: sub }),
+    action || "");
+}
+function modal(title, bodyNodes, footNodes) {
+  const mask = el("div", { class: "modal-mask", onclick: (e) => { if (e.target === mask) mask.remove(); } });
+  mask.append(el("div", { class: "modal" },
+    el("div", { class: "modal-head", text: title }),
+    el("div", { class: "modal-body" }, bodyNodes),
+    footNodes ? el("div", { class: "modal-foot" }, footNodes) : ""));
+  document.body.append(mask);
+  return mask;
+}
+function fmtTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString("zh-CN", { hour12: false });
+}
+
+// ── state ────────────────────────────────────────────────────────────────
+let refreshTimer = null;
+function setRefresh(fn, ms) {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = fn && ms ? setInterval(fn, ms) : null;
+}
+
+// ── chrome (sidebar/topbar) ──────────────────────────────────────────────
+const NAV = [
+  { hash: "#/", label: "隧道", ico: "⌁" },
+  { hash: "#/create", label: "新建隧道", ico: "＋" },
+  { hash: "#/doctor", label: "诊断", ico: "✚" },
+  { hash: "#/settings", label: "设置", ico: "⚙" },
+];
+function chrome(activeHash, pageTitle, bodyNodes, footRows = []) {
+  setRefresh(null);
+  const nav = el("div", { class: "nav" },
+    NAV.map(item => el("div", {
+      class: "nav-item" + (activeHash === item.hash ? " active" : ""),
+      onclick: () => { location.hash = item.hash; },
+    }, el("span", { class: "ico", text: item.ico }), item.label)));
+  root.replaceChildren(el("div", { class: "app" },
+    el("aside", { class: "sidebar" },
+      el("div", { class: "sidebar-logo" },
+        el("span", { class: "mark", text: "S" }),
+        el("span", { class: "name", text: "Sealtun" }),
+        el("span", { class: "ver", text: "ui" })),
+      nav,
+      el("div", { class: "sidebar-foot" }, footRows)),
+    el("div", { class: "main" },
+      el("div", { class: "topbar" },
+        el("h1", { text: pageTitle }),
+        el("div", { class: "spacer" })),
+      el("div", { class: "content" }, bodyNodes))));
+}
+
+async function statusFoot() {
+  try {
+    const st = await api("/status");
+    return [
+      el("div", { class: "row" }, dot(st.loggedIn ? "active" : "error"), st.loggedIn ? "已登录" : "未登录"),
+      st.region ? el("div", { class: "row muted mono", text: st.region.replace("https://", "") }) : "",
+      st.namespace ? el("div", { class: "row muted mono", text: st.namespace }) : "",
+    ];
+  } catch {
+    return [el("div", { class: "row" }, dot("error"), "连接失败")];
+  }
+}
+
+// ── pages ────────────────────────────────────────────────────────────────
+async function renderLogin() {
+  setRefresh(null);
+  let deviceInfo = null;
+  let polling = false;
+  const startBtn = el("button", { class: "btn btn-primary", text: "使用 Sealos 账号登录", onclick: start });
+  const body = el("div", { class: "login-wrap" },
+    el("div", { class: "card login-card" },
+      el("div", { class: "card-body" },
+        el("div", { class: "login-logo" },
+          el("span", { class: "mark", text: "S", style: "width:30px;height:30px;border-radius:8px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700" }),
+          el("span", { class: "ink", text: "Sealtun", style: "font-size:18px;font-weight:700" })),
+        el("p", { class: "muted", text: "本地隧道控制台 · 需要 Sealos Cloud 授权", style: "text-align:center;margin-bottom:20px" }),
+        el("div", { id: "login-stage", style: "display:flex;justify-content:center" }, startBtn))));
+  root.replaceChildren(body);
+
+  async function start() {
+    startBtn.disabled = true;
+    startBtn.textContent = "正在发起授权…";
+    try {
+      deviceInfo = await api("/auth/device", { method: "POST", body: {} });
+    } catch (e) {
+      toast(e.message, true);
+      startBtn.disabled = false;
+      startBtn.textContent = "使用 Sealos 账号登录";
+      return;
+    }
+    const stage = document.getElementById("login-stage");
+    stage.replaceChildren(el("div", { style: "width:100%" },
+      el("p", { class: "muted", text: "1. 打开下方链接完成授权（已尝试自动打开）" }),
+      el("p", { style: "margin:8px 0;word-break:break-all" },
+        el("a", { href: deviceInfo.verificationUrl, target: "_blank", rel: "noreferrer", text: deviceInfo.verificationUrl, class: "mono" })),
+      el("p", { class: "muted", text: "2. 页面中输入授权码：" }),
+      el("div", { class: "login-code", text: deviceInfo.userCode }),
+      el("div", { class: "muted", style: "display:flex;align-items:center;gap:8px;justify-content:center" }, spinner(), "等待授权完成…")));
+    window.open(deviceInfo.verificationUrl, "_blank");
+    if (!polling) {
+      polling = true;
+      const iv = setInterval(async () => {
+        try {
+          const st = await api("/auth/device/status?session=" + encodeURIComponent(deviceInfo.session));
+          if (st.state === "authorized") {
+            clearInterval(iv);
+            toast("登录成功");
+            location.hash = "#/";
+            route();
+          } else if (st.state === "expired" || st.state === "denied" || st.state === "error") {
+            clearInterval(iv);
+            toast(st.message || ("登录失败: " + st.state), true);
+            renderLogin();
+          }
+        } catch (e) { /* keep polling */ }
+      }, Math.max(2000, (deviceInfo.interval || 3) * 1000));
+    }
+  }
+}
+
+async function renderTunnels() {
+  const listCard = el("div", { class: "card" },
+    el("div", { class: "card-head" },
+      el("h2", { text: "全部隧道" }),
+      el("div", { class: "spacer", style: "flex:1" }),
+      el("button", { class: "btn btn-primary btn-sm", text: "＋ 新建隧道", onclick: () => { location.hash = "#/create"; } })),
+    el("div", { class: "card-body flush", id: "tunnels-body" }, el("div", { class: "empty" }, spinner())));
+  chrome("#/", "隧道", [listCard], await statusFoot());
+  async function load() {
+    let tunnels;
+    try { tunnels = await api("/tunnels"); }
+    catch (e) {
+      if (String(e.message).includes("401")) { location.hash = "#/login"; route(); return; }
+      document.getElementById("tunnels-body").replaceChildren(emptyState("加载失败", e.message));
+      return;
+    }
+    const bodyEl = document.getElementById("tunnels-body");
+    if (!bodyEl) return;
+    if (!tunnels || tunnels.length === 0) {
+      bodyEl.replaceChildren(emptyState("还没有隧道", "创建第一条隧道，把本地服务送上公网。",
+        el("button", { class: "btn btn-primary", text: "＋ 新建隧道", onclick: () => { location.hash = "#/create"; } })));
+      return;
+    }
+    const rows = tunnels.map(t => {
+      const endpointText = t.endpoint || "-";
+      return el("tr", { class: "clickable", onclick: () => { location.hash = "#/tunnels/" + t.tunnelId; } },
+        el("td", {}, dot(t.status), " ", badge(t.status)),
+        el("td", { class: "mono ink", text: t.tunnelId.slice(0, 12) }),
+        el("td", {}, el("span", { class: "badge proto", text: t.protocol })),
+        el("td", { class: "mono", style: "max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" },
+          t.endpoint ? el("a", { href: t.endpoint, target: "_blank", rel: "noreferrer", text: endpointText, onclick: (e) => e.stopPropagation() }) : "-"),
+        el("td", { class: "mono muted", text: t.target }),
+        el("td", { class: "muted", text: fmtTime(t.createdAt) }));
+    });
+    bodyEl.replaceChildren(el("table", { class: "grid" },
+      el("thead", {}, el("tr", {},
+        el("th", { text: "状态" }), el("th", { text: "隧道 ID" }), el("th", { text: "协议" }),
+        el("th", { text: "公网地址" }), el("th", { text: "本地目标" }), el("th", { text: "创建时间" }))),
+      el("tbody", {}, rows)));
+  }
+  await load();
+  setRefresh(load, 5000);
+}
+
+async function renderCreate() {
+  const portInput = el("input", { class: "input mono", placeholder: "3000", id: "f-port" });
+  const protocolSel = el("select", { class: "input", id: "f-protocol" },
+    el("option", { value: "https", text: "HTTPS（公网 URL，自动证书）" }),
+    el("option", { value: "tcp", text: "TCP（数据库 / SSH 等原始 TCP）" }));
+  const ttlSel = el("select", { class: "input", id: "f-ttl" },
+    el("option", { value: "", text: "不过期（手动关闭）" }),
+    el("option", { value: "30m", text: "30 分钟后自动删除" }),
+    el("option", { value: "1h", text: "1 小时后自动删除" }),
+    el("option", { value: "2h", selected: "", text: "2 小时后自动删除（推荐）" }),
+    el("option", { value: "8h", text: "8 小时后自动删除" }),
+    el("option", { value: "24h", text: "24 小时后自动删除" }));
+  const domainInput = el("input", { class: "input mono", placeholder: "app.example.com（可选）", id: "f-domain" });
+  const rateInput = el("input", { class: "input mono", placeholder: "如 60/m（可选）", id: "f-rate" });
+  const auditChk = el("input", { type: "checkbox", id: "f-audit" });
+  const authChk = el("input", { type: "checkbox", id: "f-auth", onchange: toggleAuth });
+  const authUser = el("input", { class: "input", placeholder: "用户名", id: "f-authuser", style: "display:none" });
+  const authPass = el("input", { class: "input", placeholder: "密码", type: "password", id: "f-authpass", style: "display:none" });
+  const routesBox = el("div", { id: "routes-box" });
+  const submitBtn = el("button", { class: "btn btn-primary", text: "创建隧道", onclick: submit });
+
+  function toggleAuth() {
+    authUser.style.display = authChk.checked ? "" : "none";
+    authPass.style.display = authChk.checked ? "" : "none";
+  }
+  function addRouteRow(path = "", port = "") {
+    const row = el("div", { class: "route-row" },
+      el("input", { class: "input mono", placeholder: "/api", value: path }),
+      el("input", { class: "input mono port", placeholder: "端口", value: port }),
+      el("button", { class: "btn btn-ghost btn-sm", text: "删除", onclick: () => row.remove() }));
+    routesBox.append(row);
+  }
+  addRouteRow();
+
+  const discoverBtn = el("button", { class: "btn btn-secondary btn-sm", text: "发现本地端口", onclick: discover });
+  async function discover() {
+    discoverBtn.disabled = true;
+    try {
+      const items = await api("/discover");
+      if (!items || items.length === 0) { toast("未发现本地监听端口"); return; }
+      modal("本地监听端口", [
+        el("table", { class: "grid" },
+          el("tbody", {}, items.slice(0, 12).map(p =>
+            el("tr", { class: "clickable", onclick: () => {
+              portInput.value = p.port;
+              if (p.protocolHint === "tcp") protocolSel.value = "tcp";
+              document.querySelector(".modal-mask")?.remove();
+            } },
+              el("td", { class: "mono ink", text: p.port }),
+              el("td", { class: "muted", text: p.processName || "-" }),
+              el("td", {}, el("span", { class: "badge proto", text: p.protocolHint }))))))]);
+    } catch (e) { toast(e.message, true); }
+    finally { discoverBtn.disabled = false; }
+  }
+
+  async function submit() {
+    const req = {
+      port: portInput.value.trim(),
+      protocol: protocolSel.value,
+      ttl: ttlSel.value || undefined,
+      domain: domainInput.value.trim() || undefined,
+      rateLimit: rateInput.value.trim() || undefined,
+      audit: auditChk.checked,
+    };
+    if (authChk.checked) {
+      if (!authUser.value.trim() || !authPass.value) { toast("请填写 Basic Auth 用户名和密码", true); return; }
+      req.basicAuth = true;
+      req.basicAuthUser = authUser.value.trim();
+      req.basicAuthPassword = authPass.value;
+    }
+    const routeRows = [...routesBox.querySelectorAll(".route-row")];
+    const parsedRoutes = [];
+    for (const row of routeRows) {
+      const [p, pt] = [...row.querySelectorAll("input")].map(i => i.value.trim());
+      if (p || pt) {
+        if (!p.startsWith("/")) { toast("路由路径必须以 / 开头", true); return; }
+        const n = Number(pt);
+        if (!Number.isInteger(n) || n < 1 || n > 65535) { toast("路由端口无效: " + pt, true); return; }
+        parsedRoutes.push({ path: p, port: n });
+      }
+    }
+    if (!req.port) { toast("请填写本地端口", true); return; }
+    if (parsedRoutes.length) req.routes = parsedRoutes;
+
+    submitBtn.disabled = true;
+    submitBtn.replaceChildren(spinner(), " 创建中（云端拉起约需 30-90 秒）…");
+    try {
+      const res = await api("/tunnels", { method: "POST", body: req });
+      const url = res.publicUrl;
+      modal("隧道已创建", [
+        el("div", { class: "kv", style: "margin-bottom:14px" },
+          el("div", { class: "k", text: "公网地址" }),
+          el("div", { class: "v mono" }, el("a", { href: url, target: "_blank", rel: "noreferrer", text: url }), " ", copyBtn(url))),
+        url.startsWith("https://")
+          ? el("div", { style: "text-align:center" }, el("img", { class: "qr-img", src: qrURL(url), width: "180", height: "180" }))
+          : el("p", { class: "muted", text: "TCP 端点见上方地址（主机:端口）" })],
+        [
+          el("button", { class: "btn btn-secondary", text: "继续创建", onclick: () => { document.querySelector(".modal-mask")?.remove(); } }),
+          el("button", { class: "btn btn-primary", text: "查看隧道", onclick: () => { location.hash = "#/tunnels/" + res.tunnelId; } }),
+        ]);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "创建隧道";
+    }
+  }
+
+  chrome("#/create", "新建隧道", [
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "基本配置" })),
+      el("div", { class: "card-body" },
+        el("div", { class: "form-row" },
+          el("div", { class: "field" },
+            el("label", { text: "本地端口" }),
+            el("div", { class: "form-row" }, portInput, discoverBtn)),
+          el("div", { class: "field" },
+            el("label", { text: "协议" }), protocolSel)),
+        el("div", { class: "field" },
+          el("label", { text: "自动删除（TTL）" }), ttlSel,
+          el("div", { class: "hint", text: "到时间后隧道自动删除，避免忘记关闭产生计费。" })),
+        el("div", { class: "field" },
+          el("label", { text: "多服务路由（可选）" }),
+          routesBox,
+          el("button", { class: "btn btn-secondary btn-sm", text: "＋ 添加路由", onclick: () => addRouteRow() }),
+          el("div", { class: "hint", text: "按路径前缀分流：/api → 后端端口，其余 → 上面的本地端口。前缀会被剥离。" })))),
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "访问与域名（可选）" })),
+      el("div", { class: "card-body" },
+        el("div", { class: "form-row" },
+          el("div", { class: "field" }, el("label", { text: "自定义域名" }), domainInput),
+          el("div", { class: "field" }, el("label", { text: "限流" }), rateInput)),
+        el("div", { class: "field" },
+          el("label", { class: "checkbox" }, auditChk, " 开启访问审计（记录 allow/deny 及原因）")),
+        el("div", { class: "field" },
+          el("label", { class: "checkbox" }, authChk, " 开启 Basic Auth（公网访问需要用户名密码）")),
+        el("div", { class: "form-row" }, authUser, authPass))),
+    el("div", { class: "action-bar" }, submitBtn)], await statusFoot());
+}
+
+async function renderDetail(id) {
+  const container = el("div", { id: "detail" }, el("div", { class: "empty" }, spinner()));
+  chrome("#/", "隧道详情", [container], await statusFoot());
+  let payload;
+  try { payload = await api("/tunnels/" + id); }
+  catch (e) {
+    container.replaceChildren(emptyState("隧道不存在或已删除", e.message,
+      el("button", { class: "btn btn-secondary", text: "返回列表", onclick: () => { location.hash = "#/"; } })));
+    return;
+  }
+
+  const url = payload.host ? "https://" + payload.host : "";
+  const tabs = [
+    { key: "overview", label: "概览" },
+    { key: "requests", label: "请求" },
+    { key: "access", label: "访问" },
+    { key: "domain", label: "域名" },
+    { key: "logs", label: "日志" },
+  ];
+  let activeTab = "overview";
+  const tabBar = el("div", { class: "tabs" }, tabs.map(t =>
+    el("div", { class: "tab" + (t.key === activeTab ? " active" : ""), text: t.label,
+      onclick: () => { activeTab = t.key; render(); } })));
+  const tabBody = el("div", { class: "card-body" });
+
+  function actionBtn(label, action, cls = "btn-secondary", confirmText) {
+    return el("button", {
+      class: "btn " + cls + " btn-sm", text: label,
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        if (confirmText && !confirm(confirmText)) return;
+        btn.disabled = true;
+        try {
+          await api("/tunnels/" + id + "/" + action, { method: "POST" });
+          toast("操作成功: " + label);
+          location.reload();
+        } catch (err) { toast(err.message, true); btn.disabled = false; }
+      },
+    });
+  }
+
+  const headerCard = el("div", { class: "card" },
+    el("div", { class: "card-body", style: "display:flex;gap:20px;align-items:center;flex-wrap:wrap" },
+      el("div", { style: "flex:1;min-width:280px" },
+        el("div", { style: "display:flex;align-items:center;gap:10px;margin-bottom:8px" },
+          badge(payload.status || "active"),
+          el("span", { class: "badge proto", text: payload.protocol || "https" }),
+          el("span", { class: "mono muted", text: id })),
+        url
+          ? el("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap" },
+              el("a", { class: "mono ink", href: url, target: "_blank", rel: "noreferrer", text: url, style: "font-size:15px" }),
+              copyBtn(url))
+          : el("div", { class: "mono muted", text: payload.targetUrl || "-" })),
+      url.startsWith("https://") ? el("img", { class: "qr-img", src: qrURL(url), width: "96", height: "96" }) : "",
+      el("div", { class: "action-bar" },
+        payload.status === "stopped" ? actionBtn("恢复", "start", "primary") : actionBtn("停止", "stop"),
+        actionBtn("删除", "delete", "danger", "确定删除该隧道及其远端资源？"))),
+    el("div", { class: "" }, tabBar));
+
+  async function renderOverview() {
+    const rows = [
+      ["状态", payload.status], ["协议", payload.protocol], ["公网地址", url || "-"],
+      ["目标", payload.targetUrl || payload.localPort || "-"], ["命名空间", payload.namespace || "-"],
+      ["模式", payload.mode || "-"], ["创建时间", fmtTime(payload.createdAt)],
+      ["过期时间", payload.expiresAt ? fmtTime(payload.expiresAt) : "不过期"],
+      ["目标可达", payload.localPortReachable ? "是" : "否"],
+    ];
+    const kv = el("div", { class: "kv" }, rows.flatMap(([k, v]) => [
+      el("div", { class: "k", text: k }), el("div", { class: "v", text: v ?? "-" })]));
+    const nodes = [kv];
+    if (payload.routes && payload.routes.length) {
+      nodes.push(el("div", { class: "section-title", text: "路由" }));
+      nodes.push(el("table", { class: "grid" },
+        el("thead", {}, el("tr", {}, el("th", { text: "前缀" }), el("th", { text: "端口" }), el("th", { text: "健康" }))),
+        el("tbody", {}, payload.routes.map(r =>
+          el("tr", {},
+            el("td", { class: "mono", text: r.path }),
+            el("td", { class: "mono", text: r.port }),
+            el("td", {}, (payload.routeHealth || []).find(h => h.port === r.port && h.path === r.path)
+              ? dot((payload.routeHealth.find(h => h.port === r.port && h.path === r.path)).reachable ? "active" : "error")
+              : dot("stopped")))))));
+    }
+    return nodes;
+  }
+
+  async function renderRequests() {
+    const box = el("div", { id: "requests-box" }, el("div", { class: "empty" }, spinner()));
+    async function load() {
+      let data;
+      try { data = await api("/tunnels/" + id + "/requests?limit=100"); }
+      catch (e) { box.replaceChildren(emptyState("请求日志不可用", e.message)); return; }
+      const items = (data && data.requests) || [];
+      if (!items.length) { box.replaceChildren(emptyState("暂无请求记录", "公网请求到达后会实时出现在这里")); return; }
+      box.replaceChildren(el("table", { class: "grid" },
+        el("thead", {}, el("tr", {},
+          el("th", { text: "时间" }), el("th", { text: "方法" }), el("th", { text: "路径" }),
+          el("th", { text: "状态" }), el("th", { text: "耗时" }), el("th", { text: "客户端" }), el("th", { text: "" }))),
+        el("tbody", {}, items.map(r =>
+          el("tr", {},
+            el("td", { class: "muted mono", text: fmtTime(r.time) }),
+            el("td", {}, el("span", { class: "badge proto", text: r.method })),
+            el("td", { class: "mono", style: "max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap", title: r.path, text: r.path }),
+            el("td", {}, el("span", { class: "badge " + (r.status < 400 ? "active" : r.status < 500 ? "degraded" : "error"), text: r.status })),
+            el("td", { class: "mono muted", text: (r.durationMs || 0) + "ms" }),
+            el("td", { class: "mono muted", text: r.clientIp || "-" }),
+            el("td", {}, el("button", {
+              class: "btn btn-ghost btn-sm", text: "重放",
+              onclick: async () => {
+                try {
+                  const res = await api("/tunnels/" + id + "/requests/" + r.seq + "/replay", { method: "POST" });
+                  modal("重放结果", [el("pre", { class: "mono", style: "white-space:pre-wrap;max-height:300px;overflow:auto", text: res.output || "(无输出)" })]);
+                } catch (e) { toast(e.message, true); }
+              },
+            })))))));
+    }
+    await load();
+    setRefresh(load, 4000);
+    return [box];
+  }
+
+  async function renderAccess() {
+    const box = el("div", {}, el("div", { class: "empty" }, spinner()));
+    let policy;
+    try { policy = await api("/tunnels/" + id + "/access"); }
+    catch (e) { box.replaceChildren(emptyState("访问策略不可用", e.message)); return [box]; }
+
+    const rateInput = el("input", { class: "input mono", placeholder: "如 60/m", value: policy.rateLimit || "", style: "max-width:160px" });
+    const auditChk = el("input", { type: "checkbox" });
+    if (policy.auditEnabled) auditChk.checked = true;
+    const saveBtn = el("button", {
+      class: "btn btn-primary btn-sm", text: "保存",
+      onclick: async () => {
+        try {
+          await api("/tunnels/" + id + "/access", {
+            method: "PUT",
+            body: { rateLimit: rateInput.value.trim(), clearRateLimit: !rateInput.value.trim(), audit: auditChk.checked },
+          });
+          toast("已保存");
+        } catch (e) { toast(e.message, true); }
+      },
+    });
+
+    const shareName = el("input", { class: "input", placeholder: "链接名（可选）", style: "max-width:140px" });
+    const shareTTL = el("select", { class: "input", style: "max-width:140px" },
+      el("option", { value: "30m", text: "30 分钟" }),
+      el("option", { value: "1h", selected: "", text: "1 小时" }),
+      el("option", { value: "8h", text: "8 小时" }),
+      el("option", { value: "24h", text: "24 小时" }));
+    const createShareBtn = el("button", {
+      class: "btn btn-secondary btn-sm", text: "＋ 新建分享链接",
+      onclick: async () => {
+        try {
+          const res = await api("/tunnels/" + id + "/shares", { method: "POST", body: { name: shareName.value.trim(), ttl: shareTTL.value } });
+          modal("分享链接（仅显示一次）", [
+            el("p", { class: "muted", text: "此链接在过期前可免密访问该隧道，请立即复制保存：" }),
+            el("div", { class: "login-code mono", style: "font-size:13px;user-select:all;word-break:break-all", text: res.url }),
+            el("div", { style: "text-align:center" }, el("img", { class: "qr-img", src: qrURL(res.url), width: "170", height: "170" })),
+          ], [copyBtn(res.url, "复制链接")]);
+        } catch (e) { toast(e.message, true); }
+      },
+    });
+
+    const links = (policy.temporaryLinks || []);
+    const nodes = [
+      el("div", { class: "section-title", text: "限流" }),
+      el("div", { class: "form-row", style: "align-items:center;max-width:420px" }, rateInput, saveBtn),
+      el("div", { class: "section-title", text: "审计" }),
+      el("label", { class: "checkbox" }, auditChk, " 记录访问审计（allow/deny 及原因）"),
+      el("div", { class: "section-title", text: "临时分享链接" }),
+      el("div", { class: "form-row", style: "max-width:480px" }, shareName, shareTTL, createShareBtn),
+    ];
+    if (links.length) {
+      nodes.push(el("table", { class: "grid", style: "margin-top:10px" },
+        el("thead", {}, el("tr", {}, el("th", { text: "名称" }), el("th", { text: "过期时间" }), el("th", { text: "" }))),
+        el("tbody", {}, links.map(l =>
+          el("tr", {},
+            el("td", { class: "mono", text: l.name }),
+            el("td", { class: "muted", text: fmtTime(l.expiresAt) }),
+            el("td", {}, el("button", {
+              class: "btn btn-ghost btn-sm", text: "吊销",
+              onclick: async () => {
+                if (!confirm("吊销链接 " + l.name + "？")) return;
+                try {
+                  await api("/tunnels/" + id + "/shares/" + encodeURIComponent(l.name), { method: "DELETE" });
+                  toast("已吊销");
+                  render();
+                } catch (e) { toast(e.message, true); }
+              },
+            })))))));
+    }
+    if (policy.auditEnabled) {
+      try {
+        const audit = await api("/tunnels/" + id + "/access/audit?since=30m");
+        const events = (audit && audit.events) || [];
+        if (events.length) {
+          nodes.push(el("div", { class: "section-title", text: "近期审计事件" }));
+          nodes.push(el("table", { class: "grid" },
+            el("thead", {}, el("tr", {},
+              el("th", { text: "时间" }), el("th", { text: "决策" }), el("th", { text: "原因" }), el("th", { text: "状态" }), el("th", { text: "IP" }), el("th", { text: "路径" }))),
+            el("tbody", {}, events.slice(0, 20).map(ev =>
+              el("tr", {},
+                el("td", { class: "muted mono", text: fmtTime(ev.time) }),
+                el("td", {}, el("span", { class: "badge " + (ev.decision === "allow" ? "active" : "error"), text: ev.decision })),
+                el("td", { class: "muted", text: ev.reason }),
+                el("td", { class: "mono", text: ev.status }),
+                el("td", { class: "mono muted", text: ev.clientIp || "-" }),
+                el("td", { class: "mono", text: ev.path }))))));
+        }
+      } catch { /* audit optional */ }
+    }
+    box.replaceChildren(...nodes);
+    return [box];
+  }
+
+  async function renderDomain() {
+    const current = payload.customDomain || "";
+    const input = el("input", { class: "input mono", placeholder: "app.example.com", id: "d-domain" });
+    const nodes = [
+      el("div", { class: "kv" },
+        el("div", { class: "k", text: "当前域名" }),
+        el("div", { class: "v", text: current || "未绑定（使用 Sealos 默认域名）" })),
+      el("div", { class: "section-title", text: current ? "更换域名" : "绑定自定义域名" }),
+      el("div", { class: "form-row", style: "max-width:480px" },
+        input,
+        el("button", {
+          class: "btn btn-primary btn-sm", text: "绑定",
+          onclick: async () => {
+            const d = input.value.trim();
+            if (!d) { toast("请输入域名", true); return; }
+            try {
+              const res = await api("/tunnels/" + id + "/domain", { method: "PUT", body: { domain: d } });
+              toast("已提交绑定");
+              modal("域名绑定", [el("pre", { class: "mono", style: "white-space:pre-wrap", text: res.output || "" })]);
+            } catch (e) { toast(e.message, true); }
+          },
+        })),
+      el("div", { class: "hint", text: "需要先在 DNS 服务商处把域名 CNAME 到隧道 Sealos 地址，再绑定。" }),
+    ];
+    if (current) {
+      nodes.push(el("div", { class: "section-title", text: "解绑" }));
+      nodes.push(el("button", {
+        class: "btn btn-danger btn-sm", text: "解绑域名",
+        onclick: async () => {
+          if (!confirm("解绑域名 " + current + "？")) return;
+          try {
+            await api("/tunnels/" + id + "/domain", { method: "DELETE" });
+            toast("已解绑");
+            location.reload();
+          } catch (e) { toast(e.message, true); }
+        },
+      }));
+    }
+    return nodes;
+  }
+
+  async function renderLogs() {
+    const box = el("div", {});
+    const out = el("pre", { class: "mono", style: "background:var(--ink);color:#D7E0EE;padding:14px;border-radius:6px;min-height:220px;max-height:420px;overflow:auto;font-size:12px", id: "logs-out" });
+    async function load() {
+      try {
+        const res = await api("/tunnels/" + id + "/logs?tail=200");
+        out.textContent = res.output || "(暂无日志)";
+        out.scrollTop = out.scrollHeight;
+      } catch (e) { out.textContent = "日志不可用: " + e.message; }
+    }
+    await load();
+    setRefresh(load, 6000);
+    return [
+      el("div", { class: "action-bar", style: "margin-bottom:10px" },
+        el("span", { class: "muted", text: "最近 200 行，每 6 秒刷新" })),
+      out];
+  }
+
+  async function render() {
+    tabBar.querySelectorAll(".tab").forEach((t, i) => t.classList.toggle("active", tabs[i].key === activeTab));
+    setRefresh(null);
+    let nodes = [];
+    if (activeTab === "overview") nodes = await renderOverview();
+    else if (activeTab === "requests") nodes = await renderRequests();
+    else if (activeTab === "access") nodes = await renderAccess();
+    else if (activeTab === "domain") nodes = await renderDomain();
+    else if (activeTab === "logs") nodes = await renderLogs();
+    tabBody.replaceChildren(...nodes);
+  }
+
+  container.replaceChildren(headerCard, tabBody.parentElement ? tabBody : tabBody);
+  const tabsCard = el("div", { class: "card" }, tabBar, tabBody);
+  container.replaceChildren(headerCard, tabsCard);
+  await render();
+}
+
+async function renderSettings() {
+  const [status, workspaces, profiles, regions] = await Promise.all([
+    api("/status").catch(() => null),
+    api("/workspaces").catch(() => null),
+    api("/profiles").catch(() => []),
+    api("/regions").catch(() => []),
+  ]);
+
+  const wsRows = ((workspaces && workspaces.workspaces) || []).map(w =>
+    el("tr", {},
+      el("td", { class: "mono ink", text: w.id }),
+      el("td", { text: w.teamName || "-" }),
+      el("td", {}, w.current ? el("span", { class: "badge active", text: "当前" }) : ""),
+      el("td", {}, w.current ? "" : el("button", {
+        class: "btn btn-secondary btn-sm", text: "切换",
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            await api("/workspaces/use", { method: "POST", body: { target: w.id } });
+            toast("已切换 workspace");
+            renderSettings();
+          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+        },
+      }))));
+
+  const profileRows = (profiles || []).map(p =>
+    el("tr", {},
+      el("td", { class: "mono ink", text: p.name }),
+      el("td", { class: "muted", text: p.region || "-" }),
+      el("td", { class: "muted", text: p.workspace || "-" }),
+      el("td", {}, p.current ? el("span", { class: "badge active", text: "当前" }) : ""),
+      el("td", {}, p.current ? "" : el("button", {
+        class: "btn btn-secondary btn-sm", text: "使用",
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            await api("/profiles/" + encodeURIComponent(p.name) + "/use", { method: "POST" });
+            toast("已切换 profile");
+            renderSettings();
+          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+        },
+      }))));
+
+  const logoutBtn = el("button", {
+    class: "btn btn-danger", text: "退出登录",
+    onclick: () => {
+      modal("退出登录", [
+        el("p", { text: "退出后本地凭证将被清除。隧道会尽力清理，未清理成功的会继续计费，建议先手动停止。" }),
+      ], [
+        el("button", { class: "btn btn-secondary", text: "取消", onclick: () => document.querySelector(".modal-mask")?.remove() }),
+        el("button", {
+          class: "btn btn-danger", text: "确认退出",
+          onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try {
+              await api("/auth/logout", { method: "POST" });
+              location.hash = "#/login";
+              location.reload();
+            } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+          },
+        }),
+      ]);
+    },
+  });
+
+  chrome("#/settings", "设置", [
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "登录状态" })),
+      el("div", { class: "card-body" },
+        el("div", { class: "kv" },
+          el("div", { class: "k", text: "状态" }), el("div", { class: "v" }, status && status.loggedIn ? el("span", { class: "badge active", text: "已登录" }) : el("span", { class: "badge error", text: "未登录" })),
+          el("div", { class: "k", text: "Region" }), el("div", { class: "v mono", text: (status && status.region) || "-" }),
+          el("div", { class: "k", text: "Namespace" }), el("div", { class: "v mono", text: (status && status.namespace) || "-" }),
+          el("div", { class: "k", text: "Profile" }), el("div", { class: "v", text: (status && status.profile) || "（未使用）" })))),
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "Workspace（命名空间）" })),
+      el("div", { class: "card-body flush" },
+        wsRows.length
+          ? el("table", { class: "grid" },
+              el("thead", {}, el("tr", {}, el("th", { text: "ID" }), el("th", { text: "名称" }), el("th", { text: "状态" }), el("th", { text: "" }))),
+              el("tbody", {}, wsRows))
+          : el("div", { class: "empty", text: "未获取到 workspace 列表" }))),
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "Profiles" })),
+      el("div", { class: "card-body flush" },
+        profileRows.length
+          ? el("table", { class: "grid" },
+              el("thead", {}, el("tr", {}, el("th", { text: "名称" }), el("th", { text: "Region" }), el("th", { text: "Workspace" }), el("th", { text: "状态" }), el("th", { text: "" }))),
+              el("tbody", {}, profileRows))
+          : el("div", { class: "empty", text: "没有已保存的 profile" }))),
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "支持的区域" })),
+      el("div", { class: "card-body" },
+        el("div", { class: "pill-row" }, (regions || []).map(r =>
+          el("span", { class: "badge " + (r.current ? "active" : "proto"), text: r.name + (r.current ? "（当前）" : "") }))))),
+    el("div", { class: "card" },
+      el("div", { class: "card-head" }, el("h2", { text: "账号" })),
+      el("div", { class: "card-body" }, logoutBtn))], await statusFoot());
+}
+
+async function renderDoctor() {
+  const box = el("div", {}, el("div", { class: "empty" }, spinner()));
+  chrome("#/doctor", "诊断", [box], await statusFoot());
+  try {
+    const d = await api("/doctor");
+    const yn = (v) => v ? el("span", { class: "badge active", text: "正常" }) : el("span", { class: "badge error", text: "异常" });
+    const nodes = [
+      el("div", { class: "card" },
+        el("div", { class: "card-head" }, el("h2", { text: "环境诊断" })),
+        el("div", { class: "card-body" },
+          el("div", { class: "kv" },
+            el("div", { class: "k", text: "守护进程" }), el("div", { class: "v" }, yn(d.daemonRunning)),
+            el("div", { class: "k", text: "登录状态" }), el("div", { class: "v" }, yn(d.loggedIn)),
+            el("div", { class: "k", text: "Kubeconfig" }), el("div", { class: "v" }, yn(d.kubeconfigPresent)),
+            el("div", { class: "k", text: "会话总数" }), el("div", { class: "v", text: d.totalSessions ?? 0 }),
+            el("div", { class: "k", text: "活跃 / 降级 / 失效" }),
+            el("div", { class: "v", text: (d.activeSessions ?? 0) + " / " + (d.degradedSessions ?? 0) + " / " + ((d.staleSessions ?? 0) + (d.errorSessions ?? 0)) })))),
+    ];
+    if ((d.warnings || []).length) {
+      nodes.push(el("div", { class: "card" },
+        el("div", { class: "card-head" }, el("h2", { text: "警告" })),
+        el("div", { class: "card-body" },
+          d.warnings.map((w) => el("p", { class: "muted", text: "• " + w })))));
+    }
+    if ((d.suggestions || []).length) {
+      nodes.push(el("div", { class: "card" },
+        el("div", { class: "card-head" }, el("h2", { text: "建议" })),
+        el("div", { class: "card-body" },
+          d.suggestions.map((s) => el("p", { class: "muted", text: "• " + s })))));
+    }
+    box.replaceChildren(...nodes);
+  } catch (e) {
+    box.replaceChildren(emptyState("诊断失败", e.message));
+  }
+}
+
+// ── router ───────────────────────────────────────────────────────────────
+async function route() {
+  const hash = location.hash || "#/";
+  if (hash === "#/login") return renderLogin();
+  // gate: require login
+  try {
+    const st = await api("/status");
+    if (!st.loggedIn) {
+      if (hash !== "#/login") { location.hash = "#/login"; }
+      return renderLogin();
+    }
+  } catch (e) {
+    root.replaceChildren(el("div", { class: "login-wrap" },
+      el("div", { class: "card login-card" },
+        el("div", { class: "card-body", style: "text-align:center" },
+          el("p", { class: "ink", text: "无法连接 Sealtun 服务" }),
+          el("p", { class: "muted", text: e.message })))));
+    return;
+  }
+  if (hash === "#/" || hash === "") return renderTunnels();
+  if (hash === "#/create") return renderCreate();
+  if (hash.startsWith("#/tunnels/")) return renderDetail(hash.slice("#/tunnels/".length));
+  if (hash === "#/settings") return renderSettings();
+  if (hash === "#/doctor") return renderDoctor();
+  location.hash = "#/";
+}
+
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

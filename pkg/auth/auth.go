@@ -111,11 +111,61 @@ type ErrorResponse struct {
 	ErrorDescription string `json:"error_description"`
 }
 
+// AuthAPIError is a Sealos auth-API failure returned inside an HTTP 200
+// envelope ({"code":401,"message":"...","data":null}); without unwrapping it,
+// an empty data payload would silently pass as success.
+type AuthAPIError struct {
+	Code    int
+	Message string
+}
+
+func (e *AuthAPIError) Error() string {
+	return fmt.Sprintf("sealos auth api error (%d): %s", e.Code, e.Message)
+}
+
+// IsAuthAPIError reports whether err is an AuthAPIError with one of the given
+// codes (typically 401 for expired tokens).
+func IsAuthAPIError(err error, codes ...int) bool {
+	var apiErr *AuthAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, code := range codes {
+		if apiErr.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// sealosEnvelope unwraps the Sealos auth API's HTTP-200 envelope: failures
+// arrive as code>=400 with null data, successes as code<400 with a data
+// payload.
+type sealosEnvelope struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+}
+
+func decodeSealosEnvelope(body []byte, target interface{}) error {
+	var envelope sealosEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return err
+	}
+	if envelope.Code >= 400 {
+		return &AuthAPIError{Code: envelope.Code, Message: SanitizeServerText(envelope.Message)}
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return fmt.Errorf("sealos auth api returned an empty data payload")
+	}
+	return json.Unmarshal(envelope.Data, target)
+}
+
 type Namespace struct {
 	UID      string      `json:"uid"`
 	ID       string      `json:"id"`
 	TeamName string      `json:"teamName"`
-	Role     string      `json:"role"`
+	Role     interface{} `json:"role"`
 	NSType   interface{} `json:"nstype"`
 }
 
@@ -314,9 +364,19 @@ func GetRegionToken(region, accessToken string) (*RegionTokenResponse, error) {
 		return nil, fmt.Errorf("region token exchange failed: %s", SanitizeServerText(string(body)))
 	}
 
-	var res RegionTokenResponse
-	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
+	body, err := readBoundedResponseBody(resp.Body)
+	if err != nil {
 		return nil, err
+	}
+	var res RegionTokenResponse
+	if err := decodeSealosEnvelope(body, &res.Data); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(res.Data.Token) == "" {
+		return nil, fmt.Errorf("region token exchange returned an empty token")
+	}
+	if strings.TrimSpace(res.Data.Kubeconfig) == "" {
+		return nil, fmt.Errorf("region token exchange returned an empty kubeconfig")
 	}
 	return &res, nil
 }
@@ -342,8 +402,12 @@ func ListWorkspaces(region, regionalToken string) (*NamespaceListResponse, error
 		return nil, fmt.Errorf("list workspaces failed: %s", SanitizeServerText(string(body)))
 	}
 
+	body, err := readBoundedResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	var res NamespaceListResponse
-	if err := decodeLimitedJSON(resp.Body, &res); err != nil {
+	if err := decodeSealosEnvelope(body, &res.Data); err != nil {
 		return nil, err
 	}
 	return &res, nil

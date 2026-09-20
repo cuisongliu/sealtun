@@ -83,3 +83,43 @@ func formValue(body, key string) string {
 	}
 	return ""
 }
+
+func TestGetRegionTokenUnwrapsErrorEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Sealos answers auth failures as HTTP 200 with an error envelope.
+		_, _ = w.Write([]byte(`{"code":401,"message":"invalid token","data":null}`))
+	}))
+	defer server.Close()
+
+	_, err := GetRegionToken(server.URL, "stale")
+	if !IsAuthAPIError(err, 401) {
+		t.Fatalf("expected unwrapped 401 envelope error, got %v", err)
+	}
+}
+
+func TestGetRegionTokenSuccessEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"message":"success","data":{"token":"rt","kubeconfig":"kc"}}`))
+	}))
+	defer server.Close()
+
+	res, err := GetRegionToken(server.URL, "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Data.Token != "rt" || res.Data.Kubeconfig != "kc" {
+		t.Fatalf("unexpected response: %#v", res.Data)
+	}
+}
+
+func TestListWorkspacesUnwrapsErrorEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":401,"message":"token verify error","data":null}`))
+	}))
+	defer server.Close()
+
+	_, err := ListWorkspaces(server.URL, "stale")
+	if !IsAuthAPIError(err, 401) {
+		t.Fatalf("expected unwrapped 401 envelope error, got %v", err)
+	}
+}

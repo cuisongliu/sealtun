@@ -23,7 +23,7 @@ func configureRootCommandGroups() {
 		listCmd, inspectCmd, startCmd, stopCmd, cleanupCmd,
 	)
 	assignCommandGroup(commandGroupSecurity, domainCmd, policyCmd, shareCmd, rotateCmd)
-	assignCommandGroup(commandGroupAccount, loginCmd, logoutCmd, statusCmd, profileCmd, regionCmd)
+	assignCommandGroup(commandGroupAccount, loginCmd, logoutCmd, statusCmd, profileCmd, regionCmd, workspaceCmd)
 	assignCommandGroup(commandGroupOperations, doctorCmd, logsCmd, requestsCmd)
 	rootCmd.SetHelpCommandGroupID(commandGroupOther)
 	rootCmd.SetCompletionCommandGroupID(commandGroupOther)

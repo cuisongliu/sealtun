@@ -64,11 +64,11 @@ var logsCmd = &cobra.Command{
 
 func init() {
 	tunnelCmd.AddCommand(logsCmd)
-	rootCmd.AddCommand(aliasCommand(logsCmd))
 	logsCmd.Flags().Int64Var(&logsTail, "tail", 100, "Number of recent log lines to show")
 	logsCmd.Flags().DurationVar(&logsSince, "since", 0, "Only return logs newer than this duration, e.g. 10m")
 	logsCmd.Flags().BoolVar(&logsFollow, "follow", false, "Follow log output")
 	logsCmd.Flags().BoolVar(&logsRaw, "raw", false, "Output logs unfiltered, including terminal escape sequences")
+	rootCmd.AddCommand(aliasCommand(logsCmd))
 }
 
 func validateLogOptions(tail int64, since time.Duration) error {

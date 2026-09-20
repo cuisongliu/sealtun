@@ -113,6 +113,25 @@ grep -qF "(+1 route)" <<<"$OUT" && ok "list shows route marker" || bad "list mis
 OUT=$(capture "$BIN" doctor "$TUNNEL_ID")
 grep -q "routes: ok" <<<"$OUT" && ok "doctor routes check ok" || bad "doctor routes check wrong: $OUT"
 
+say "== new command tree parity (aliases must be byte-identical) =="
+parity() { # label, args...
+  local label="$1"; shift
+  OLD_OUT=$(capture "$BIN" "$@")
+  NEW_OUT=$(capture "$BIN" tunnel "$@")
+  [ "$OLD_OUT" = "$NEW_OUT" ] && ok "parity: $label" || bad "parity mismatch for $label"
+}
+parity "list" list
+parity "inspect" inspect "$TUNNEL_ID"
+# doctor intentionally stays a root command; no alias expected
+OUT=$(capture "$BIN" tunnel doctor "$TUNNEL_ID")
+grep -q "Inspect, operate" <<<"$OUT" && ! grep -q "Sealtun Doctor" <<<"$OUT" && ok "doctor correctly absent from tunnel group" || bad "tunnel doctor should not exist"
+OUT=$(capture "$BIN" policy show "$TUNNEL_ID")
+NEW_OUT=$(capture "$BIN" tunnel access show "$TUNNEL_ID")
+[ "$OUT" = "$NEW_OUT" ] && ok "parity: policy->access (alias parent)" || bad "access alias parent mismatch"
+OUT=$(capture "$BIN" domain status)
+NEW_OUT=$(capture "$BIN" tunnel domain status)
+[ "$OUT" = "$NEW_OUT" ] && ok "parity: domain (alias parent)" || bad "domain alias parent mismatch"
+
 say "== lifecycle: stop, start, cleanup =="
 expect "stop" "$BIN" stop "$TUNNEL_ID"
 "$BIN" start "$TUNNEL_ID" >/dev/null 2>&1

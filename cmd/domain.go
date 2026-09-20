@@ -245,7 +245,6 @@ func init() {
 	tunnelDomainCmd.AddCommand(domainClearCmd)
 	tunnelDomainCmd.AddCommand(domainVerifyCmd)
 	tunnelDomainCmd.AddCommand(domainStatusCmd)
-	rootCmd.AddCommand(aliasGroup("domain", aliasCommand(domainPlanCmd), aliasCommand(domainAddCmd), aliasCommand(domainClearCmd), aliasCommand(domainVerifyCmd), aliasCommand(domainStatusCmd)))
 	domainCmd.PersistentFlags().BoolVar(&domainJSON, "json", false, "Output domain details as JSON")
 	domainVerifyCmd.Flags().BoolVar(&domainVerifyWait, "wait", false, "Wait until DNS, Ingress, and certificate are ready")
 	domainVerifyCmd.Flags().DurationVar(&domainVerifyTimeout, "timeout", 5*time.Minute, "Maximum time to wait for domain readiness")
@@ -254,6 +253,7 @@ func init() {
 	domainStatusCmd.Flags().DurationVar(&domainStatusTimeout, "timeout", 15*time.Second, "Per-domain readiness check timeout")
 	domainStatusCmd.Flags().BoolVar(&domainStatusVerbose, "verbose", false, "Show detailed DNS, Ingress, and certificate diagnostics")
 	domainStatusCmd.Flags().DurationVar(&domainStatusVerboseTimeout, "verbose-timeout", 15*time.Second, "Per-domain diagnostic timeout when --verbose is enabled")
+	rootCmd.AddCommand(aliasGroup(domainCmd, aliasCommand(domainPlanCmd), aliasCommand(domainAddCmd), aliasCommand(domainClearCmd), aliasCommand(domainVerifyCmd), aliasCommand(domainStatusCmd)))
 }
 
 func planSessionCustomDomain(tunnelID, customDomain string) (*domainPayload, error) {

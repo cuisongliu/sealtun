@@ -101,7 +101,6 @@ var inspectCmd = &cobra.Command{
 
 func init() {
 	tunnelCmd.AddCommand(inspectCmd)
-	rootCmd.AddCommand(aliasCommand(inspectCmd))
 	inspectCmd.Flags().BoolVar(&inspectJSON, "json", false, "Output tunnel session details as JSON")
 	inspectCmd.Flags().BoolVar(&inspectRemote, "remote", false, "Include best-effort remote Kubernetes diagnostics and recent events")
 	inspectCmd.Flags().BoolVar(&inspectMetrics, "metrics", false, "Include local, Kubernetes, and server metrics")
@@ -109,6 +108,7 @@ func init() {
 	inspectCmd.Flags().BoolVar(&inspectWatch, "watch", false, "Refresh inspection until interrupted or --count is reached")
 	inspectCmd.Flags().DurationVar(&inspectInterval, "interval", 3*time.Second, "Refresh interval when --watch is enabled")
 	inspectCmd.Flags().IntVar(&inspectCount, "count", 0, "Stop after N refreshes; 0 watches until interrupted")
+	rootCmd.AddCommand(aliasCommand(inspectCmd))
 }
 
 func runInspectWatch(cmd *cobra.Command, tunnelID string, opts watchOptions) error {

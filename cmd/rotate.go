@@ -51,11 +51,11 @@ var rotateCmd = &cobra.Command{
 
 func init() {
 	tunnelCmd.AddCommand(rotateCmd)
+	rotateCmd.Flags().BoolVar(&rotateServerSecret, "server-secret", false, "Rotate the tunnel server secret")
+	rotateCmd.Flags().BoolVar(&rotateJSON, "json", false, "Output rotation result as JSON")
 	rotateAlias := aliasCommand(rotateCmd)
 	rotateAlias.Use = "rotate [tunnel-id]"
 	rootCmd.AddCommand(rotateAlias)
-	rotateCmd.Flags().BoolVar(&rotateServerSecret, "server-secret", false, "Rotate the tunnel server secret")
-	rotateCmd.Flags().BoolVar(&rotateJSON, "json", false, "Output rotation result as JSON")
 }
 
 func rotateTunnelServerSecret(ctx context.Context, tunnelID string) (*rotateServerSecretPayload, error) {

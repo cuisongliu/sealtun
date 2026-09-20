@@ -137,7 +137,6 @@ var policyAuditCmd = &cobra.Command{
 
 func init() {
 	tunnelAccessCmd.AddCommand(policyShowCmd, policySetCmd, policyAuditCmd)
-	rootCmd.AddCommand(aliasGroup("policy", aliasCommand(policyShowCmd), aliasCommand(policySetCmd), aliasCommand(policyAuditCmd)))
 	policyShowCmd.Flags().BoolVar(&policyShowJSON, "json", false, "Output access policy as JSON")
 	policySetCmd.Flags().StringVar(&policySetRateLimit, "rate-limit", "", "Set HTTPS public traffic rate limit, e.g. 60/m or 1000/h")
 	policySetCmd.Flags().BoolVar(&policySetClearRateLimit, "clear-rate-limit", false, "Clear the HTTPS public traffic rate limit")
@@ -146,6 +145,7 @@ func init() {
 	policyAuditCmd.Flags().DurationVar(&policyAuditSince, "since", 10*time.Minute, "Only return audit events newer than this duration")
 	policyAuditCmd.Flags().IntVar(&policyAuditLimit, "limit", 200, "Maximum audit events to return")
 	policyAuditCmd.Flags().BoolVar(&policyAuditJSON, "json", false, "Output audit events as JSON")
+	rootCmd.AddCommand(aliasGroup(policyCmd, aliasCommand(policyShowCmd), aliasCommand(policySetCmd), aliasCommand(policyAuditCmd)))
 }
 
 func showPolicy(tunnelID string, now time.Time) (*policyShowPayload, error) {

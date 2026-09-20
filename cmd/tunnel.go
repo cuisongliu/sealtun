@@ -48,15 +48,17 @@ func aliasCommand(target *cobra.Command) *cobra.Command {
 	return &alias
 }
 
-// aliasGroup rebuilds a hidden alias for a parent command group; the children
-// it receives are the already-aliased leaf commands.
-func aliasGroup(use string, children ...*cobra.Command) *cobra.Command {
+// aliasGroup rebuilds a hidden alias for a parent command group, inheriting
+// the original parent's persistent flags; the children it receives are the
+// already-aliased leaf commands.
+func aliasGroup(parent *cobra.Command, children ...*cobra.Command) *cobra.Command {
 	group := &cobra.Command{
-		Use:    use,
+		Use:    parent.Use,
 		Short:  "Deprecated alias; commands moved under `sealtun tunnel`",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 	}
+	group.PersistentFlags().AddFlagSet(parent.PersistentFlags())
 	group.AddCommand(children...)
 	return group
 }

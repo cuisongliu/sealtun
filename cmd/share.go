@@ -113,7 +113,6 @@ var shareRotateCmd = &cobra.Command{
 
 func init() {
 	tunnelShareCmd.AddCommand(shareCreateCmd, shareRevokeCmd, shareRotateCmd)
-	rootCmd.AddCommand(aliasGroup("share", aliasCommand(shareCreateCmd), aliasCommand(shareRevokeCmd), aliasCommand(shareRotateCmd)))
 
 	shareCreateCmd.Flags().StringVar(&shareName, "name", "share", "Temporary link name")
 	shareCreateCmd.Flags().DurationVar(&shareTTL, "ttl", time.Hour, "Temporary link lifetime")
@@ -123,6 +122,7 @@ func init() {
 	shareRotateCmd.Flags().DurationVar(&shareTTL, "ttl", time.Hour, "Rotated temporary link lifetime")
 	shareRotateCmd.Flags().BoolVar(&shareJSON, "json", false, "Output the rotated link as JSON")
 	shareRotateCmd.Flags().BoolVar(&shareOpen, "open", false, "Open the rotated temporary access URL in the browser")
+	rootCmd.AddCommand(aliasGroup(shareCmd, aliasCommand(shareCreateCmd), aliasCommand(shareRevokeCmd), aliasCommand(shareRotateCmd)))
 }
 
 func createShareLink(ctx context.Context, tunnelID, name string, ttl time.Duration, token string) (*shareCreatePayload, error) {

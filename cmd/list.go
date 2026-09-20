@@ -81,12 +81,12 @@ local target ports and mark unreachable running tunnels as degraded.`,
 
 func init() {
 	tunnelCmd.AddCommand(listCmd)
-	rootCmd.AddCommand(aliasCommand(listCmd))
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output tunnel sessions as JSON")
 	listCmd.Flags().BoolVar(&listCheck, "check", false, "Probe local target ports and report degraded sessions")
 	listCmd.Flags().BoolVar(&listWatch, "watch", false, "Refresh the tunnel list until interrupted or --count is reached")
 	listCmd.Flags().DurationVar(&listInterval, "interval", 3*time.Second, "Refresh interval when --watch is enabled")
 	listCmd.Flags().IntVar(&listCount, "count", 0, "Stop after N refreshes; 0 watches until interrupted")
+	rootCmd.AddCommand(aliasCommand(listCmd))
 }
 
 func runListWatch(cmd *cobra.Command, opts watchOptions) error {

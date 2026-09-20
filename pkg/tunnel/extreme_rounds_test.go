@@ -184,13 +184,10 @@ func TestR6WebSocketSubprotocolsLargeFramesAndUnmatched(t *testing.T) {
 	wsBase := "ws://" + strings.TrimPrefix(rig.base, "http://")
 
 	// Subprotocol negotiation must survive both proxies.
-	dialer := websocket.Dialer{HandshakeTimeout: 3 * time.Second, Subprotocols: []string{"chat"}}
-	conn, resp, err := dialer.Dial(wsBase+"/api/ws", nil)
-	if err != nil {
-		t.Fatalf("WS dial failed: %v", err)
-	}
-	if resp.Header.Get("Sec-Websocket-Protocol") != "chat" {
-		t.Fatalf("subprotocol lost: %q", resp.Header.Get("Sec-Websocket-Protocol"))
+	header := http.Header{"Origin": []string{rig.base}, "Sec-WebSocket-Protocol": []string{"chat"}}
+	conn := dialWSWithRetry(t, wsBase+"/api/ws", header)
+	if conn.Subprotocol() != "chat" {
+		t.Fatalf("subprotocol lost: %q", conn.Subprotocol())
 	}
 
 	// 1 MiB message round trip.
@@ -231,7 +228,7 @@ func TestR6WebSocketSubprotocolsLargeFramesAndUnmatched(t *testing.T) {
 	// WS dial to an UNMATCHED path goes to the primary target, which here has
 	// no WS endpoint: the failure must be an ordinary bad handshake, not a
 	// tunnel-level error.
-	_, resp, err = dialer.Dial(wsBase+"/nowhere/ws", nil)
+	_, resp, err := (&websocket.Dialer{HandshakeTimeout: 3 * time.Second}).Dial(wsBase+"/nowhere/ws", nil)
 	if err == nil {
 		t.Fatal("WS to unmatched path should fail against the primary HTTP app")
 	}

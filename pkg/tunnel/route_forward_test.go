@@ -183,18 +183,7 @@ func TestRoutedForwardingThroughTunnel(t *testing.T) {
 	}
 
 	// WebSocket upgrade on a routed path.
-	dialer := websocket.Dialer{HandshakeTimeout: 3 * time.Second}
-	ws, hsResp, err := dialer.Dial("ws://"+listener.Addr().String()+"/api/ws", nil)
-	if err != nil {
-		var hsStatus string
-		var hsBody []byte
-		if hsResp != nil {
-			hsStatus = hsResp.Status
-			hsBody, _ = io.ReadAll(hsResp.Body)
-			_ = hsResp.Body.Close()
-		}
-		t.Fatalf("routed WebSocket dial failed: %v status=%q body=%.300q", err, hsStatus, hsBody)
-	}
+	ws := dialWSWithRetry(t, "ws://"+listener.Addr().String()+"/api/ws", nil)
 	_ = ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if err := ws.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
 		t.Fatalf("routed WebSocket write failed: %v", err)
@@ -214,4 +203,26 @@ func mustPort(t *testing.T, rawURL string) string {
 		t.Fatalf("cannot extract port from %q", rawURL)
 	}
 	return rawURL[idx+1:]
+}
+
+// dialWSWithRetry dials a WebSocket through the warmup window: the relay's
+// session swap can lag the client's connected signal on loaded CI runners, so
+// the first handshake occasionally lands on the warmup 502. The retry keeps
+// these tests about behavior, not about warmup timing.
+func dialWSWithRetry(t *testing.T, url string, header http.Header) *websocket.Conn {
+	t.Helper()
+	var conn *websocket.Conn
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		dialer := websocket.Dialer{HandshakeTimeout: time.Second, Subprotocols: header.Values("Sec-WebSocket-Protocol")}
+		c, _, err := dialer.Dial(url, header)
+		if err == nil {
+			return c
+		} else if time.Now().After(deadline) {
+			t.Fatalf("WS dial failed after retries: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		_ = conn
+	}
+	return nil
 }

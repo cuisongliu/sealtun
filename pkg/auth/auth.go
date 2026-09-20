@@ -518,3 +518,56 @@ func SanitizeServerText(value string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+// PollDeviceTokenOnce performs a single device-flow token poll and reports
+// the OAuth state ("", "pending", "expired", or "denied"). An empty state
+// means a token was issued. Unlike PollForToken it never sleeps, so API
+// callers can drive their own polling cadence.
+func PollDeviceTokenOnce(region, deviceCode string) (*TokenResponse, string, error) {
+	apiURL := fmt.Sprintf("%s/api/auth/oauth2/token", strings.TrimRight(region, "/"))
+	data := url.Values{}
+	data.Set("client_id", ClientID)
+	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+	data.Set("device_code", deviceCode)
+
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	client := httpClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	body, err := readBoundedResponseBody(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		var tokenRes TokenResponse
+		if err := json.Unmarshal(body, &tokenRes); err != nil {
+			return nil, "", err
+		}
+		if strings.TrimSpace(tokenRes.AccessToken) == "" {
+			return nil, "", fmt.Errorf("token endpoint returned an empty access token")
+		}
+		return &tokenRes, "", nil
+	}
+
+	var errRes ErrorResponse
+	_ = json.Unmarshal(body, &errRes)
+	switch errRes.Error {
+	case "authorization_pending", "slow_down":
+		return nil, "pending", nil
+	case "expired_token":
+		return nil, "expired", nil
+	case "access_denied":
+		return nil, "denied", nil
+	default:
+		return nil, "", fmt.Errorf("token poll failed: %s %s", errRes.Error, errRes.ErrorDescription)
+	}
+}

@@ -275,21 +275,38 @@ func runLoginFlowWithProfile(regionInput string, insecure bool, profileName stri
 	}
 	fmt.Println("Authorization received. Exchanging for regional token...")
 
+	loginResult, err := performLoginExchange(region, tokenRes, normalizedProfile)
+	if err != nil {
+		return err
+	}
+	printLoginSuccess(os.Stdout, normalizedProfile, loginResult.Workspace)
+	return nil
+}
+
+// performLoginExchange completes a device-flow login once an access token
+// exists: regional token exchange, workspace discovery, and persistence. It
+// is shared by the interactive login command and the web API's device-flow
+// completion endpoint.
+type loginExchangeResult struct {
+	Workspace *auth.Workspace
+}
+
+func performLoginExchange(region string, tokenRes *auth.TokenResponse, normalizedProfile string) (*loginExchangeResult, error) {
 	regionData, err := auth.GetRegionToken(region, tokenRes.AccessToken)
 	if err != nil {
-		return fmt.Errorf("failed to get region token: %w", err)
+		return nil, fmt.Errorf("failed to get region token: %w", err)
 	}
 
 	initData, err := auth.GetInitData(region)
 	if err != nil {
-		return fmt.Errorf("failed to get region init data: %w", err)
+		return nil, fmt.Errorf("failed to get region init data: %w", err)
 	}
 	if initData == nil || initData.Data.SealosDomain == "" {
-		return fmt.Errorf("region init data did not include SEALOS_DOMAIN")
+		return nil, fmt.Errorf("region init data did not include SEALOS_DOMAIN")
 	}
 	sealosDomain, err := validateRegionLoginData(regionData, initData)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var currentWorkspace *auth.Workspace
@@ -329,28 +346,30 @@ func runLoginFlowWithProfile(regionInput string, insecure bool, profileName stri
 	}
 	if normalizedProfile != "" {
 		if _, err := auth.SaveProfile(normalizedProfile, authData, regionData.Data.Kubeconfig); err != nil {
-			return fmt.Errorf("failed to save profile %s: %w", normalizedProfile, err)
+			return nil, fmt.Errorf("failed to save profile %s: %w", normalizedProfile, err)
 		}
 		if err := auth.ActivateProfile(normalizedProfile); err != nil {
-			return fmt.Errorf("failed to activate profile %s: %w", normalizedProfile, err)
+			return nil, fmt.Errorf("failed to activate profile %s: %w", normalizedProfile, err)
 		}
 	} else {
 		if err := auth.SaveAuthData(authData, regionData.Data.Kubeconfig); err != nil {
-			return fmt.Errorf("failed to save auth data: %w", err)
+			return nil, fmt.Errorf("failed to save auth data: %w", err)
 		}
 		if err := auth.ClearCurrentProfileName(); err != nil {
-			return fmt.Errorf("failed to clear active profile marker: %w", err)
+			return nil, fmt.Errorf("failed to clear active profile marker: %w", err)
 		}
 	}
+	return &loginExchangeResult{Workspace: currentWorkspace}, nil
+}
 
-	fmt.Println("Authentication successful!")
+func printLoginSuccess(out io.Writer, normalizedProfile string, workspace *auth.Workspace) {
+	fmt.Fprintln(out, "Authentication successful!")
 	if normalizedProfile != "" {
-		fmt.Printf("Active profile: %s\n", normalizedProfile)
+		fmt.Fprintf(out, "Active profile: %s\n", normalizedProfile)
 	}
-	if currentWorkspace != nil {
-		fmt.Printf("Logged in to workspace: %s (%s)\n", currentWorkspace.ID, currentWorkspace.TeamName)
+	if workspace != nil {
+		fmt.Fprintf(out, "Logged in to workspace: %s (%s)\n", workspace.ID, workspace.TeamName)
 	}
-	return nil
 }
 
 func validateDeviceAuthorization(deviceAuth *auth.DeviceAuthResponse) error {

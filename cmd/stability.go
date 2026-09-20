@@ -18,7 +18,7 @@ func configureRootCommandGroups() {
 	)
 	assignCommandGroup(commandGroupCore, tunnelCmd, upCmd, exposeCmd, applyCmd)
 	assignCommandGroup(commandGroupAccount, loginCmd, logoutCmd, statusCmd, profileCmd, regionCmd, workspaceCmd)
-	assignCommandGroup(commandGroupOperations, doctorCmd)
+	assignCommandGroup(commandGroupOperations, doctorCmd, uiCmd)
 	rootCmd.SetHelpCommandGroupID(commandGroupOther)
 	rootCmd.SetCompletionCommandGroupID(commandGroupOther)
 }

@@ -211,18 +211,18 @@ func mustPort(t *testing.T, rawURL string) string {
 // these tests about behavior, not about warmup timing.
 func dialWSWithRetry(t *testing.T, url string, header http.Header) *websocket.Conn {
 	t.Helper()
-	var conn *websocket.Conn
 	deadline := time.Now().Add(3 * time.Second)
+	var err error
 	for {
+		var conn *websocket.Conn
 		dialer := websocket.Dialer{HandshakeTimeout: time.Second, Subprotocols: header.Values("Sec-WebSocket-Protocol")}
-		c, _, err := dialer.Dial(url, header)
+		conn, _, err = dialer.Dial(url, header)
 		if err == nil {
-			return c
-		} else if time.Now().After(deadline) {
+			return conn
+		}
+		if time.Now().After(deadline) {
 			t.Fatalf("WS dial failed after retries: %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
-		_ = conn
 	}
-	return nil
 }

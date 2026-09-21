@@ -31,7 +31,7 @@
 html, body { height: 100%; }
 body {
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
   color: var(--text);
   background: var(--bg);
@@ -39,7 +39,7 @@ body {
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.mono { font-family: var(--mono); font-size: 12.5px; }
+.mono { font-family: var(--mono); font-size: 13px; }
 .muted { color: var(--muted); }
 .ink { color: var(--ink); }
 
@@ -62,14 +62,14 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: center;
   font-family: var(--mono); font-size: 13px; font-weight: 700;
 }
-.sidebar-logo .name { font-weight: 700; font-size: 15px; color: var(--ink); }
+.sidebar-logo .name { font-weight: 700; font-size: 16px; color: var(--ink); }
 .sidebar-logo .ver { font-size: 11px; color: var(--faint); font-family: var(--mono); margin-left: auto; }
 .nav { padding: 12px 10px; flex: 1; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; margin-bottom: 2px;
+  padding: 9px 12px; margin-bottom: 2px;
   border-radius: var(--radius); cursor: pointer;
-  color: var(--text); font-size: 13.5px; font-weight: 500;
+  color: var(--text); font-size: 14.5px; font-weight: 500;
   user-select: none;
 }
 .nav-item:hover { background: var(--bg); }
@@ -85,9 +85,9 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 14px;
   padding: 0 28px;
 }
-.topbar h1 { font-size: 16px; font-weight: 700; color: var(--ink); }
+.topbar h1 { font-size: 17px; font-weight: 700; color: var(--ink); }
 .topbar .spacer { flex: 1; }
-.content { padding: 24px 28px 40px; max-width: 1160px; width: 100%; }
+.content { padding: 24px 28px 40px; width: 100%; }
 
 /* ── components ── */
 .card {
@@ -98,15 +98,15 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 10px;
   padding: 14px 18px; border-bottom: 1px solid var(--border);
 }
-.card-head h2 { font-size: 14px; font-weight: 600; color: var(--ink); }
+.card-head h2 { font-size: 15px; font-weight: 600; color: var(--ink); }
 .card-body { padding: 18px; }
 .card-body.flush { padding: 0; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 32px; padding: 0 14px;
+  height: 34px; padding: 0 15px;
   border-radius: var(--radius); border: 1px solid transparent;
-  font-size: 13px; font-weight: 500; font-family: var(--sans);
+  font-size: 13.5px; font-weight: 500; font-family: var(--sans);
   cursor: pointer; user-select: none; white-space: nowrap;
   transition: border-color .12s, background .12s, opacity .12s;
 }
@@ -129,7 +129,7 @@ a:hover { text-decoration: underline; }
 
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
-  height: 22px; padding: 0 9px; border-radius: 999px;
+  height: 23px; padding: 0 9px; border-radius: 999px;
   font-size: 12px; font-weight: 500;
 }
 .badge.active { background: var(--success-bg); color: var(--success); }
@@ -140,57 +140,59 @@ a:hover { text-decoration: underline; }
 
 table.grid { width: 100%; border-collapse: collapse; }
 table.grid th {
-  text-align: left; font-size: 12px; font-weight: 500; color: var(--muted);
+  text-align: left; font-size: 12.5px; font-weight: 500; color: var(--muted);
   padding: 10px 14px; border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 table.grid td {
-  padding: 11px 14px; border-bottom: 1px solid var(--border);
-  font-size: 13px; vertical-align: middle;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+  font-size: 14px; vertical-align: middle;
 }
+table.grid td.trunc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.grid td.col-fit, table.grid th.col-fit { width: 1%; white-space: nowrap; }
 table.grid tr:last-child td { border-bottom: none; }
 table.grid tr:hover td { background: var(--bg); }
 table.grid tr.clickable { cursor: pointer; }
 
 .field { margin-bottom: 16px; }
-.field label { display: block; font-size: 13px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+.field label { display: block; font-size: 14px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
 .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
 .input, select.input {
-  width: 100%; height: 34px; padding: 0 11px;
+  width: 100%; height: 36px; padding: 0 12px;
   border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: 13px; font-family: var(--sans); color: var(--ink);
+  font-size: 14px; font-family: var(--sans); color: var(--ink);
   background: var(--card); outline: none;
   transition: border-color .12s;
 }
 .input:focus { border-color: var(--accent); }
-.input.mono { font-family: var(--mono); font-size: 12.5px; }
+.input.mono { font-family: var(--mono); font-size: 13px; }
 textarea.input { height: auto; min-height: 90px; padding: 8px 11px; resize: vertical; }
-.checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+.checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); cursor: pointer; }
 .checkbox input { width: 15px; height: 15px; accent-color: var(--accent); }
 .form-row { display: flex; gap: 12px; }
 .form-row > * { flex: 1; }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 18px; }
 .tab {
-  padding: 10px 14px; font-size: 13.5px; font-weight: 500; color: var(--muted);
+  padding: 10px 14px; font-size: 14.5px; font-weight: 500; color: var(--muted);
   cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
   user-select: none;
 }
 .tab:hover { color: var(--ink); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-.kv { display: grid; grid-template-columns: 150px 1fr; row-gap: 10px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: 160px 1fr; row-gap: 11px; font-size: 14px; }
 .kv .k { color: var(--muted); }
 .kv .v { color: var(--ink); word-break: break-all; }
 
 .empty { padding: 52px 20px; text-align: center; color: var(--muted); }
-.empty .big { font-size: 15px; color: var(--ink); font-weight: 600; margin-bottom: 6px; }
+.empty .big { font-size: 16px; color: var(--ink); font-weight: 600; margin-bottom: 6px; }
 .empty .sub { font-size: 13px; margin-bottom: 18px; }
 
 .toast {
   position: fixed; top: 16px; right: 16px; z-index: 100;
-  max-width: 420px; padding: 11px 16px;
-  border-radius: var(--radius); font-size: 13px;
+  max-width: 460px; padding: 12px 17px;
+  border-radius: var(--radius); font-size: 13.5px;
   background: var(--ink); color: #fff;
   box-shadow: 0 8px 24px rgba(17,24,36,.18);
   animation: slidein .18s ease-out;
@@ -232,10 +234,41 @@ textarea.input { height: auto; min-height: 90px; padding: 8px 11px; resize: vert
 .qr-img { image-rendering: pixelated; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
 
 .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* shadcn-style select */
+.select { position: relative; }
+.select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; height: 36px; padding: 0 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 14px; font-family: var(--sans); color: var(--ink);
+  cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden;
+  transition: border-color .12s;
+}
+.select-trigger:hover, .select.open .select-trigger { border-color: var(--accent); }
+.select-trigger .chev { color: var(--muted); font-size: 11px; transition: transform .12s; flex-shrink: 0; }
+.select.open .select-trigger .chev { transform: rotate(180deg); }
+.select-pop {
+  position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + 6px);
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(17,24,36,.12);
+  padding: 4px; max-height: 260px; overflow: auto;
+  animation: selectin .12s ease-out;
+}
+@keyframes selectin { from { opacity: 0; transform: translateY(-4px); } }
+.select-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 4px;
+  font-size: 14px; color: var(--text); cursor: pointer; user-select: none;
+}
+.select-item:hover { background: var(--bg); }
+.select-item.selected { color: var(--ink); font-weight: 500; }
+.select-item .check { width: 14px; flex-shrink: 0; color: var(--accent); font-weight: 700; visibility: hidden; }
+.select-item.selected .check { visibility: visible; }
 .route-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .route-row .input { flex: 1; }
 .route-row .input.port { max-width: 110px; }
-.section-title { font-size: 13px; font-weight: 600; color: var(--ink); margin: 22px 0 10px; }
+.section-title { font-size: 14px; font-weight: 600; color: var(--ink); margin: 22px 0 10px; }
 .section-title:first-child { margin-top: 0; }
 .divider { height: 1px; background: var(--border); margin: 18px -18px; }
 .action-bar { display: flex; gap: 10px; align-items: center; }
@@ -335,6 +368,44 @@ function setRefresh(fn, ms) {
   refreshTimer = fn && ms ? setInterval(fn, ms) : null;
 }
 
+// ── shadcn-style select ─────────────────────────────────────────────────
+function uiSelect(options, current, onChange) {
+  const wrap = el("div", { class: "select" });
+  const trigger = el("button", { class: "select-trigger", type: "button" });
+  let value = current;
+  const label = el("span", { text: (options.find(o => o.value === value) || options[0]).label, style: "overflow:hidden;text-overflow:ellipsis" });
+  trigger.append(label, el("span", { class: "chev", text: "▾" }));
+  const pop = el("div", { class: "select-pop", style: "display:none" });
+  function close() { pop.style.display = "none"; wrap.classList.remove("open"); document.removeEventListener("click", onDoc); }
+  function onDoc(e) { if (!wrap.contains(e.target)) close(); }
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const opening = pop.style.display === "none";
+    document.querySelectorAll(".select-pop").forEach(p => p.style.display = "none");
+    if (opening) {
+      pop.style.display = "";
+      wrap.classList.add("open");
+      setTimeout(() => document.addEventListener("click", onDoc), 0);
+    } else close();
+  });
+  options.forEach(opt => {
+    const item = el("div", { class: "select-item" + (opt.value === value ? " selected" : "") },
+      el("span", { class: "check", text: "✓" }),
+      el("span", { text: opt.label }));
+    item.addEventListener("click", () => {
+      value = opt.value;
+      label.textContent = opt.label;
+      pop.querySelectorAll(".select-item").forEach(i => i.classList.remove("selected"));
+      item.classList.add("selected");
+      close();
+      if (onChange) onChange(value);
+    });
+    pop.append(item);
+  });
+  wrap.append(trigger, pop);
+  return { node: wrap, get value() { return value; }, setValue(v) { value = v; const o = options.find(x => x.value === v); if (o) label.textContent = o.label; } };
+}
+
 // ── chrome (sidebar/topbar) ──────────────────────────────────────────────
 const NAV = [
   { hash: "#/", label: "隧道", ico: "⌁" },
@@ -342,7 +413,20 @@ const NAV = [
   { hash: "#/doctor", label: "诊断", ico: "✚" },
   { hash: "#/settings", label: "设置", ico: "⚙" },
 ];
-function chrome(activeHash, pageTitle, bodyNodes, footRows = []) {
+async function namespaceChip() {
+  try {
+    const st = await api("/status");
+    if (!st.namespace) return "";
+    return el("span", {
+      class: "mono muted", text: st.namespace,
+      style: "cursor:pointer;padding:3px 9px;border:1px solid var(--border);border-radius:999px;font-size:12px",
+      title: "当前 namespace，点击前往设置切换 workspace",
+      onclick: () => { location.hash = "#/settings"; },
+    });
+  } catch { return ""; }
+}
+
+async function chrome(activeHash, pageTitle, bodyNodes, footRows = []) {
   setRefresh(null);
   const nav = el("div", { class: "nav" },
     NAV.map(item => el("div", {
@@ -360,7 +444,8 @@ function chrome(activeHash, pageTitle, bodyNodes, footRows = []) {
     el("div", { class: "main" },
       el("div", { class: "topbar" },
         el("h1", { text: pageTitle }),
-        el("div", { class: "spacer" })),
+        el("div", { class: "spacer" }),
+        await namespaceChip()),
       el("div", { class: "content" }, bodyNodes))));
 }
 
@@ -480,16 +565,18 @@ async function renderTunnels() {
 
 async function renderCreate() {
   const portInput = el("input", { class: "input mono", placeholder: "3000", id: "f-port" });
-  const protocolSel = el("select", { class: "input", id: "f-protocol" },
-    el("option", { value: "https", text: "HTTPS（公网 URL，自动证书）" }),
-    el("option", { value: "tcp", text: "TCP（数据库 / SSH 等原始 TCP）" }));
-  const ttlSel = el("select", { class: "input", id: "f-ttl" },
-    el("option", { value: "", text: "不过期（手动关闭）" }),
-    el("option", { value: "30m", text: "30 分钟后自动删除" }),
-    el("option", { value: "1h", text: "1 小时后自动删除" }),
-    el("option", { value: "2h", selected: "", text: "2 小时后自动删除（推荐）" }),
-    el("option", { value: "8h", text: "8 小时后自动删除" }),
-    el("option", { value: "24h", text: "24 小时后自动删除" }));
+  const protocolSel = uiSelect([
+    { value: "https", label: "HTTPS（公网 URL，自动证书）" },
+    { value: "tcp", label: "TCP（数据库 / SSH 等原始 TCP）" },
+  ], "https");
+  const ttlSel = uiSelect([
+    { value: "", label: "不过期（手动关闭）" },
+    { value: "30m", label: "30 分钟后自动删除" },
+    { value: "1h", label: "1 小时后自动删除" },
+    { value: "2h", label: "2 小时后自动删除（推荐）" },
+    { value: "8h", label: "8 小时后自动删除" },
+    { value: "24h", label: "24 小时后自动删除" },
+  ], "2h");
   const domainInput = el("input", { class: "input mono", placeholder: "app.example.com（可选）", id: "f-domain" });
   const rateInput = el("input", { class: "input mono", placeholder: "如 60/m（可选）", id: "f-rate" });
   const auditChk = el("input", { type: "checkbox", id: "f-audit" });
@@ -595,9 +682,9 @@ async function renderCreate() {
             el("label", { text: "本地端口" }),
             el("div", { class: "form-row" }, portInput, discoverBtn)),
           el("div", { class: "field" },
-            el("label", { text: "协议" }), protocolSel)),
+            el("label", { text: "协议" }), protocolSel.node)),
         el("div", { class: "field" },
-          el("label", { text: "自动删除（TTL）" }), ttlSel,
+          el("label", { text: "自动删除（TTL）" }), ttlSel.node,
           el("div", { class: "hint", text: "到时间后隧道自动删除，避免忘记关闭产生计费。" })),
         el("div", { class: "field" },
           el("label", { text: "多服务路由（可选）" }),
@@ -761,11 +848,12 @@ async function renderDetail(id) {
     });
 
     const shareName = el("input", { class: "input", placeholder: "链接名（可选）", style: "max-width:140px" });
-    const shareTTL = el("select", { class: "input", style: "max-width:140px" },
-      el("option", { value: "30m", text: "30 分钟" }),
-      el("option", { value: "1h", selected: "", text: "1 小时" }),
-      el("option", { value: "8h", text: "8 小时" }),
-      el("option", { value: "24h", text: "24 小时" }));
+    const shareTTL = uiSelect([
+      { value: "30m", label: "30 分钟" },
+      { value: "1h", label: "1 小时" },
+      { value: "8h", label: "8 小时" },
+      { value: "24h", label: "24 小时" },
+    ], "1h");
     const createShareBtn = el("button", {
       class: "btn btn-secondary btn-sm", text: "＋ 新建分享链接",
       onclick: async () => {
@@ -787,7 +875,7 @@ async function renderDetail(id) {
       el("div", { class: "section-title", text: "审计" }),
       el("label", { class: "checkbox" }, auditChk, " 记录访问审计（allow/deny 及原因）"),
       el("div", { class: "section-title", text: "临时分享链接" }),
-      el("div", { class: "form-row", style: "max-width:480px" }, shareName, shareTTL, createShareBtn),
+      el("div", { class: "form-row", style: "max-width:520px;align-items:flex-start" }, shareName, el("div", { style: "width:160px;flex-shrink:0" }, shareTTL.node), createShareBtn),
     ];
     if (links.length) {
       nodes.push(el("table", { class: "grid", style: "margin-top:10px" },
@@ -936,17 +1024,30 @@ async function renderSettings() {
 
   const profileRows = (profiles || []).map(p =>
     el("tr", {},
-      el("td", { class: "mono ink", text: p.name }),
-      el("td", { class: "muted", text: p.region || "-" }),
-      el("td", { class: "muted", text: p.workspace || "-" }),
-      el("td", {}, p.current ? el("span", { class: "badge active", text: "当前" }) : ""),
-      el("td", {}, p.current ? "" : el("button", {
+      el("td", { class: "mono ink trunc", text: p.name, title: p.name }),
+      el("td", { class: "muted trunc", text: p.region || "-" }),
+      el("td", { class: "muted col-fit", text: p.workspace || "-" }),
+      el("td", { class: "col-fit" }, p.current ? el("span", { class: "badge active", text: "当前" }) : ""),
+      el("td", { class: "col-fit" }, p.current ? "" : el("button", {
         class: "btn btn-secondary btn-sm", text: "使用",
         onclick: async (e) => {
           e.currentTarget.disabled = true;
           try {
             await api("/profiles/" + encodeURIComponent(p.name) + "/use", { method: "POST" });
             toast("已切换 profile");
+            renderSettings();
+          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+        },
+      })),
+      el("td", { class: "col-fit" }, el("button", {
+        class: "btn btn-ghost btn-sm", text: "删除",
+        onclick: async (e) => {
+          if (p.current) { toast("当前 profile 不能删除，请先切换到其他 profile", true); return; }
+          if (!confirm("删除 profile " + p.name + "？其保存的凭证将被移除。")) return;
+          e.currentTarget.disabled = true;
+          try {
+            await api("/profiles/" + encodeURIComponent(p.name), { method: "DELETE" });
+            toast("已删除");
             renderSettings();
           } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
         },
@@ -990,13 +1091,16 @@ async function renderSettings() {
           ? el("table", { class: "grid" },
               el("thead", {}, el("tr", {}, el("th", { text: "ID" }), el("th", { text: "名称" }), el("th", { text: "状态" }), el("th", { text: "" }))),
               el("tbody", {}, wsRows))
-          : el("div", { class: "empty", text: "未获取到 workspace 列表" }))),
+          : el("div", { class: "empty", text: "未获取到 workspace 列表" })),
+      (workspaces && workspaces.workspaces && workspaces.workspaces.length <= 1)
+        ? el("div", { class: "card-body muted", style: "border-top:1px solid var(--border);padding-top:10px", text: "你的账号目前只有一个 workspace；加入更多 Sealos 团队空间后即可在此切换。" })
+        : ""),
     el("div", { class: "card" },
       el("div", { class: "card-head" }, el("h2", { text: "Profiles" })),
       el("div", { class: "card-body flush" },
         profileRows.length
           ? el("table", { class: "grid" },
-              el("thead", {}, el("tr", {}, el("th", { text: "名称" }), el("th", { text: "Region" }), el("th", { text: "Workspace" }), el("th", { text: "状态" }), el("th", { text: "" }))),
+              el("thead", {}, el("tr", {}, el("th", { text: "名称" }), el("th", { text: "Region" }), el("th", { text: "Workspace" }), el("th", { class: "col-fit", text: "状态" }), el("th", { class: "col-fit" }), el("th", { class: "col-fit" }))),
               el("tbody", {}, profileRows))
           : el("div", { class: "empty", text: "没有已保存的 profile" }))),
     el("div", { class: "card" },

@@ -41,6 +41,7 @@ type uiBackend interface {
 	DomainClear(ctx context.Context, tunnelID string) (string, error)
 	ListProfiles(ctx context.Context) ([]uiProfileItem, error)
 	ProfileUse(ctx context.Context, name string) error
+	ProfileDelete(ctx context.Context, name string) error
 	ListRegions(ctx context.Context) ([]uiRegionItem, error)
 	Doctor(ctx context.Context) (*doctorPayload, error)
 	Logout(ctx context.Context) (string, error)
@@ -183,6 +184,13 @@ func routeUI(w http.ResponseWriter, r *http.Request, backend uiBackend) {
 			return
 		}
 		respond(w, map[string]bool{"ok": true}, backend.ProfileUse(r.Context(), name))
+	case strings.HasPrefix(path, "profiles/") && r.Method == http.MethodDelete:
+		name := strings.TrimPrefix(path, "profiles/")
+		if name == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown endpoint"})
+			return
+		}
+		respond(w, map[string]bool{"ok": true}, backend.ProfileDelete(r.Context(), name))
 	case path == "regions" && r.Method == http.MethodGet:
 		payload, err := backend.ListRegions(r.Context())
 		respond(w, payload, err)

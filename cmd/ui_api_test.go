@@ -226,6 +226,12 @@ func (s *stubUIBackend) ProfileUse(ctx context.Context, name string) error {
 	}
 	return nil
 }
+func (s *stubUIBackend) ProfileDelete(ctx context.Context, name string) error {
+	if name == "work" {
+		return errors.New("profile \"work\" is active; switch to another profile (or plain login) before deleting it")
+	}
+	return nil
+}
 func (s *stubUIBackend) ListRegions(ctx context.Context) ([]uiRegionItem, error) {
 	return []uiRegionItem{{Name: "gzg", Current: true}}, nil
 }
@@ -337,6 +343,18 @@ func TestUITunnelRoutes(t *testing.T) {
 	code, body = post("/api/v1/profiles/missing/use", "")
 	if code != http.StatusBadRequest {
 		t.Fatalf("missing profile must fail: %d %#v", code, body)
+	}
+	{
+		req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/profiles/work", nil)
+		req.Header.Set("X-Sealtun-Token", "tok")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("deleting the active profile must be refused: %d", resp.StatusCode)
+		}
 	}
 	code, _ = get("/api/v1/regions")
 	if code != http.StatusOK {

@@ -335,6 +335,17 @@ func (b *cliBackend) ProfileUse(ctx context.Context, name string) error {
 	return auth.ActivateProfile(name)
 }
 
+func (b *cliBackend) ProfileDelete(ctx context.Context, name string) error {
+	current, _ := auth.CurrentProfileName()
+	if current == name {
+		return fmt.Errorf("profile %q is active; switch to another profile (or plain login) before deleting it", name)
+	}
+	if _, _, err := auth.LoadProfile(name); err != nil {
+		return err
+	}
+	return auth.DeleteProfile(name)
+}
+
 type uiRegionItem struct {
 	Name         string `json:"name"`
 	URL          string `json:"url"`

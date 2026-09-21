@@ -365,7 +365,13 @@ function fmtTime(iso) {
 let refreshTimer = null;
 function setRefresh(fn, ms) {
   if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = fn && ms ? setInterval(fn, ms) : null;
+  if (!fn || !ms) { refreshTimer = null; return; }
+  refreshTimer = setInterval(() => {
+    // Never re-render under an open modal: a refresh replacing the content a
+    // user is about to click turns real actions into no-ops.
+    if (document.querySelector(".modal-mask")) return;
+    fn();
+  }, ms);
 }
 
 // ── shadcn-style select ─────────────────────────────────────────────────
@@ -563,7 +569,9 @@ async function renderTunnels() {
 }
 
 function openCreateModal(onCreated) {
-  const mask = el("div", { class: "modal-mask", onclick: (e) => { if (e.target === mask) mask.remove(); } });
+  // The create form must not dismiss on backdrop click: an accidental click
+  // outside the dialog would silently drop the user's in-progress form.
+  const mask = el("div", { class: "modal-mask" });
   const modalBox = el("div", { class: "modal", style: "width:min(760px,calc(100vw - 48px));max-height:calc(100vh - 64px);display:flex;flex-direction:column;overflow:hidden" });
   mask.append(modalBox);
   document.body.append(mask);
@@ -1189,9 +1197,24 @@ async function route() {
   } catch (e) {
     root.replaceChildren(el("div", { class: "login-wrap" },
       el("div", { class: "card login-card" },
-        el("div", { class: "card-body", style: "text-align:center" },
-          el("p", { class: "ink", text: "无法连接 Sealtun 服务" }),
-          el("p", { class: "muted", text: e.message })))));
+        el("div", { class: "card-body" },
+          el("p", { class: "ink", text: "会话令牌无效或已过期", style: "text-align:center" }),
+          el("p", { class: "muted", text: "访问令牌随 sealtun ui 的启动 URL 提供（?token=...）。服务重启后旧令牌会失效，请粘贴最新启动地址中的令牌继续。",
+            style: "text-align:center;margin-bottom:14px" }),
+          (() => {
+            const input = el("input", { class: "input mono", placeholder: "粘贴会话令牌（32 位十六进制）", style: "margin-bottom:10px" });
+            const btn = el("button", {
+              class: "btn btn-primary", text: "继续使用",
+              onclick: () => {
+                const v = input.value.trim();
+                if (!v) { toast("请输入令牌", true); return; }
+                localStorage.setItem(TOKEN_KEY, v);
+                location.hash = "#/";
+                route();
+              },
+            });
+            return el("div", {}, input, btn);
+          })()))));
     return;
   }
   if (hash === "#/" || hash === "") return renderTunnels();

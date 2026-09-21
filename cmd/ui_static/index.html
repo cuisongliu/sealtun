@@ -612,13 +612,14 @@ function buildCreateForm(container, closeModal, onCreated) {
     try {
       const items = await api("/discover");
       if (!items || items.length === 0) { toast("未发现本地监听端口"); return; }
-      modal("本地监听端口", [
+      const mask = modal("本地监听端口（点击选择）", [
         el("table", { class: "grid" },
           el("tbody", {}, items.slice(0, 12).map(p =>
             el("tr", { class: "clickable", onclick: () => {
               portInput.value = p.port;
-              if (p.protocolHint === "tcp") protocolSel.value = "tcp";
-              document.querySelector(".modal-mask")?.remove();
+              if (p.protocolHint === "tcp") protocolSel.setValue("tcp");
+              else protocolSel.setValue("https");
+              mask.remove();
             } },
               el("td", { class: "mono ink", text: p.port }),
               el("td", { class: "muted", text: p.processName || "-" }),

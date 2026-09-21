@@ -1119,12 +1119,17 @@ async function renderDoctor() {
   try {
     const d = await api("/doctor");
     const yn = (v) => v ? el("span", { class: "badge active", text: "正常" }) : el("span", { class: "badge error", text: "异常" });
+    const daemonBadge = () => {
+      if (d.daemonRunning) return el("span", { class: "badge active", text: "正常" });
+      if ((d.activeSessions || 0) > 0) return el("span", { class: "badge error", text: "异常（有活跃隧道但未运行）" });
+      return el("span", { class: "badge stopped", text: "未运行（空闲，创建隧道时自动启动）" });
+    };
     const nodes = [
       el("div", { class: "card" },
         el("div", { class: "card-head" }, el("h2", { text: "环境诊断" })),
         el("div", { class: "card-body" },
           el("div", { class: "kv" },
-            el("div", { class: "k", text: "守护进程" }), el("div", { class: "v" }, yn(d.daemonRunning)),
+            el("div", { class: "k", text: "守护进程" }), el("div", { class: "v" }, daemonBadge()),
             el("div", { class: "k", text: "登录状态" }), el("div", { class: "v" }, yn(d.loggedIn)),
             el("div", { class: "k", text: "Kubeconfig" }), el("div", { class: "v" }, yn(d.kubeconfigPresent)),
             el("div", { class: "k", text: "会话总数" }), el("div", { class: "v", text: d.totalSessions ?? 0 }),

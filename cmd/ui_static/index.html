@@ -75,8 +75,9 @@ a:hover { text-decoration: underline; }
 .nav-item:hover { background: var(--bg); }
 .nav-item.active { background: var(--accent-bg); color: var(--accent); }
 .nav-item .ico { width: 16px; height: 16px; flex-shrink: 0; opacity: .8; }
-.sidebar-foot { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
-.sidebar-foot .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.sidebar-foot { padding: 12px 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+.sidebar-foot .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+.sidebar-foot .row:first-child { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
@@ -512,7 +513,8 @@ async function statusFoot() {
   try {
     const st = await api("/status");
     return [
-      el("div", { class: "row" }, dot(st.loggedIn ? "active" : "error"), st.loggedIn ? "已登录" : "未登录"),
+      el("div", { class: "row" }, dot(st.loggedIn ? "active" : "error"),
+        el("strong", { text: st.loggedIn ? "已登录" : "未登录" })),
       st.region ? el("div", { class: "row muted mono", text: st.region.replace("https://", "") }) : "",
       st.namespace ? el("div", { class: "row muted mono", text: st.namespace }) : "",
     ];
@@ -1107,11 +1109,12 @@ async function renderDetail(id) {
 async function renderSettings() {
   const [status, workspaces, profiles, regions] = await Promise.all([
     api("/status").catch(() => null),
-    api("/workspaces").catch(() => null),
+    api("/workspaces").catch((e) => ({ __error: e.message })),
     api("/profiles").catch(() => []),
     api("/regions").catch(() => []),
   ]);
 
+  const wsError = workspaces && workspaces.__error;
   const wsRows = ((workspaces && workspaces.workspaces) || []).map(w =>
     el("tr", {},
       el("td", { class: "mono ink", text: w.id }),
@@ -1194,7 +1197,10 @@ async function renderSettings() {
           ? el("table", { class: "grid" },
               el("thead", {}, el("tr", {}, el("th", { text: "ID" }), el("th", { text: "名称" }), el("th", { text: "状态" }), el("th", { text: "" }))),
               el("tbody", {}, wsRows))
-          : el("div", { class: "empty", text: "未获取到 workspace 列表" })),
+          : el("div", { class: "empty" },
+              el("div", { class: "big", text: wsError ? "无法获取 workspace 列表" : "未获取到 workspace 列表" }),
+              wsError ? el("div", { class: "sub mono", text: wsError, style: "word-break:break-all" }) : "",
+              wsError && wsError.includes("login") ? el("div", { class: "hint", text: "当前 profile 的登录已过期，请在终端运行 sealtun login <region> 重新登录后再切回来。" }) : "")),
       (workspaces && workspaces.workspaces && workspaces.workspaces.length <= 1)
         ? el("div", { class: "card-body muted", style: "border-top:1px solid var(--border);padding-top:10px", text: "你的账号目前只有一个 workspace；加入更多 Sealos 团队空间后即可在此切换。" })
         : ""),

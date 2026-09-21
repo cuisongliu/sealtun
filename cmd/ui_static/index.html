@@ -409,7 +409,6 @@ function uiSelect(options, current, onChange) {
 // ── chrome (sidebar/topbar) ──────────────────────────────────────────────
 const NAV = [
   { hash: "#/", label: "隧道", ico: "⌁" },
-  { hash: "#/create", label: "新建隧道", ico: "＋" },
   { hash: "#/doctor", label: "诊断", ico: "✚" },
   { hash: "#/settings", label: "设置", ico: "⚙" },
 ];
@@ -524,7 +523,7 @@ async function renderTunnels() {
     el("div", { class: "card-head" },
       el("h2", { text: "全部隧道" }),
       el("div", { class: "spacer", style: "flex:1" }),
-      el("button", { class: "btn btn-primary btn-sm", text: "＋ 新建隧道", onclick: () => { location.hash = "#/create"; } })),
+      el("button", { class: "btn btn-primary btn-sm", text: "＋ 新建隧道", onclick: () => openCreateModal(load) })),
     el("div", { class: "card-body flush", id: "tunnels-body" }, el("div", { class: "empty" }, spinner())));
   chrome("#/", "隧道", [listCard], await statusFoot());
   async function load() {
@@ -539,7 +538,7 @@ async function renderTunnels() {
     if (!bodyEl) return;
     if (!tunnels || tunnels.length === 0) {
       bodyEl.replaceChildren(emptyState("还没有隧道", "创建第一条隧道，把本地服务送上公网。",
-        el("button", { class: "btn btn-primary", text: "＋ 新建隧道", onclick: () => { location.hash = "#/create"; } })));
+        el("button", { class: "btn btn-primary", text: "＋ 新建隧道", onclick: () => openCreateModal(load) })));
       return;
     }
     const rows = tunnels.map(t => {
@@ -563,7 +562,15 @@ async function renderTunnels() {
   setRefresh(load, 5000);
 }
 
-async function renderCreate() {
+function openCreateModal(onCreated) {
+  const mask = el("div", { class: "modal-mask", onclick: (e) => { if (e.target === mask) mask.remove(); } });
+  const modalBox = el("div", { class: "modal", style: "width:min(760px,calc(100vw - 48px));max-height:calc(100vh - 64px);overflow:auto" });
+  mask.append(modalBox);
+  document.body.append(mask);
+  buildCreateForm(modalBox, () => mask.remove(), onCreated);
+}
+
+function buildCreateForm(container, closeModal, onCreated) {
   const portInput = el("input", { class: "input mono", placeholder: "3000", id: "f-port" });
   const protocolSel = uiSelect([
     { value: "https", label: "HTTPS（公网 URL，自动证书）" },
@@ -654,6 +661,8 @@ async function renderCreate() {
     try {
       const res = await api("/tunnels", { method: "POST", body: req });
       const url = res.publicUrl;
+      closeModal();
+      if (onCreated) onCreated();
       modal("隧道已创建", [
         el("div", { class: "kv", style: "margin-bottom:14px" },
           el("div", { class: "k", text: "公网地址" }),
@@ -673,7 +682,11 @@ async function renderCreate() {
     }
   }
 
-  chrome("#/create", "新建隧道", [
+  container.append(
+    el("div", { class: "card-head", style: "display:flex;align-items:center" },
+      el("h2", { text: "新建隧道", style: "font-size:15px;font-weight:600;color:var(--ink)" }),
+      el("div", { style: "flex:1" }),
+      el("button", { class: "btn btn-ghost btn-sm", text: "✕", onclick: closeModal })),
     el("div", { class: "card" },
       el("div", { class: "card-head" }, el("h2", { text: "基本配置" })),
       el("div", { class: "card-body" },
@@ -702,7 +715,7 @@ async function renderCreate() {
         el("div", { class: "field" },
           el("label", { class: "checkbox" }, authChk, " 开启 Basic Auth（公网访问需要用户名密码）")),
         el("div", { class: "form-row" }, authUser, authPass))),
-    el("div", { class: "action-bar" }, submitBtn)], await statusFoot());
+    el("div", { class: "action-bar" }, submitBtn));
 }
 
 async function renderDetail(id) {
@@ -1174,7 +1187,7 @@ async function route() {
     return;
   }
   if (hash === "#/" || hash === "") return renderTunnels();
-  if (hash === "#/create") return renderCreate();
+  if (hash === "#/create") { location.hash = "#/"; return renderTunnels(); }
   if (hash.startsWith("#/tunnels/")) return renderDetail(hash.slice("#/tunnels/".length));
   if (hash === "#/settings") return renderSettings();
   if (hash === "#/doctor") return renderDoctor();

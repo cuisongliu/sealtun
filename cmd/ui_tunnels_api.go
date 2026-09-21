@@ -156,10 +156,27 @@ func (b *cliBackend) CreateTunnel(ctx context.Context, req uiCreateTunnelRequest
 	}
 	output := out.String()
 	return &uiCreateTunnelResponse{
-		TunnelID:  extractLineValue(output, "Preparing tunnel "),
+		TunnelID:  extractTunnelIDFromOutput(output),
 		PublicURL: extractLineValue(output, "Public URL: "),
 		Output:    output,
 	}, nil
+}
+
+// extractTunnelIDFromOutput prefers the public URL (stable
+// sealtun-<16hex>-ns-... shape) and falls back to the "Preparing tunnel"
+// line, whose trailing ellipsis must be stripped — a bare suffix read turns
+// the id into <id>... and the detail page then reports the tunnel missing.
+func extractTunnelIDFromOutput(output string) string {
+	if url := extractLineValue(output, "Public URL: "); url != "" {
+		rest := strings.TrimPrefix(url, "https://sealtun-")
+		if rest != url {
+			if idx := strings.Index(rest, "-"); idx > 0 {
+				return rest[:idx]
+			}
+		}
+	}
+	id := extractLineValue(output, "Preparing tunnel ")
+	return strings.TrimRight(id, ". ")
 }
 
 func (b *cliBackend) TunnelAction(ctx context.Context, tunnelID, action string) (string, error) {

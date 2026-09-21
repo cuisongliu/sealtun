@@ -322,6 +322,21 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 function esc(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
+function withLoading(btn, fn) {
+  return async () => {
+    if (btn.disabled) return;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.replaceChildren(spinner(), " " + original + "…");
+    try {
+      await fn();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  };
+}
+
 function toast(msg, isError = false) {
   const t = el("div", { class: "toast" + (isError ? " error" : ""), text: msg });
   document.body.append(t);
@@ -330,13 +345,34 @@ function toast(msg, isError = false) {
 function spinner() { return el("span", { class: "spinner" }); }
 function dot(status) { return el("span", { class: "dot " + status, title: status }); }
 function badge(status) { return el("span", { class: "badge " + status, text: status }); }
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Clipboard API can be unavailable or denied (permissions policy,
+    // non-secure frames); fall back to the hidden-textarea path.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+      document.body.append(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
 function copyBtn(text, label = "复制") {
   return el("button", {
     class: "btn btn-ghost btn-sm", text: label,
     onclick: async (e) => {
       e.stopPropagation();
-      try { await navigator.clipboard.writeText(text); toast("已复制"); }
-      catch { toast("复制失败", true); }
+      if (await copyText(text)) toast("已复制");
+      else toast("复制失败，请手动选择复制", true);
     },
   });
 }
@@ -681,7 +717,10 @@ function buildCreateForm(container, closeModal, onCreated) {
           : el("p", { class: "muted", text: "TCP 端点见上方地址（主机:端口）" })],
         [
           el("button", { class: "btn btn-secondary", text: "继续创建", onclick: () => { document.querySelector(".modal-mask")?.remove(); } }),
-          el("button", { class: "btn btn-primary", text: "查看隧道", onclick: () => { location.hash = "#/tunnels/" + res.tunnelId; } }),
+          el("button", { class: "btn btn-primary", text: "查看隧道", onclick: () => {
+            document.querySelectorAll(".modal-mask").forEach((m) => m.remove());
+            location.hash = "#/tunnels/" + res.tunnelId;
+          } }),
         ]);
     } catch (e) {
       toast(e.message, true);
@@ -863,17 +902,15 @@ async function renderDetail(id) {
     const rateInput = el("input", { class: "input mono", placeholder: "如 60/m", value: policy.rateLimit || "", style: "max-width:160px" });
     const auditChk = el("input", { type: "checkbox" });
     if (policy.auditEnabled) auditChk.checked = true;
-    const saveBtn = el("button", {
-      class: "btn btn-primary btn-sm", text: "保存",
-      onclick: async () => {
-        try {
-          await api("/tunnels/" + id + "/access", {
-            method: "PUT",
-            body: { rateLimit: rateInput.value.trim(), clearRateLimit: !rateInput.value.trim(), audit: auditChk.checked },
-          });
-          toast("已保存");
-        } catch (e) { toast(e.message, true); }
-      },
+    const saveBtn = el("button", { class: "btn btn-primary btn-sm", text: "保存" });
+    saveBtn.onclick = withLoading(saveBtn, async () => {
+      try {
+        await api("/tunnels/" + id + "/access", {
+          method: "PUT",
+          body: { rateLimit: rateInput.value.trim(), clearRateLimit: !rateInput.value.trim(), audit: auditChk.checked },
+        });
+        toast("已保存");
+      } catch (e) { toast(e.message, true); }
     });
 
     const shareName = el("input", { class: "input", placeholder: "链接名（可选）", style: "max-width:140px" });
@@ -883,9 +920,8 @@ async function renderDetail(id) {
       { value: "8h", label: "8 小时" },
       { value: "24h", label: "24 小时" },
     ], "1h");
-    const createShareBtn = el("button", {
-      class: "btn btn-secondary btn-sm", text: "＋ 新建分享链接",
-      onclick: async () => {
+    const createShareBtn = el("button", { class: "btn btn-secondary btn-sm", text: "＋ 新建分享链接" });
+    createShareBtn.onclick = withLoading(createShareBtn, async () => {
         try {
           const res = await api("/tunnels/" + id + "/shares", { method: "POST", body: { name: shareName.value.trim(), ttl: shareTTL.value } });
           modal("分享链接（仅显示一次）", [
@@ -894,8 +930,7 @@ async function renderDetail(id) {
             el("div", { style: "text-align:center" }, el("img", { class: "qr-img", src: qrURL(res.url), width: "170", height: "170" })),
           ], [copyBtn(res.url, "复制链接")]);
         } catch (e) { toast(e.message, true); }
-      },
-    });
+      });
 
     const links = (policy.temporaryLinks || []);
     const nodes = [
@@ -1185,6 +1220,9 @@ async function renderDoctor() {
 
 // ── router ───────────────────────────────────────────────────────────────
 async function route() {
+  // Navigation always closes open dialogs: a modal left floating across a
+  // page change goes stale and misleads every later interaction.
+  document.querySelectorAll(".modal-mask").forEach((m) => m.remove());
   const hash = location.hash || "#/";
   if (hash === "#/login") return renderLogin();
   // gate: require login

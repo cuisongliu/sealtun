@@ -526,6 +526,17 @@ async function renderLogin() {
   setRefresh(null);
   let deviceInfo = null;
   let polling = false;
+  let regions = [];
+  let defaultRegion = "gzg";
+  try {
+    regions = await api("/regions");
+    const current = regions.find((r) => r.current);
+    if (current) defaultRegion = current.name;
+  } catch { /* region list optional */ }
+  const regionSel = uiSelect(
+    regions.map((r) => ({ value: r.name, label: r.name + "（" + r.url.replace("https://", "") + "）" })),
+    defaultRegion,
+  );
   const startBtn = el("button", { class: "btn btn-primary", text: "使用 Sealos 账号登录", onclick: start });
   const body = el("div", { class: "login-wrap" },
     el("div", { class: "card login-card" },
@@ -534,6 +545,11 @@ async function renderLogin() {
           el("span", { class: "mark", text: "S", style: "width:30px;height:30px;border-radius:8px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700" }),
           el("span", { class: "ink", text: "Sealtun", style: "font-size:18px;font-weight:700" })),
         el("p", { class: "muted", text: "本地隧道控制台 · 需要 Sealos Cloud 授权", style: "text-align:center;margin-bottom:20px" }),
+        regions.length
+          ? el("div", { class: "field", style: "margin-bottom:14px" },
+              el("label", { text: "选择区域" }),
+              regionSel.node)
+          : "",
         el("div", { id: "login-stage", style: "display:flex;justify-content:center" }, startBtn))));
   root.replaceChildren(body);
 
@@ -541,7 +557,7 @@ async function renderLogin() {
     startBtn.disabled = true;
     startBtn.textContent = "正在发起授权…";
     try {
-      deviceInfo = await api("/auth/device", { method: "POST", body: {} });
+      deviceInfo = await api("/auth/device", { method: "POST", body: { region: regionSel.value } });
     } catch (e) {
       toast(e.message, true);
       startBtn.disabled = false;

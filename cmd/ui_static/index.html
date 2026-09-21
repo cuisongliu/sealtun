@@ -382,6 +382,24 @@ function emptyState(big, sub, action) {
     el("div", { class: "sub", text: sub }),
     action || "");
 }
+// shadcn-style AlertDialog: replaces every browser-native confirm(). Returns
+// a promise resolving true on confirm, false otherwise.
+function confirmDialog({ title, description, confirmText = "确认", destructive = false }) {
+  return new Promise((resolve) => {
+    const mask = el("div", { class: "modal-mask" });
+    const close = (v) => { mask.remove(); resolve(v); };
+    mask.append(el("div", { class: "modal", style: "width:min(420px,calc(100vw - 40px))" },
+      el("div", { class: "modal-head", style: "padding:18px 20px 0", text: title }),
+      el("div", { class: "modal-body", style: "padding:10px 20px 18px" },
+        el("p", { class: "muted", text: description })),
+      el("div", { class: "modal-foot", style: "display:flex;justify-content:flex-end;gap:10px;padding:0 20px 18px" },
+        el("button", { class: "btn btn-secondary", text: "取消", onclick: () => close(false) }),
+        el("button", { class: destructive ? "btn btn-danger" : "btn btn-primary", text: confirmText, onclick: () => close(true) }))));
+    mask.addEventListener("click", (e) => { if (e.target === mask) close(false); });
+    document.body.append(mask);
+  });
+}
+
 function modal(title, bodyNodes, footNodes) {
   const mask = el("div", { class: "modal-mask", onclick: (e) => { if (e.target === mask) mask.remove(); } });
   mask.append(el("div", { class: "modal" },
@@ -650,7 +668,7 @@ function buildCreateForm(container, closeModal, onCreated) {
   }
   addRouteRow();
 
-  const discoverBtn = el("button", { class: "btn btn-secondary btn-sm", text: "发现本地端口", onclick: discover });
+  const discoverBtn = el("button", { class: "btn btn-secondary", text: "发现本地端口", style: "height:36px;white-space:nowrap", onclick: discover });
   async function discover() {
     discoverBtn.disabled = true;
     try {
@@ -803,11 +821,20 @@ async function renderDetail(id) {
       class: "btn " + cls + " btn-sm", text: label,
       onclick: async (e) => {
         const btn = e.currentTarget;
-        if (confirmText && !confirm(confirmText)) return;
+        if (confirmText) {
+          const ok = await confirmDialog({
+            title: label + "隧道",
+            description: confirmText,
+            confirmText: label,
+            destructive: action === "delete",
+          });
+          if (!ok) return;
+        }
         btn.disabled = true;
         try {
           await api("/tunnels/" + id + "/" + action, { method: "POST" });
           toast("操作成功: " + label);
+          if (action === "delete") { location.hash = "#/"; return; }
           location.reload();
         } catch (err) { toast(err.message, true); btn.disabled = false; }
       },
@@ -951,7 +978,7 @@ async function renderDetail(id) {
             el("td", {}, el("button", {
               class: "btn btn-ghost btn-sm", text: "吊销",
               onclick: async () => {
-                if (!confirm("吊销链接 " + l.name + "？")) return;
+                if (!(await confirmDialog({ title: "吊销分享链接", description: "链接 " + l.name + " 将立即失效且不可恢复。", confirmText: "吊销", destructive: true }))) return;
                 try {
                   await api("/tunnels/" + id + "/shares/" + encodeURIComponent(l.name), { method: "DELETE" });
                   toast("已吊销");
@@ -1013,7 +1040,7 @@ async function renderDetail(id) {
       nodes.push(el("button", {
         class: "btn btn-danger btn-sm", text: "解绑域名",
         onclick: async () => {
-          if (!confirm("解绑域名 " + current + "？")) return;
+          if (!(await confirmDialog({ title: "解绑域名", description: "将域名 " + current + " 从该隧道解绑，之后仅可通过 Sealos 默认域名访问。", confirmText: "解绑", destructive: true }))) return;
           try {
             await api("/tunnels/" + id + "/domain", { method: "DELETE" });
             toast("已解绑");
@@ -1107,7 +1134,7 @@ async function renderSettings() {
         class: "btn btn-ghost btn-sm", text: "删除",
         onclick: async (e) => {
           if (p.current) { toast("当前 profile 不能删除，请先切换到其他 profile", true); return; }
-          if (!confirm("删除 profile " + p.name + "？其保存的凭证将被移除。")) return;
+          if (!(await confirmDialog({ title: "删除 profile", description: "profile " + p.name + " 及其保存的凭证将被永久移除。", confirmText: "删除", destructive: true }))) return;
           e.currentTarget.disabled = true;
           try {
             await api("/profiles/" + encodeURIComponent(p.name), { method: "DELETE" });
@@ -1119,23 +1146,19 @@ async function renderSettings() {
 
   const logoutBtn = el("button", {
     class: "btn btn-danger", text: "退出登录",
-    onclick: () => {
-      modal("退出登录", [
-        el("p", { text: "退出后本地凭证将被清除。隧道会尽力清理，未清理成功的会继续计费，建议先手动停止。" }),
-      ], [
-        el("button", { class: "btn btn-secondary", text: "取消", onclick: () => document.querySelector(".modal-mask")?.remove() }),
-        el("button", {
-          class: "btn btn-danger", text: "确认退出",
-          onclick: async (e) => {
-            e.currentTarget.disabled = true;
-            try {
-              await api("/auth/logout", { method: "POST" });
-              location.hash = "#/login";
-              location.reload();
-            } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
-          },
-        }),
-      ]);
+    onclick: async () => {
+      const ok = await confirmDialog({
+        title: "退出登录",
+        description: "退出后本地凭证将被清除。隧道会尽力清理，未清理成功的会继续计费，建议先手动停止。",
+        confirmText: "退出登录",
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        await api("/auth/logout", { method: "POST" });
+        location.hash = "#/login";
+        location.reload();
+      } catch (err) { toast(err.message, true); }
     },
   });
 

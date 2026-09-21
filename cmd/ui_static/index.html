@@ -564,7 +564,7 @@ async function renderTunnels() {
 
 function openCreateModal(onCreated) {
   const mask = el("div", { class: "modal-mask", onclick: (e) => { if (e.target === mask) mask.remove(); } });
-  const modalBox = el("div", { class: "modal", style: "width:min(760px,calc(100vw - 48px));max-height:calc(100vh - 64px);overflow:auto" });
+  const modalBox = el("div", { class: "modal", style: "width:min(760px,calc(100vw - 48px));max-height:calc(100vh - 64px);display:flex;flex-direction:column;overflow:hidden" });
   mask.append(modalBox);
   document.body.append(mask);
   buildCreateForm(modalBox, () => mask.remove(), onCreated);
@@ -682,11 +682,14 @@ function buildCreateForm(container, closeModal, onCreated) {
     }
   }
 
+  const formBody = el("div", { style: "overflow:auto;padding:0 20px 8px;flex:1" });
   container.append(
-    el("div", { class: "card-head", style: "display:flex;align-items:center" },
+    el("div", { class: "card-head", style: "display:flex;align-items:center;flex-shrink:0;padding:16px 20px 12px" },
       el("h2", { text: "新建隧道", style: "font-size:15px;font-weight:600;color:var(--ink)" }),
       el("div", { style: "flex:1" }),
       el("button", { class: "btn btn-ghost btn-sm", text: "✕", onclick: closeModal })),
+    formBody);
+  formBody.append(
     el("div", { class: "card" },
       el("div", { class: "card-head" }, el("h2", { text: "基本配置" })),
       el("div", { class: "card-body" },
@@ -714,8 +717,12 @@ function buildCreateForm(container, closeModal, onCreated) {
           el("label", { class: "checkbox" }, auditChk, " 开启访问审计（记录 allow/deny 及原因）")),
         el("div", { class: "field" },
           el("label", { class: "checkbox" }, authChk, " 开启 Basic Auth（公网访问需要用户名密码）")),
-        el("div", { class: "form-row" }, authUser, authPass))),
-    el("div", { class: "action-bar" }, submitBtn));
+        el("div", { class: "form-row" }, authUser, authPass)))
+    );
+  container.append(
+    el("div", { style: "border-top:1px solid var(--border);padding:14px 20px;display:flex;justify-content:flex-end;gap:10px;flex-shrink:0" },
+      el("button", { class: "btn btn-secondary", text: "取消", onclick: closeModal }),
+      submitBtn));
 }
 
 async function renderDetail(id) {

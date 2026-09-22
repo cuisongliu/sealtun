@@ -1130,12 +1130,13 @@ async function renderSettings() {
       el("td", {}, w.current ? "" : el("button", {
         class: "btn btn-secondary btn-sm", text: "切换",
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          const btn = e.currentTarget;
+          btn.disabled = true;
           try {
             await api("/workspaces/use", { method: "POST", body: { target: w.id } });
             toast("已切换 workspace");
             renderSettings();
-          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+          } catch (err) { toast(err.message, true); btn.disabled = false; }
         },
       }))));
 
@@ -1148,12 +1149,13 @@ async function renderSettings() {
       el("td", { class: "col-fit" }, p.current ? "" : el("button", {
         class: "btn btn-secondary btn-sm", text: "使用",
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          const btn = e.currentTarget;
+          btn.disabled = true;
           try {
             await api("/profiles/" + encodeURIComponent(p.name) + "/use", { method: "POST" });
             toast("已切换 profile");
             renderSettings();
-          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+          } catch (err) { toast(err.message, true); btn.disabled = false; }
         },
       })),
       el("td", { class: "col-fit" }, p.current
@@ -1161,13 +1163,14 @@ async function renderSettings() {
         : el("button", {
         class: "btn btn-ghost btn-sm", text: "删除",
         onclick: async (e) => {
+          const btn = e.currentTarget;
           if (!(await confirmDialog({ title: "删除 profile", description: "profile " + p.name + " 及其保存的凭证将被永久移除。", confirmText: "删除", destructive: true }))) return;
-          e.currentTarget.disabled = true;
+          btn.disabled = true;
           try {
             await api("/profiles/" + encodeURIComponent(p.name), { method: "DELETE" });
             toast("已删除");
             renderSettings();
-          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+          } catch (err) { toast(err.message, true); btn.disabled = false; }
         },
       }))));
 

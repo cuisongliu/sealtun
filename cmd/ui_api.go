@@ -23,7 +23,7 @@ type uiBackend interface {
 	ListWorkspaces(ctx context.Context) (*uiWorkspacesResponse, error)
 	WorkspaceCurrent(ctx context.Context) (*uiWorkspaceCurrentResponse, error)
 	WorkspaceUse(ctx context.Context, target string) (*uiWorkspaceUseResponse, error)
-	DeviceStart(ctx context.Context, region string) (*uiDeviceStartResponse, error)
+	DeviceStart(ctx context.Context, region, profile string) (*uiDeviceStartResponse, error)
 	DevicePoll(ctx context.Context, sessionID string) (*uiDeviceStatusResponse, error)
 
 	ListTunnels(ctx context.Context) ([]uiTunnelItem, error)
@@ -152,13 +152,14 @@ func routeUI(w http.ResponseWriter, r *http.Request, backend uiBackend) {
 		respond(w, payload, err)
 	case path == "auth/device" && r.Method == http.MethodPost:
 		var req struct {
-			Region string `json:"region"`
+			Region  string `json:"region"`
+			Profile string `json:"profile"`
 		}
 		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		payload, err := backend.DeviceStart(r.Context(), req.Region)
+		payload, err := backend.DeviceStart(r.Context(), req.Region, req.Profile)
 		respond(w, payload, err)
 	case path == "auth/device/status" && r.Method == http.MethodGet:
 		payload, err := backend.DevicePoll(r.Context(), r.URL.Query().Get("session"))
@@ -422,15 +423,23 @@ func (b *cliBackend) WorkspaceUse(ctx context.Context, target string) (*uiWorksp
 
 type pendingDeviceLogin struct {
 	region     string
+	profile    string
 	deviceCode string
 	expiresAt  time.Time
 	interval   int
 }
 
-func (b *cliBackend) DeviceStart(ctx context.Context, region string) (*uiDeviceStartResponse, error) {
+func (b *cliBackend) DeviceStart(ctx context.Context, region, profile string) (*uiDeviceStartResponse, error) {
 	resolved, err := auth.ResolveRegion(region)
 	if err != nil {
 		return nil, err
+	}
+	normalizedProfile := ""
+	if strings.TrimSpace(profile) != "" {
+		normalizedProfile, err = auth.ValidateProfileName(profile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	deviceAuth, err := auth.RequestDeviceAuthorization(resolved)
 	if err != nil {
@@ -446,6 +455,7 @@ func (b *cliBackend) DeviceStart(ctx context.Context, region string) (*uiDeviceS
 	b.deviceMu.Lock()
 	b.deviceSession = &pendingDeviceLogin{
 		region:     resolved,
+		profile:    normalizedProfile,
 		deviceCode: deviceAuth.DeviceCode,
 		expiresAt:  time.Now().Add(time.Duration(deviceAuth.ExpiresIn) * time.Second),
 		interval:   deviceAuth.Interval,
@@ -480,7 +490,7 @@ func (b *cliBackend) DevicePoll(ctx context.Context, sessionID string) (*uiDevic
 	if state != "" {
 		return &uiDeviceStatusResponse{State: state}, nil
 	}
-	if _, err := performLoginExchange(pending.region, tokenRes, ""); err != nil {
+	if _, err := performLoginExchange(pending.region, tokenRes, pending.profile); err != nil {
 		return &uiDeviceStatusResponse{State: "error", Message: err.Error()}, nil
 	}
 	b.deviceMu.Lock()

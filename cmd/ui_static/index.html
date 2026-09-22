@@ -546,6 +546,7 @@ async function renderLogin() {
     regions.map((r) => ({ value: r.name, label: r.name + "（" + r.url.replace("https://", "") + "）" })),
     defaultRegion,
   );
+  const profileInput = el("input", { class: "input", type: "text", placeholder: "留空则不保存", autocomplete: "off" });
   const startBtn = el("button", { class: "btn btn-primary", text: "使用 Sealos 账号登录", onclick: start });
   const body = el("div", { class: "login-wrap" },
     el("div", { class: "card login-card" },
@@ -559,6 +560,10 @@ async function renderLogin() {
               el("label", { text: "选择区域" }),
               regionSel.node)
           : "",
+        el("div", { class: "field", style: "margin-bottom:14px" },
+          el("label", { text: "保存为 profile（可选）" }),
+          profileInput,
+          el("div", { class: "muted", style: "font-size:12px;margin-top:4px", text: "保存后可在设置页一键切换该区域登录" })),
         el("div", { id: "login-stage", style: "display:flex;justify-content:center" }, startBtn))));
   root.replaceChildren(body);
 
@@ -566,7 +571,7 @@ async function renderLogin() {
     startBtn.disabled = true;
     startBtn.textContent = "正在发起授权…";
     try {
-      deviceInfo = await api("/auth/device", { method: "POST", body: { region: regionSel.value } });
+      deviceInfo = await api("/auth/device", { method: "POST", body: { region: regionSel.value, profile: profileInput.value.trim() } });
     } catch (e) {
       toast(e.message, true);
       startBtn.disabled = false;

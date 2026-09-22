@@ -13,7 +13,9 @@ import (
 )
 
 type stubUIBackend struct {
-	statusErr error
+	statusErr         error
+	lastDeviceRegion  string
+	lastDeviceProfile string
 }
 
 func (s *stubUIBackend) Status(ctx context.Context) (*uiStatusResponse, error) {
@@ -34,7 +36,9 @@ func (s *stubUIBackend) WorkspaceUse(ctx context.Context, target string) (*uiWor
 	}
 	return &uiWorkspaceUseResponse{Switched: true, Namespace: target}, nil
 }
-func (s *stubUIBackend) DeviceStart(ctx context.Context, region string) (*uiDeviceStartResponse, error) {
+func (s *stubUIBackend) DeviceStart(ctx context.Context, region, profile string) (*uiDeviceStartResponse, error) {
+	s.lastDeviceRegion = region
+	s.lastDeviceProfile = profile
 	return &uiDeviceStartResponse{Session: "current", VerificationURL: "https://example/device", UserCode: "ABCD-1234"}, nil
 }
 func (s *stubUIBackend) DevicePoll(ctx context.Context, sessionID string) (*uiDeviceStatusResponse, error) {
@@ -142,6 +146,22 @@ func TestUIRoutes(t *testing.T) {
 	code, body = get("/api/v1/auth/device/status?session=current")
 	if code != http.StatusOK || body["state"] != "pending" {
 		t.Fatalf("device status wrong: %d %#v", code, body)
+	}
+
+	// device start with an optional profile name reaches the backend
+	backend := &stubUIBackend{}
+	profileServer := newTestUIServer(t, backend, "tok")
+	defer profileServer.Close()
+	resp4, err := http.Post(profileServer.URL+"/api/v1/auth/device?token=tok", "application/json", strings.NewReader(`{"region":"gzg","profile":"  my-team  "}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp4.Body.Close()
+	if resp4.StatusCode != http.StatusOK {
+		t.Fatalf("device start with profile must be 200, got %d", resp4.StatusCode)
+	}
+	if backend.lastDeviceRegion != "gzg" || backend.lastDeviceProfile != "  my-team  " {
+		t.Fatalf("profile/region not passed through: %#v %#v", backend.lastDeviceRegion, backend.lastDeviceProfile)
 	}
 
 	// unknown endpoint
@@ -367,5 +387,16 @@ func TestUITunnelRoutes(t *testing.T) {
 	code, body = post("/api/v1/auth/logout", "")
 	if code != http.StatusOK || body["output"] != "logged out" {
 		t.Fatalf("logout route wrong: %d %#v", code, body)
+	}
+}
+
+func TestDeviceStartRejectsInvalidProfile(t *testing.T) {
+	backend := &cliBackend{}
+	// Invalid profile names must fail before any network access is attempted.
+	if _, err := backend.DeviceStart(context.Background(), "gzg", "bad name!!"); err == nil {
+		t.Fatal("invalid profile name must be rejected")
+	}
+	if _, err := backend.DeviceStart(context.Background(), "gzg", ".."); err == nil {
+		t.Fatal("dotdot profile name must be rejected")
 	}
 }

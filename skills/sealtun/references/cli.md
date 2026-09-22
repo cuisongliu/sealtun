@@ -41,6 +41,10 @@ sealtun expose --target http://10.0.0.12:8080
 sealtun expose --target https://10.0.0.12:8443 --target-insecure-skip-verify
 sealtun expose 3000 --foreground
 sealtun expose 3000 --qr          # terminal QR of the public URL (or temporary access URL) for mobile scanning; https only
+sealtun expose 3000 --route /api=8080   # path-prefix route: /api/* -> localhost:8080/* (prefix stripped), the rest -> localhost:3000; https only, not with --target
+sealtun expose 3000 --ttl 2h              # auto-delete the tunnel after the TTL (billing protection); guided `up` suggests 2h by default
+# routes share the tunnel's rate-limit bucket and access policy with the primary target; absolute-path redirects from the routed app are re-prefixed automatically
+# layout guidance: SPA/frontend stays the primary target, APIs go behind --route prefixes; an SPA under a prefix breaks (absolute asset URLs escape, base-path config conflicts with stripping)
 ```
 
 `up` reuses the current project's tunnel state; without state in an interactive terminal it guides through login check, port selection (with local port discovery), protocol choice (templates for `https/ssh/tcp/mysql/postgres/redis/mongodb/mqtt`), optional Basic Auth / rate limit / audit / custom domain / YAML save, and creation. `expose` is for exact scripted creation and defaults to `https` + daemon mode; the daemon keeps the local side running in the background. Use `--foreground` when the current terminal should own the tunnel lifecycle.
@@ -95,6 +99,9 @@ sealtun status [--json]
 sealtun list [--check] [--json] [--watch --interval 5s --count 20]
 sealtun inspect <id> [--remote] [--metrics] [--resources] [--json] [--watch]
 sealtun logs <id> [--tail 200] [--follow] [--since 10m]
+sealtun requests <id> [--limit 50] [--follow] [--json]   # recent public HTTP requests from the relay ring buffer; headers/query redacted, body preview, served over the tunnel secret
+sealtun requests replay <id> <seq>                        # re-send a captured request to the local service (route-aware, redacted headers dropped, X-Sealtun-Replayed-At marker added)
+sealtun ui [--port N] [--no-open]                          # local web console (Sealos light theme): full tunnel management, requests/replay, access, shares, domains, diagnostics, workspaces, device-flow login
 sealtun doctor [<id>] [--json] [--report [--report-file p.md]] [--fix --dry-run] [--fix]
 ```
 

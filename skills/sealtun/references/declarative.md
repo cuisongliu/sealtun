@@ -48,6 +48,8 @@ tunnels:
   - name: web
     localPort: 3000
     protocol: https
+    routes:
+      - { path: /api, port: 8080 }   # /api/users -> localhost:8080/users
     domain: app.example.com
     ttl: 2h
     basicAuth:
@@ -100,6 +102,7 @@ tunnels:
 - Use `localPort`; `port` is accepted as a compatibility alias. For HTTPS upstream forwarding, use `target: http://host:port` or `target: https://host:port` instead of `localPort`.
 - `protocol` defaults to `https`; `ssh` is supported for direct TCP NodePort SSH, and `tcp` is supported for generic direct TCP NodePort tunnels. HTTP-only features such as `domain`, `basicAuth`, and `accessPolicy` are rejected for `ssh` and `tcp`.
 - `target` is HTTPS-only. It must not include userinfo, path, query, or fragment. If `localPort` is also set, it must match the target port.
+- `routes` is HTTPS-only and cannot combine with `target`. Each entry is `{ path: /prefix, port: N }`; requests whose path starts with the prefix (segment-aware, longest match wins) are forwarded to `localhost:N` with the prefix stripped (`/api/users` -> `/users`), and everything else falls back to `localPort`. Recommend SPA at `localPort` with APIs behind `routes`; mounting an SPA itself under a prefix breaks its absolute asset URLs and conflicts with framework base-path options.
 - `targetTls.insecureSkipVerify: true` is allowed only with `https://` target and skips certificate verification between the Sealtun client and the private upstream. Do not use it for public upstreams unless the user explicitly accepts the risk.
 - `resources.requests.cpu`, `resources.requests.memory`, `resources.limits.cpu`, and `resources.limits.memory` configure the remote tunnel Pod. Omitted fields use Sealtun defaults: request CPU `10m`, request memory `32Mi`, limit CPU `200m`, limit memory `128Mi`. Limits must be greater than or equal to requests.
 - `ttl` uses Go duration syntax like `30m`, `2h`, or `24h`.

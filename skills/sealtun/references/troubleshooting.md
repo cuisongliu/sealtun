@@ -47,6 +47,8 @@ Profiles are stored under `~/.sealtun/profiles/<name>`. Switching a profile upda
 
 For first-time authorization, make the flow explicit: Sealtun needs Sealos authorization to obtain Kubernetes credentials for the active workspace. Ask the user to complete the browser/device flow, then verify with `sealtun status` before running `expose`, real `apply`, `domain add`, or cleanup operations.
 
+After any successful login the stored refresh token renews credentials non-interactively: when a command's pre-flight probe hits x509/401 from the cluster API, Sealtun refreshes the access token, regional token, and kubeconfig automatically (a new kubeconfig also cures cluster CA rotation). Sessions created before this feature have no stored refresh token and still need one manual re-login to gain it. If the refresh token itself is rejected (invalid_grant), only an interactive `sealtun login <region>` helps.
+
 ## Daemon And Session Issues
 
 Symptoms:

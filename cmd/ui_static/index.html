@@ -75,9 +75,16 @@ a:hover { text-decoration: underline; }
 .nav-item:hover { background: var(--bg); }
 .nav-item.active { background: var(--accent-bg); color: var(--accent); }
 .nav-item .ico { width: 16px; height: 16px; flex-shrink: 0; opacity: .8; }
-.sidebar-foot { padding: 12px 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+.sidebar-foot { padding: 12px 14px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
 .sidebar-foot .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
-.sidebar-foot .row:first-child { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.status-block {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 8px;
+}
+.status-block .status-line {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 700; color: var(--ink);
+}
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
@@ -500,7 +507,7 @@ async function chrome(activeHash, pageTitle, bodyNodes, footRows = []) {
         el("span", { class: "name", text: "Sealtun" }),
         el("span", { class: "ver", text: "ui" })),
       nav,
-      el("div", { class: "sidebar-foot" }, footRows)),
+      el("div", { class: "sidebar-foot" }, footRows.length ? el("div", { class: "status-block" }, footRows) : footRows)),
     el("div", { class: "main" },
       el("div", { class: "topbar" },
         el("h1", { text: pageTitle }),
@@ -513,8 +520,8 @@ async function statusFoot() {
   try {
     const st = await api("/status");
     return [
-      el("div", { class: "row" }, dot(st.loggedIn ? "active" : "error"),
-        el("strong", { text: st.loggedIn ? "已登录" : "未登录" })),
+      el("div", { class: "status-line" }, dot(st.loggedIn ? "active" : "error"),
+        st.loggedIn ? "已登录" : "未登录"),
       st.region ? el("div", { class: "row muted mono", text: st.region.replace("https://", "") }) : "",
       st.namespace ? el("div", { class: "row muted mono", text: st.namespace }) : "",
     ];
@@ -1149,10 +1156,11 @@ async function renderSettings() {
           } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
         },
       })),
-      el("td", { class: "col-fit" }, el("button", {
+      el("td", { class: "col-fit" }, p.current
+        ? el("button", { class: "btn btn-ghost btn-sm", text: "删除", disabled: true, title: "当前 profile 不能删除，请先切换到其他 profile" })
+        : el("button", {
         class: "btn btn-ghost btn-sm", text: "删除",
         onclick: async (e) => {
-          if (p.current) { toast("当前 profile 不能删除，请先切换到其他 profile", true); return; }
           if (!(await confirmDialog({ title: "删除 profile", description: "profile " + p.name + " 及其保存的凭证将被永久移除。", confirmText: "删除", destructive: true }))) return;
           e.currentTarget.disabled = true;
           try {

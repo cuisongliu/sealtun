@@ -273,7 +273,11 @@ func runLoginFlowWithProfile(regionInput string, insecure bool, profileName stri
 		fmt.Println()
 	}
 
-	openBrowser(authURL)
+	// --qr means the user intends to scan with a phone, so don't also pop a
+	// local browser tab; the printed URL remains the manual fallback.
+	if !loginQR {
+		openBrowser(authURL)
+	}
 
 	fmt.Println("Waiting for authorization...")
 

@@ -46,6 +46,7 @@ from the keyboard selector. In scripts or CI, pass the region explicitly.`,
 
 var insecure bool
 var loginProfile string
+var loginQR bool
 var selectLoginRegionFn = selectLoginRegionFromCommand
 
 var errLoginRegionSelectionCanceled = errors.New("region selection canceled")
@@ -54,6 +55,7 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification")
 	loginCmd.Flags().StringVar(&loginProfile, "profile", "", "Save and activate this login as a named profile")
+	loginCmd.Flags().BoolVar(&loginQR, "qr", false, "Also render the authorization URL as a terminal QR code for phone scanning")
 }
 
 func resolveLoginRegionInput(args []string, selectRegion func() (string, error)) (string, error) {
@@ -259,8 +261,17 @@ func runLoginFlowWithProfile(regionInput string, insecure bool, profileName stri
 		return err
 	}
 
-	fmt.Printf("\nPlease open the following URL in your browser to authorize:\n\n  %s\n\nAuthorization code: %s\nExpires in: %d minutes\n\n",
+	fmt.Printf("\nOpen the following URL in a browser on any device (e.g. your phone) to authorize:\n\n  %s\n\nAuthorization code: %s\nExpires in: %d minutes\n\n",
 		authURL, deviceAuth.UserCode, deviceAuth.ExpiresIn/60)
+
+	if loginQR {
+		if warning := qrNarrowTerminalWarning(os.Stdout); warning != "" {
+			fmt.Printf("Note: %s\n\n", warning)
+		}
+		fmt.Println("Or scan this code with your phone camera — the link already carries the code:")
+		printTerminalQR(os.Stdout, authURL)
+		fmt.Println()
+	}
 
 	openBrowser(authURL)
 

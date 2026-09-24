@@ -13,24 +13,44 @@ npm install -g sealtun
 ## 三步上手
 
 ```bash
-sealtun login      # 1. 浏览器授权登录（此后凭证过期或集群 CA 轮换会自动用 refresh token 续期）
+sealtun login      # 1. 浏览器授权登录（无浏览器环境：sealtun login --qr 手机扫码）
 sealtun up         # 2. 交互式创建隧道（自动发现本地端口）
-sealtun list       # 3. 查看隧道
+sealtun tunnel list  # 3. 查看隧道
 ```
 
-公网 URL 在创建输出中直接给出。
+公网 URL 在创建输出中直接给出。不习惯命令行？`sealtun ui` 打开 Web 控制台，全部功能可视化操作（见下文）。
 
 ## 登录与账号
 
 ```bash
-sealtun login gzg                      # 指定 region 登录
-sealtun login gzg --profile gzg-main   # 保存为命名 profile
-sealtun profile list / use / delete    # profile 管理
-sealtun region list / current          # region 查询（切换用 login <region>）
-sealtun status                         # 当前登录状态
+sealtun login                            # 交互选择 region，浏览器完成设备授权
+sealtun login gzg                        # 指定 region 登录
+sealtun login gzg --qr                   # 无浏览器环境：终端出二维码，手机扫码授权
+sealtun login gzg --profile gzg-main     # 保存为命名 profile
+sealtun profile list / use / delete      # profile 管理
+sealtun region list / current            # region 查询（切换用 login <region>）
+sealtun status                           # 当前登录状态
 ```
 
-内置 region：`gzg`（广州）、`hzh`（杭州）、`bja`（北京）、`cloud`（国际站）、`usw`（美西）。凭据保存在 `~/.sealtun`，profile 保存在 `~/.sealtun/profiles/<name>`。
+内置 region：`gzg`（广州）、`hzh`（杭州）、`bja`（北京）、`cloud`（国际站）、`usw`（美西）。凭据保存在 `~/.sealtun`，profile 保存在 `~/.sealtun/profiles/<name>`。凭证过期或集群 CA 轮换会自动用 refresh token 续期。
+
+## 切换 workspace（namespace）
+
+同一 region 下可能有多个 workspace（团队空间），新隧道建在哪个 workspace 由当前选择决定：
+
+```bash
+sealtun workspace list       # 列出我有权限的 workspace
+sealtun workspace current    # 查看当前 workspace
+sealtun workspace use ns-xxx # 切换（切换前会探测访问权限）
+```
+
+## Web 控制台
+
+```bash
+sealtun ui    # 打开本地 Web 控制台（浅色 Sealos 风格）
+```
+
+控制台覆盖 CLI 的全部能力：隧道创建（含本地端口发现、路由、TTL、Basic Auth、限流、域名）、启停/删除、请求日志与重放、访问策略、分享链接、诊断、profile/workspace 切换、登录（可选区域、可选保存为 profile）。只监听 127.0.0.1，随机端口 + 随机会话 token，浏览器之外无法访问。
 
 ## 创建隧道
 
@@ -40,7 +60,7 @@ sealtun status                         # 当前登录状态
 sealtun expose 3000                              # 本地端口
 sealtun expose --target http://10.0.0.12:8080    # 远端 HTTP upstream
 sealtun expose 3000 --qr                         # 终端打印公网 URL 二维码，手机扫码即开
-sealtun expose 3000 --route /api=8080           # 多服务路由：/api 前缀转发到 8080，其余走 3000
+sealtun expose 3000 --route /api=8080            # 多服务路由：/api 前缀转发到 8080，其余走 3000
 ```
 
 路由适用边界（真机验证结论）：**推荐「前端/SPA 放主目标（隧道根路径），API 服务挂 `routes` 前缀」**——此形态包括 Vite HMR 在内完整可用。**不要反过来把 SPA 自己挂到子路径前缀**：前端产物引用的是根绝对路径资源（如 `/src/main.js`），请求会跳出前缀落到主服务，框架的 base 配置与前缀剥离语义互相冲突。响应体（HTML/JSON）内的绝对路径内容不会被改写；`Location` 重定向头会自动补回前缀。
@@ -50,9 +70,7 @@ sealtun up                                        # 交互引导（推荐日常�
 sealtun expose 3000 --ttl 2h                      # 脚本化创建也可以显式加自动过期
 ```
 
-**SSH**：`expose 22 --protocol tcp`（SSH 就是纯 TCP；端口 22 会自动输出 `ssh <user>@<public-host> -p <node-port>` 提示。`--protocol ssh` 仍兼容但已弃用）。
-
-**通用 TCP**：`expose 5432 --protocol tcp`（数据库、队列、MQTT 等），输出 `<public-host>:<node-port>`。
+**SSH / 通用 TCP**：`expose 22 --protocol tcp` / `expose 5432 --protocol tcp`（数据库、队列、MQTT 等），输出 `<public-host>:<node-port>`；端口 22 会自动附赠 `ssh <user>@<public-host> -p <node-port>` 提示。`--protocol ssh` 仍兼容但已弃用，SSH 就是纯 TCP。
 
 SSH/TCP 走 NodePort 直连，不支持 HTTPS 的认证、域名和策略功能。
 
@@ -80,44 +98,43 @@ sealtun expose 3000 --rate-limit 60/m --audit
 **临时分享链接**（创建后 URL 只显示一次）：
 
 ```bash
-sealtun share create <tunnel-id> --name review --ttl 1h
-sealtun share rotate / revoke <tunnel-id> review
+sealtun tunnel share create <tunnel-id> --name review --ttl 1h
+sealtun tunnel share rotate / revoke <tunnel-id> review
 ```
 
 **策略管理**：
 
 ```bash
-sealtun policy show / set <tunnel-id> --rate-limit 60/m --audit
-sealtun policy audit <tunnel-id> --since 10m
+sealtun tunnel access show / set <tunnel-id> --rate-limit 60/m --audit
+sealtun tunnel access audit <tunnel-id> --since 10m
 ```
 
-**轮换 server secret**：`sealtun rotate <tunnel-id> --server-secret`（新 secret 只显示一次）。
+**轮换 server secret**：`sealtun tunnel rotate-secret <tunnel-id> --server-secret`（新 secret 只显示一次）。
 
 ## 自定义域名（仅 HTTPS）
 
 ```bash
-sealtun domain plan <tunnel-id> app.example.com   # 查看需要配置的 DNS
+sealtun tunnel domain plan <tunnel-id> app.example.com   # 查看需要配置的 DNS
 # 在你的 DNS 服务商处配置: CNAME app.example.com -> <sealos-host>
-sealtun domain add <tunnel-id> app.example.com --wait   # 绑定并等待证书
-sealtun domain verify / status / clear <tunnel-id>
+sealtun tunnel domain add <tunnel-id> app.example.com --wait   # 绑定并等待证书
+sealtun tunnel domain verify / status / clear <tunnel-id>
 ```
 
-CNAME 验证通过后才写入 Ingress 并创建 cert-manager 证书。`domain status --verbose` 输出详细 DNS/Ingress/证书诊断。
+CNAME 验证通过后才写入 Ingress 并创建 cert-manager 证书。`tunnel domain status --verbose` 输出详细 DNS/Ingress/证书诊断。
 
 ## 运维
 
 ```bash
-sealtun list / --check / --watch                 # 列表、本地探活、持续刷新
-sealtun inspect <id>                              # 单隧道详情
-sealtun inspect <id> --remote                    # + 远端 K8s 诊断和事件
-sealtun inspect <id> --metrics                   # + 指标（旧镜像降级为 warning）
-sealtun inspect <id> --resources                 # + 资源清单（Secret 脱敏）
-sealtun inspect <id> --watch                     # 持续巡检
-sealtun logs <id> --tail 200 --follow            # 远端 Pod 日志
+sealtun tunnel list / --check / --watch           # 列表、本地探活、持续刷新
+sealtun tunnel inspect <id>                       # 单隧道详情
+sealtun tunnel inspect <id> --remote              # + 远端 K8s 诊断和事件
+sealtun tunnel inspect <id> --metrics             # + 指标（旧镜像降级为 warning）
+sealtun tunnel inspect <id> --resources           # + 资源清单（Secret 脱敏）
+sealtun tunnel logs <id> --tail 200 --follow      # 远端 Pod 日志
 sealtun doctor [--fix --dry-run] [--fix]          # 诊断与保守修复
-sealtun stop / start / cleanup <id>               # 停止（可恢复）/ 恢复 / 删除
-sealtun requests <id> [--follow]                  # 查看公网请求日志（webhook 调试）
-sealtun requests replay <id> <seq>                # 把捕获的请求重放到本地服务
+sealtun tunnel stop / start / cleanup <id>        # 停止（可恢复）/ 恢复 / 删除
+sealtun tunnel requests <id> [--follow]           # 查看公网请求日志（webhook 调试）
+sealtun tunnel requests replay <id> <seq>         # 把捕获的请求重放到本地服务
 ```
 
 ## 声明式配置
@@ -153,6 +170,8 @@ sealtun apply -f sealtun.yaml                            # 创建/更新
 `name` 即稳定 tunnel ID，重复 apply 幂等更新。资源调整只能通过 YAML `resources` + apply，默认 requests `10m/32Mi`、limits `200m/128Mi`。
 
 ## 附录
+
+**命令兼容**：v0.0.42 起隧道操作统一收进 `sealtun tunnel`（如 `tunnel share`、`tunnel access`、`tunnel domain`、`tunnel rotate-secret`）。旧写法（`sealtun share`、`sealtun policy`、`sealtun list` 等）保留为兼容别名，行为不变但会打印弃用提示，建议迁移到新写法。
 
 **Codex Skill**：仓库内置 `skills/sealtun`，供 Codex 类 AI agent 理解 Sealtun CLI：`npx skills add https://github.com/gitlayzer/sealtun`。
 
